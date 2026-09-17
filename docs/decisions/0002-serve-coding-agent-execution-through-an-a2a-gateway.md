@@ -50,13 +50,15 @@ or durable evaluation Run ledger. It does not own a consumer's result store.
 
 ### Keep the gateway separate from execution backends
 
-The gateway dispatches to peer execution backends. The initial design supports:
+The initial design supports three peer execution backends:
 
-- a direct Codex backend; and
-- Agent-Conductor as an alternative backend.
+- Codex;
+- OpenCode; and
+- Pi.
 
-Using Codex does not require an Agent-Conductor hop. Additional backends may be
-added only when they satisfy the same conformance contract.
+Each backend implements the same conformance contract. Provider-specific
+process, session, permission, cancellation, and evidence behavior remains
+behind its adapter.
 
 Execution backends own repository materialization, environment setup, agent
 invocation, evidence collection, process termination, and cleanup. The gateway
@@ -64,10 +66,10 @@ must not execute evaluated agents or mount their writable repositories in the
 gateway process.
 
 When deployed on Kubernetes, the gateway runs as its own Deployment and
-ClusterIP Service, separate from consumers and execution workers. A direct
-backend dispatches to a worker pool, per-invocation Job, or stronger sandbox.
-Agent-Conductor remains a separate service. The protocol does not require one
-worker topology.
+ClusterIP Service, separate from consumers and execution workers. A backend
+dispatches to a worker pool, per-invocation Job, or stronger sandbox according
+to the selected execution profile. The protocol does not require one worker
+topology.
 
 A separate gateway Pod is a service and failure boundary, not per-invocation
 security isolation. Deployments requiring hostile-code or tenant isolation
@@ -123,6 +125,15 @@ a backend adapter when a coding agent supports it. Its session, progress, tool,
 permission, terminal, diff, usage, and cancellation semantics are useful
 internally, but its stdio editor-to-agent protocol is not the external gateway
 API.
+
+The [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/)
+may be used behind a backend adapter when a host exposes it, or beside the
+gateway if AllAgents later adds a collaborative multi-client session surface.
+Its host-authoritative snapshots, actions, reconnection, tools, permissions,
+and changesets solve live session synchronization; they do not replace A2A
+Task identity, idempotency, authorization, terminal evidence, or retention.
+The supporting research and implementation consequences are captured in the
+[AHP decision inputs](../research/agent-host-protocol-decision-inputs.md).
 
 [Model Context Protocol](https://modelcontextprotocol.io/) remains a tool and
 resource protocol inside an execution backend. It does not represent the whole
@@ -230,8 +241,8 @@ but their product and ownership model requires a separate decision.
   narrow coding-execution responsibility.
 - Consumers depend on A2A 1.0 plus a versioned AllAgents extension, not
   AllAgents TypeScript modules, CLI behavior, or workspace internals.
-- Direct Codex and Agent-Conductor execution are interchangeable backends behind
-  one conformance suite.
+- Codex, OpenCode, and Pi are peer execution backends behind one conformance
+  suite.
 - Gateway and execution workers scale and fail independently.
 - The gateway can remain lightweight; physical isolation and resource policy
   belong to the selected execution backend.
@@ -257,12 +268,6 @@ Rejected because it couples control-plane availability and credentials to
 mutable repository execution, prevents independent scaling, and mistakes a
 service boundary for per-invocation isolation.
 
-### Make Agent-Conductor mandatory
-
-Rejected because a direct Codex adapter and Agent-Conductor are peer backends.
-Mandatory indirection adds an ownership and failure boundary without improving
-the public contract.
-
 ### Use OpenInference instead of W3C Trace Context
 
 Rejected as a category error. W3C Trace Context propagates trace identity;
@@ -280,6 +285,13 @@ cleanup, authorization, or evidence completeness.
 Rejected because Harbor's formats own benchmark orchestration, verification,
 and persisted runner state. The AllAgents gateway executes one coding-agent
 request and does not become an evaluation harness.
+
+### Replace A2A with the Agent Host Protocol
+
+Rejected because AHP explicitly targets synchronization of independent clients
+around host-owned sessions, not agent-to-agent Task execution. Its reconnect
+and changeset models do not supply caller-scoped idempotency, immutable source
+handling, cleanup, complete terminal evidence, or bounded Task retention.
 
 ## Reconsider when
 

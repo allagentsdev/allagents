@@ -13,11 +13,19 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** External systems can run Codex or Pi against an immutable repository revision through one authenticated, cancellable, evidence-preserving remote contract.
+- **Objective:** External systems can run Codex or Pi against an immutable,
+  provenance-bearing workspace assembled from exact Git repositories, a
+  digest-pinned OCI snapshot, or an operator-registered materializer through
+  one authenticated, cancellable, evidence-preserving remote contract.
 - **Means:** Add a separately deployable A2A 1.0 gateway, a private worker protocol, and backend-neutral workers with two direct provider adapters (KTD1, KTD5, KTD7-KTD8).
 - **Authority:** [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md) owns the public boundary. The A2A 1.0 specification owns core wire semantics. The versioned AllAgents extension owns coding-execution semantics.
 - **Execution profile:** Build contract-first, then durable Task/evidence state, worker lifecycle, Codex, Pi, packaging, and cross-backend conformance. Preserve the existing local CLI and Node 18 package compatibility.
-- **Stop conditions:** Do not execute agents in the gateway process, accept mutable source identity, put deployment credentials in requests, treat streams or telemetry as terminal evidence, treat provider sessions as recovery checkpoints, vendor an evaluator's provider implementation, or add evaluation behavior.
+- **Stop conditions:** Do not execute agents or materializers in the gateway
+  process, accept mutable source identity, accept caller-supplied acquisition
+  code or credentials, put deployment credentials in requests, treat streams
+  or telemetry as terminal evidence, treat provider sessions as recovery
+  checkpoints, vendor an evaluator's provider implementation, or add
+  evaluation behavior.
 - **Tail ownership:** The implementing workflow runs focused contract and lifecycle tests, the complete repository quality gates, isolated gateway/worker smoke tests, provider-specific credentialed smoke tests where credentials are available, and documentation validation.
 
 ---
@@ -38,9 +46,15 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 
 - A1. **Gateway caller:** An authenticated service such as AI Evals that creates, observes, lists, cancels, and retrieves coding-execution Tasks.
 - A2. **Execution gateway:** The A2A server that owns caller scope, Task identity, idempotency, routing, retention, and normalized results.
-- A3. **Execution worker:** A separately deployed process that owns source materialization, one mutable workspace per invocation, provider execution, evidence capture, and cleanup.
-- A4. **Backend adapter:** The Codex or Pi integration that translates native events, structured results, cancellation, usage, failures, and evidence into the worker contract.
-- A5. **Operator:** The person or deployment system that defines profiles, credentials, limits, retention, worker endpoints, and observability policy.
+- A3. **Execution worker:** A separately deployed process that owns registered
+  workspace materialization, one mutable workspace per invocation, provider
+  execution, evidence capture, and cleanup.
+- A4. **Backend adapter:** The Codex or Pi integration that translates native
+  events, structured results, cancellation, usage, failures, and evidence into
+  the worker contract.
+- A5. **Operator:** The person or deployment system that defines profiles,
+  materializer registrations, credentials, limits, retention, worker
+  endpoints, and observability policy.
 
 ### Key Decisions
 
@@ -48,6 +62,10 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - **Keep execution outside the gateway process.** Mutable repositories and provider processes belong to workers. Governs R10-R16, R21-R22.
 - **Persist Task truth, not live executions.** Accepted Task identity and terminal evidence survive restart; provider sessions do not resume or replay. Governs R7, R14, R16-R18.
 - **Keep evaluation outside AllAgents.** Dataset expansion, repetitions, assertions, scoring, retries, and durable evaluation Runs remain caller concerns. Governs R20.
+- **Make workspace acquisition explicit but extensible.** Requests select one
+  versioned workspace source mode; custom acquisition uses only
+  operator-registered, digest-pinned materializers allowed by the profile.
+  Governs R6, R11-R13, R16-R18, R21-R22.
 
 ### Requirements
 
@@ -70,15 +88,78 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 
 - R10. Codex and Pi are the complete initial backend set behind one conformance contract, delivered Codex first and Pi second. OpenCode is deferred. (session-settled: user-directed.)
 - R11. A request selects a server-defined execution profile and may include one `allagents.result-schema/v1` schema for the terminal result: a bounded JSON Schema Draft 2020-12 subset with an object root, every object schema setting `additionalProperties: false`, every declared property listed in `required`, optional values represented by `null` unions, and only `type`, `properties`, `required`, `additionalProperties` with the value `false`, `items`, `enum`, `const`, `anyOf`, `$defs`, local `$ref`, `title`, and `description`. The extension version fixes byte, depth, property, and enum limits; admission rejects remote references, format-dependent validation, and unknown keywords; one shared validator governs schema admission and returned values. The profile fixes backend, model/runtime settings, source policy, setup and check commands, permissions, environment allowlists, artifact paths, resource budgets, deadline ceiling, trust class, and evidence limits. Requests cannot supply raw provider configuration.
-- R12. The only initial remote source form is a canonical credential-free HTTPS Git URL plus full commit object ID and optional repository-relative subdirectory. Acquisition revalidates destination policy for every connection, disables redirects and repository-controlled secondary fetch/exec features, uses hermetic Git configuration, and verifies that the fetched object is the requested commit before setup.
+- R12. One request defines one workspace using exactly one closed source union:
+  `{ kind: "repositories", repositories: [...] }`,
+  `{ kind: "workspaceSnapshot", reference, workspaceManifestDigest }`, or
+  `{ kind: "materializer", materializerId,
+  expectedWorkspaceManifestDigest, inputs }`. Unknown kinds, fields from
+  another variant, and omitted variant fields fail admission. Repository
+  entries contain a canonical credential-free HTTPS Git URL, full commit object
+  ID, collision-free relative destination, and optional repository-relative
+  subdirectory. Snapshot references are digest-pinned OCI artifacts containing
+  the versioned workspace manifest. Materializer inputs are bounded by the
+  registered schema. Profiles explicitly allow source modes and materializer
+  IDs and authorize exact canonical Git repositories or namespaces, OCI
+  namespaces, and resource selectors inside materializer inputs. Callers cannot
+  supply builder images, Dockerfiles, Compose files, shell commands,
+  credentials, mutable image tags, network policy, or output contracts. Direct
+  Git revalidates destination policy for every connection, disables redirects
+  and repository-controlled secondary fetch/exec features, uses hermetic Git
+  configuration, fetches into an isolated object database from the approved
+  remote, and verifies that the checked-out commit equals the requested full
+  object ID. OCI acquisition rejects external or foreign layer URLs by default,
+  revalidates scheme, normalized host, resolved address, port, and redirects
+  for registry, authentication, manifest, and blob connections, never forwards
+  credentials across origins, and verifies every manifest and layer digest. A
+  materializer output must match the request's expected workspace-manifest
+  digest before publication.
 - R13. Requests never contain deployment credentials or arbitrary secret values. Profiles name environment variables whose values are scoped to the required worker phase and excluded from repository configuration, process arguments, logs, errors, evidence, retained workspaces, structured logs/spans before processing or export, and every model-initiated command or tool environment. Credentialed profiles additionally require an OS-enforced provider/tool credential boundary: the credential-bearing provider runtime and model-invoked tools use distinct UID/process/mount policy that prevents tool access to provider processes, procfs entries, and backend config/data roots, or an equivalent credential broker keeps reusable credentials out of the agent runtime. Worker readiness fails when the declared boundary cannot be proved; environment filtering alone is not credential isolation.
+  Materializer IDs are defined in an operator-owned deployment registry. The
+  gateway holds only the non-secret ID, bounded input schema, expected
+  definition digest, expected output-manifest version, and required worker
+  capabilities; the worker holds the runtime definition with the digest-pinned
+  image, credential handle names or mount identities, network destinations,
+  resource/deadline ceilings, cache policy, output-manifest version, and OCI
+  runner or sandbox capability. Credential values are excluded. The worker
+  derives an algorithm-qualified `sha256:<64 lowercase hex>` definition digest
+  from a versioned, domain-separated canonical serialization of every
+  non-secret behavior-affecting field and advertises it at readiness; the
+  gateway treats its copy only as the expected digest. The expected workspace
+  manifest and canonical materializer-input digests use the same
+  algorithm-qualified format with distinct domain separators and exact
+  versioned canonical JSON preimages. Readiness fails when computed and expected
+  descriptors differ across the authenticated route. Materialization
+  credentials exist only in that isolated phase and are not supplied to setup,
+  provider execution, or model tools. The registered image is operator-trusted
+  deployment code: phase isolation protects later phases but cannot make a
+  malicious registered image safe from credentials deliberately given to it.
+  Deployments requiring that stronger claim use a credential broker or
+  acquisition service that withholds reusable credentials.
 - R14. The effective deadline is the earlier of the caller deadline and profile ceiling and is persisted before dispatch. The first durable terminal-or-cancel-intent write wins; cancellation is idempotent, reaches the worker and provider once, suppresses late success, and records termination and cleanup before publishing canceled. Stream or HTTP disconnect alone does not cancel a Task.
 - R15. Initial profiles are unattended. Known provider permission requests are deterministically approved or denied by profile policy for one invocation; unknown permission types fail as adapter incompatibility. The gateway never emits `INPUT_REQUIRED` or `AUTH_REQUIRED` for these profiles and never depends on a live client.
 - R16. A worker creates a fresh invocation directory, fresh provider session, and isolated backend configuration/data roots, runs setup, captures a post-setup baseline, invokes the provider, validates any requested structured result, and runs configured checks. It then proves the complete invocation process set quiescent before final evidence/artifact capture and cleanup or explicit retention. No workspace or provider session is reused after interruption. If bounded termination escalation cannot prove quiescence, the worker persists termination as unknown/failed, poisons admission, and exits so the external supervisor destroys the complete process boundary; replacement readiness performs orphan recovery before accepting work. The same supervisor boundary handles a worker crash.
+  Every source mode materializes into a worker-owned staging directory under
+  the same filesystem publication root as the final workspace and produces the
+  same versioned workspace manifest. Readiness rejects cross-filesystem roots
+  and publication has no copy-then-delete fallback. The worker validates
+  repository or snapshot identities, destinations, paths, file types, limits,
+  materializer definition and image digests, output digest, provenance method,
+  and completeness. It then terminates the supervisor-owned acquisition
+  process, mount, runner, and credential boundary while preserving the
+  host-owned validated staging tree, proves that boundary gone, atomically
+  renames the tree into its final location, and only then starts setup.
 
 **Evidence and observability**
 
 - R17. Every terminal Task contains the required `allagents.execution-integrity` Artifact carrying an integrity kernel: Task/source/profile/backend identities, action outcome, a structured-result state of `not_requested`, `not_produced`, `valid`, or `invalid` plus reason and schema digest when requested, cancellation or failure classification, separate termination and filesystem-cleanup outcomes including explicit unknown, Artifact index metadata, per-dimension completeness, and provenance. A valid structured result is exactly one additional `allagents.structured-result` Artifact with one A2A `Part` whose `data` field contains the validated result object and whose `mediaType` is `application/json`; missing or invalid result data never publishes that Artifact. `not_produced` is legal only before a result candidate is produced. Once validation selects `valid` or `invalid`, later check, evidence, cleanup, infrastructure, or crash failure preserves that state and, for `valid`, the fixed structured-result Artifact while the later phase remains the primary Task failure classification. Missing or invalid integrity data fails the Task; predictable bounded omission of optional evidence may complete with an explicit gap.
+  Workspace provenance includes the source mode, requested and resolved
+  repository commits or OCI digests, destination map, workspace-manifest
+  digest, and, when applicable, materializer ID, computed definition digest,
+  image digest, canonical input digest, and output digest. It labels each field
+  as a worker-verified observation, trusted-service verification, or
+  materializer-attested claim and records the verification method; a custom
+  image's assertion is never reported as independently verified merely because
+  its output digest matched.
 - R18. Normalized file evidence distinguishes create, edit, delete, and rename where truthful. It preserves bounded provider-native diffs, events, or trajectories when normalization loses information and separately records truncation, redaction, attribution, original/captured size, and digest semantics.
 - R19. Gateway and worker calls propagate W3C Trace Context and export metadata-only OpenTelemetry data. One explicit pre-processor allowlist admits only bounded non-content operational metadata; OpenInference and backend-native attributes pass the same allowlist and bounded filtering/redaction before any structured log or span processor. Prompts, model outputs, tool arguments/results, file bodies, source fragments, and secret-bearing attributes are prohibited before export. Owner correlation uses only an opaque identifier appropriate to telemetry-operator access, never caller identity or Task/Artifact authorization. Telemetry access and retention are configured separately from Task and Artifact access and retention, and telemetry is neither durable result truth nor required for terminal lookup.
 
@@ -87,6 +168,14 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - R20. The gateway executes one coding request. It does not own eval configuration, datasets, repetition, scoring, retry policy, experiment scheduling, or a durable evaluation Run ledger.
 - R21. The initial worker topology is one execution at a time for reviewed repositories inside one configured mutual-trust domain. R13's narrow OS-enforced provider/tool credential boundary is required for credentialed profiles but does not claim hostile-source or cross-tenant isolation. Profiles making either stronger claim are rejected until a full per-invocation UID, mount, PID, network, and credential isolation boundary is configured.
 - R22. Gateway admission and worker execution enforce profile limits for request rate, active/retained Tasks, subscriptions, stored bytes, source transfer/expansion, files/inodes, workspace bytes, CPU, memory, PIDs, network, phase deadlines, events, logs, and artifacts. Exhaustion is scoped to one invocation or owner and leaves capacity for terminalization and cleanup.
+  Materializer CPU, memory, PIDs, network, time, transfer, expansion, file,
+  inode, and workspace output count against the invocation's limits. New-claim
+  source authorization precedes every cache lookup. Cached outputs are reusable
+  only after manifest and content revalidation for the same canonical source,
+  materializer-definition digest, expected and actual output-manifest digests,
+  authorization-scope digest, source-authorization revocation epoch, and trust
+  domain. Revocation advances the epoch and makes the prior namespace
+  ineligible; the conservative default namespaces cache entries by owner.
 
 ### Key Flows
 
@@ -123,26 +212,59 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 
 ### Acceptance Examples
 
-- AE1. **Covers R1-R4, R10-R18.** Given an authorized Codex profile, an exact Git SHA, and an optional result schema, when the caller streams a request, then one Task moves from submitted to working to completed and later `GetTask` returns the same validated output and evidence Artifacts.
+- AE1. **Covers R1-R4, R10-R18.** Given an authorized Codex profile, one valid
+  immutable workspace source, and an optional result schema, when the caller
+  streams a request, then one Task moves from submitted to working to completed
+  and later `GetTask` returns the same validated output, workspace provenance,
+  and evidence Artifacts.
 - AE2. **Covers R6.** Given a retained Task whose original absolute deadline has passed or whose profile is now disabled, changed, or no longer authorized for new work, when its owner reuses the invocation key with the same canonical request and result schema, then the gateway returns the original Task from its stored original bindings before mutable admission checks and makes no second worker dispatch.
 - AE3. **Covers R6.** Given a retained Task, when its owner reuses the invocation key with a different prompt, source, profile ID, deadline, or result schema, or the stored original profile/schema binding is inconsistent, then the gateway rejects the request and leaves the original Task unchanged.
 - AE4. **Covers R5.** Given a Task owned by caller A, when caller B lists Tasks, gets the Task, cancels it, subscribes, or requests an Artifact, then the gateway reveals no resource existence or content.
-- AE5. **Covers R12, R16-R18.** Given a requested SHA that does not match the materialized repository or setup fails, when the worker has already accepted the current fence, then provider execution never starts, the selected public trace is `Submitted -> Working -> Failed`, and the Task retains source/setup-failure and cleanup evidence.
+- AE5. **Covers R12, R16-R18.** Given a wrong or missing Git commit,
+  conflicting repository destination, OCI digest or manifest mismatch, unknown
+  or profile-disallowed materializer, materializer definition/image drift,
+  produced workspace-manifest digest that differs from the request, malformed
+  materializer output, direct known-secret disclosure, or setup failure, when
+  the worker has already accepted the current fence, then provider execution
+  never starts, the selected public trace is
+  `Submitted -> Working -> Failed`, and the Task retains bounded
+  materialization/setup-failure and cleanup evidence.
 - AE6. **Covers R7, R14.** Given cancellation races worker acceptance or completion, when the first durable outcome is chosen, then exactly one abort occurs when needed, late success cannot overwrite cancellation, and terminal cancellation appears only after termination and cleanup are verified. Given cancel reaches a worker before its delayed dispatch, the worker tombstones the unseen attempt and the stale dispatch creates no workspace or provider process.
 - AE7. **Covers R3, R10-R11, R17.** Given equivalent profiles, one accepted `allagents.result-schema/v1` schema, and fixture runtime events for Codex and Pi, when each completes the same repository mutation, then both publish the required fixed-name integrity Artifact at the schema-defined extension carrier, validate with the same schema and validator, publish the same fixed-name structured-result Artifact containing one A2A `Part` with the validated `data` and `mediaType: application/json`, record the same integrity state, and produce the required normalized evidence fields while retaining distinct native evidence.
 - AE8. **Covers R4, R7, R19.** Given canary secrets and cross-owner content fragments in prompts, model output, tool arguments/results, source files, stale events, and errors, when agent, model, tool, stale-event, and error telemetry is processed, then the exporter receives only allowlisted bounded metadata plus the correct opaque owner correlation and receives none of those canaries, fragments, or raw caller identities. Given a caller or exporter disconnects during work, reconnect still returns the current Task and future updates without duplicate dispatch, and telemetry loss does not affect terminal lookup.
 - AE9. **Covers R15.** Given a known capability denied by profile, the accepted Task becomes rejected after stop and cleanup; given an unknown permission type, it becomes failed as an adapter incompatibility without waiting for a client.
 - AE10. **Covers R17-R18.** Given optional logs/diffs/native events exceed configured budgets, the Task may complete with explicit truncation metadata; given capture cannot establish the integrity kernel, it fails in the evidence phase. Given output validation has already selected `valid` or `invalid` and a later check or mandatory-evidence phase fails, the failed Task preserves that result state and a valid result preserves its one fixed structured-result Artifact; only a failure before candidate production records `not_produced`.
-- AE11. **Covers R6, R22.** Given invalid input or exhausted admission quota, the gateway returns a request/resource error and creates no Task; given capacity disappears after durable acceptance, the retained Task fails at dispatch and replay returns it without retry.
+- AE11. **Covers R6, R11-R12, R22.** Given invalid input, an unknown or
+  profile-disallowed source mode/materializer, or exhausted admission quota,
+  the gateway returns a request/resource error and creates no Task; given
+  materializer availability or worker capacity disappears after durable
+  acceptance, the retained Task fails at dispatch or materialization and replay
+  returns it without retry.
 - AE12. **Covers R7, R14, R16.** Given a duplicate, out-of-order, or stale-fence worker event arrives after restart or terminal settlement, the gateway ignores it for Task state and records only allowlisted metadata-only operator telemetry. Given bounded escalation cannot stop a descendant that starts a new session and ignores graceful signals, the worker persists termination unknown/failed, refuses another reservation, exits, and its supervisor destroys the boundary; replacement readiness performs orphan recovery without changing the failed Task.
 - AE13. **Covers R8.** Given a Task reaches expiry while physical deletion fails, all Task and Artifact operations return the same not-found response and the invocation key can create a new Task.
-- AE14. **Covers R5, R13, R21-R22.** Given a production public listener or remote worker route lacks its configured trusted transport or authenticated peer identity, readiness fails; a same-host Unix worker socket is accepted. Given a credentialed reviewed-domain profile, model tools cannot inspect provider process environments, process listings, backend config/data roots, or exfiltrate provider/control credentials across the configured OS boundary. Hostile-source or cross-tenant claims remain rejected.
+- AE14. **Covers R5, R13, R21-R22.** Given a production public listener or
+  remote worker route lacks its configured trusted transport or authenticated
+  peer identity, readiness fails; a same-host Unix worker socket is accepted.
+  Given a credentialed reviewed-domain profile, model tools cannot inspect
+  provider process environments, process listings, backend config/data roots,
+  or exfiltrate provider/control credentials across the configured OS
+  boundary. Given a registered materializer with source credentials, setup,
+  provider processes, and model tools have no access to its process, runner
+  control socket, credential environment/mounts, or staging root after
+  materialization, and direct known-secret canaries are absent from retained
+  logs, evidence, and published workspace files. The registered materializer
+  remains operator-trusted code; hostile-materializer, hostile-source, and
+  cross-tenant claims remain rejected without a stronger broker or sandbox.
 
 ### Success Criteria
 
 - The official A2A JavaScript client can discover the required extension, negotiate it through `A2A-Extensions`, use the standard Message and Artifact extension carriers, and exercise create, immediate/waiting send, stream, reconnect, get, list, subscribe, retained replay, cancel, and expiry behavior against the built service without `Task.extensions`.
 - One conformance fixture passes unchanged through the Codex and Pi adapters.
 - Admission, retained replay, monotonic worker commands, fencing, acceptance-before-materialization source/setup failure, cancellation races, trace-order/fence/multiplicity constraints, failed-quiescence recycling, restart terminalization without resume, supervised worker-crash cleanup, trusted transports, authorization isolation, metadata-only telemetry export, OS-enforced provider/tool credential separation, source hardening, portable structured-result validation, quotas, and evidence integrity have deterministic integration coverage.
+- Direct multi-repository Git, digest-pinned OCI snapshots, and a fake
+  digest-pinned registered materializer all produce the same validated
+  workspace manifest and terminal provenance contract before either backend
+  starts.
 - The gateway image contains no coding-agent runtime and cannot access worker workspace roots.
 - The initial worker runs one reviewed-trust-domain execution at a time, model-initiated tools are OS-isolated from provider/control credentials, repository Pi extensions cannot auto-load, and no live descendant or reusable workspace survives a completed, failed-quiescence, or crashed attempt.
 
@@ -156,6 +278,9 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - Built-in bearer authentication with OIDC/JWT and static service-token modes behind the named production TLS boundary.
 - Single-replica durable file storage, authenticated Artifact retrieval, authenticated encrypted remote worker transport or same-host Unix sockets, OpenTelemetry, admission/resource limits, container images, configuration examples, and operator documentation.
 - Reviewed repositories in one configured mutual-trust domain per worker deployment, with the narrow OS-enforced provider/tool credential boundary required for credentialed profiles.
+- Direct multi-repository Git acquisition, digest-pinned OCI workspace
+  snapshots, and operator-registered digest-pinned materializers with
+  phase-scoped credentials and one standard workspace manifest.
 
 **Deferred to follow-up work**
 
@@ -176,6 +301,7 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 
 - [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md)
 - [AHP decision inputs](../research/agent-host-protocol-decision-inputs.md)
+- [Harbor repository materialization lessons](../research/harbor-repository-materialization.md)
 - [AI Evals ADR 0036](https://github.com/WiseTechGlobal/ai-evals/blob/main/docs/adr/0036-remove-the-ai-evals-workspace-runtime.md)
 - [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/)
 - [Official A2A JavaScript SDK](https://github.com/a2aproject/a2a-js)
@@ -204,15 +330,69 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - KTD3. **Commit each Task ownership aggregate through generations and one manifest.** The built-in repository creates a new invocation claim and submitted Task together after mutable admission, storing the canonical caller request and the original effective-profile and result-schema digests needed for retained replay. It stores immutable Artifact blobs before atomically switching the manifest to a new generation, tombstones the aggregate before physical retention cleanup, and garbage-collects unreachable generations on startup. A revision/fence compare-and-swap makes terminal settlement immutable. Governs R4-R9, R14, R17-R18.
 - KTD4. **Authenticate at a named trusted HTTP ingress before A2A storage or dispatch.** Production traffic reaches the gateway through TLS terminated by the configured gateway or named trusted reverse-proxy boundary; plaintext is allowed only for an unauthenticated loopback development listener. Production OIDC mode verifies JWT issuer, audience, signature, expiry, and required execution scope. Static token mode uses constant-time comparison for local or service deployments. A canonical length-delimited issuer/tenant/subject tuple is hashed into an opaque owner key; raw claims and caller IDs never become paths. Readiness rejects a production public URL whose trusted TLS boundary is absent or inconsistent. Governs R5-R6, R13.
 - KTD5. **Use fenced, separately deployable gateway and worker services.** Remote gateway-worker routes use mTLS or an explicitly equivalent authenticated encrypted overlay; a same-host Unix socket is acceptable. The authenticated worker identity is pinned to the configured route/capability set, and every short-lived attempt capability is bound to that identity, attempt ID, lease ID/epoch, and fence. Each worker keeps one minimal durable monotonic command record scoped to its worker identity and lease: `Cancel(attempt, fence, revision)` tombstones even an unseen attempt, and `Dispatch` for a tombstoned or lower-revision attempt is rejected before workspace creation. Dispatch/cancel I/O conditionally verifies the persisted command/outbox revision immediately before any mutating or terminating effect. Duplicate delivery is idempotent; conflicting, stale, out-of-order, or identity-mismatched commands/events are rejected. Gateway and worker transition selectors remain pure and executors re-enter from persisted or freshly observed state. This record is worker-local fence state, not a new durable execution subsystem. Governs R5, R7, R10-R16, R21-R22.
-- KTD6. **Make worker leases and the execution supervisor orphan fail-safes, not replay mechanisms.** Gateway cancellation is explicit. Lost acknowledgement or ambiguous dispatch settles `dispatch_unknown` without automatic redelivery; lease expiry makes a live worker abort and clean. Gateway restart terminalizes every nonterminal Task and invalidates old fences. Worker-process exit makes the external supervisor terminate the complete execution boundary. If bounded escalation cannot prove the complete invocation process set empty, the worker records termination unknown/failed, poisons admission, and exits rather than accepting another reservation; its supervisor destroys the boundary. Before readiness the replacement proves termination and reaps or quarantines orphaned invocation roots. Production readiness accepts a dedicated worker container process namespace under a minimal init/reaper as the baseline; a non-container deployment must prove an equivalent systemd/cgroup boundary. The gateway never reattaches to or resumes a provider session. Governs R7, R14, R16-R18.
+- KTD6. **Make worker leases and the execution supervisor orphan fail-safes, not replay mechanisms.** Gateway cancellation is explicit. Lost acknowledgement or ambiguous dispatch settles `dispatch_unknown` without automatic redelivery; lease expiry makes a live worker abort and clean. Gateway restart terminalizes every nonterminal Task and invalidates old fences. Every external materializer launch creates a supervisor-owned runner resource labeled by worker, attempt, lease, and fence; worker-process exit makes the external supervisor terminate that resource and the complete execution boundary. If bounded escalation cannot prove the complete invocation process set empty, the worker records termination unknown/failed, poisons admission, and exits rather than accepting another reservation; its supervisor destroys the boundary. Before readiness the replacement proves termination and enumerates, destroys, or quarantines orphaned invocation roots, runner resources, credential mounts, and staging mounts; an unresolved resource keeps readiness false. Production readiness accepts a dedicated worker container process namespace under a minimal init/reaper as the baseline; a non-container deployment must prove an equivalent systemd/cgroup boundary. The gateway never reattaches to or resumes a provider session. Governs R7, R14, R16-R18.
 - KTD7. **Keep one behavior-focused backend interface and explicit registry.** Adapters implement availability/capabilities, invoke, progress, deterministic permission response, abort, terminal output, optional structured result, usage, native evidence, and disposal. Shared worker code owns source, setup, checks, schema validation, Git evidence, artifacts, process-tree cleanup, limits, and isolated backend roots. A closed `codex | pi` registry is the only production dispatch point. Governs R10-R11, R14-R18, R21-R22.
 - KTD8. **Use each provider's supported automation surface directly behind the credential boundary.** Codex depends directly on pinned `@openai/codex-sdk`, creates one fresh thread per Task, passes `AbortSignal` and optional per-turn `outputSchema`, and consumes streamed events. Pi uses strict RPC with an invocation-local credential store and one explicitly loaded worker-owned policy extension; repository extensions and unrestricted built-ins never load. For either adapter, a credentialed provider runtime is separated from every model-invoked tool by the R13 OS-enforced UID/process/mount boundary or an equivalent credential broker; shell-environment filtering is defense in depth, not the boundary. Promptfoo's Codex provider and tests are characterization references only; AllAgents neither vendors them nor inherits their config, cache, pricing, retry, thread-pool, or `ProviderResponse` concerns. Governs R10-R18.
-- KTD9. **Make profiles the new-admission policy boundary.** Requests select a profile ID and may provide only an `allagents.result-schema/v1` schema. They cannot override backend credentials, executable paths, provider config, setup/check commands, environment allowlists, permission rules, trust class, resource limits, workspace retention, or evidence budgets. For a new claim, resolve a versioned canonical `EffectiveProfileIntent`, compute its digest without resolved secrets or per-attempt state, and persist it with the canonical caller request and result-schema digest. Retained replay compares those stored original bindings and never substitutes or re-resolves the current profile. Governs R6, R11-R16, R21-R22.
+- KTD9. **Make profiles the new-admission policy boundary.** Requests select a
+  profile ID, one schema-defined workspace source mode, and optionally one
+  `allagents.result-schema/v1` schema. They cannot override backend or source
+  credentials, materializer definitions or images, executable paths, provider
+  config, setup/check commands, environment allowlists, permission rules,
+  trust class, resource limits, workspace retention, or evidence budgets. A
+  profile allowlists source modes and materializer IDs plus exact canonical Git
+  repository/namespace rules, OCI namespaces/signature rules, and resource
+  selectors for structured materializer inputs. New admission authorizes the
+  fully canonicalized resource and credential entitlement before cache lookup.
+  Resolve a versioned canonical `EffectiveProfileIntent` containing the
+  selected materializer definition digest, authorization-scope digest, and
+  source-authorization revocation epoch when applicable; compute its digest
+  without resolved secrets or per-attempt state and persist it with the
+  canonical caller request and result-schema digest. Retained replay compares
+  those stored original bindings and never substitutes or re-resolves current
+  policy. Governs R6, R11-R16, R21-R22.
 - KTD10. **Keep durable evidence and operational telemetry as separate bounded layers.** The worker verifies source, runs setup, records a post-setup Git tree, invokes the adapter, runs checks, and stops every invocation process before final Git/artifact capture. Provider-native events remain a distinct bounded evidence layer; neither Git nor provider evidence is promoted as exact causality when incomplete. Telemetry is a third, non-durable metadata-only channel: one small shared pre-export sanitizer applies an explicit operational-metadata allowlist plus bounded filtering/redaction before every structured log or span processor, and only opaque owner correlation may cross the separately governed operator boundary. OpenInference and backend-native attributes receive no bypass. This is an export guard, not a telemetry framework or alternate evidence store. Governs R13, R16-R19.
 - KTD11. **Treat Codex and Pi as the complete initial backend set.** Codex lands first; Pi lands second against the established contract; OpenCode is deferred. (session-settled: user-directed.) Governs R10.
 - KTD12. **Separate terminal integrity from optional evidence bodies.** The fixed `allagents.execution-integrity` Artifact validates identity, action outcome, the four-state structured-result record, failure/cancellation, separate termination and filesystem cleanup, Artifact index, completeness, and provenance before terminal publication. `not_produced` applies only before result-candidate production. Once validation selects `valid` or `invalid`, a later check, evidence, cleanup, infrastructure, or crash failure preserves that state and, for `valid`, the separate fixed structured-result Artifact while retaining the later phase as the primary Task failure. Predictable optional-body truncation/redaction may preserve completion; failure that breaks the integrity kernel fails in the evidence phase. Governs R3-R4, R17-R18.
-- KTD13. **Harden Git acquisition as a network security boundary.** Accept canonical HTTPS origins only. Use hermetic Git configuration, disable redirects, proxies, helpers, hooks, filters, LFS smudge, submodule recursion, alternates, and non-HTTPS protocols. Revalidate normalized host/address policy for every connection, never forward credentials across origins, and verify the full object ID resolves to a commit fetched from the approved remote. Governs R12-R13, R22.
+- KTD13. **Standardize and harden workspace materialization.** Define one
+  closed `kind`-discriminated workspace-source union and one output manifest;
+  reject unknown kinds and cross-variant fields. The built-in Git path accepts
+  canonical HTTPS repository identities and full commit IDs only, uses
+  hermetic Git configuration, disables redirects, proxies, helpers, hooks,
+  filters, LFS smudge, submodule recursion, alternates, and non-HTTPS
+  protocols, revalidates normalized host/address policy for every connection,
+  fetches into an isolated object database from the authorized remote, and
+  verifies the checked-out commit and resulting tree. The OCI path accepts
+  manifest digests, not tags; rejects foreign/external URLs by default;
+  revalidates scheme, host, resolved address, port, redirect, and credential
+  origin for every registry/auth/manifest/blob request; and verifies every
+  manifest/layer plus the embedded workspace manifest. The custom path accepts
+  a registered ID, expected workspace-manifest digest, and schema-validated,
+  resource-authorized inputs.
+
+  The operator-owned registry splits a non-secret gateway descriptor from the
+  worker-only runtime definition. The worker computes a
+  `sha256:<64 lowercase hex>` digest over the versioned, domain-separated
+  canonical non-secret runtime definition; readiness compares that value with
+  the gateway's expected digest and capabilities. Distinct domain-separated
+  canonical JSON preimages define materializer input and workspace-manifest
+  digests. All paths stage in a worker-owned directory on the final
+  publication filesystem, validate destinations, links, file types, bounds,
+  identities, content, and manifest, then terminate the supervisor-owned
+  acquisition process/mount/credential/runner boundary while retaining the
+  validated host-owned tree. Only after proving the boundary gone does the
+  worker atomically rename the tree; no copy fallback exists. Provenance
+  distinguishes worker-verified observations, trusted-service verification,
+  and materializer-attested claims. The caller digest covers source kind,
+  expected output identity, and inputs; the effective-profile digest covers
+  materializer and authorization bindings; terminal provenance covers both and
+  the validated output. Governs R6, R11-R13, R16-R18, R21-R22.
 - KTD14. **Limit the initial worker to one reviewed trust domain and one execution.** The worker rejects hostile-source or cross-tenant claims and runs with concurrency one. Deployment-level CPU/memory/PID/network/filesystem limits become per-invocation limits. Credentialed profiles still require R13's narrower OS-enforced provider/tool separation: model tools cannot inspect provider processes, procfs entries, or backend config/data roots, and readiness fails without that capability. Provider/source credentials are absent from setup/check phases and child-visible worker control state. Pi disables repository extensions and built-in tools; only the worker-owned policy extension may load. This credential boundary does not imply hostile-source or cross-tenant isolation; that stronger sandbox-driver capability remains deferred. Governs R13, R16, R21-R22.
+  An external materializer image is reviewed operator code in the deployment's
+  trusted computing base, not hostile caller code. Its runner or sandbox
+  control plane is never mounted into the workspace or exposed to setup,
+  providers, or model tools. A deployment that does not trust the registered
+  image with source credentials must use a broker or stronger acquisition
+  service and advertise that capability explicitly.
 - KTD15. **Keep service dependencies out of the Node 18 CLI package.** Add a private `packages/execution-service` workspace requiring Node 22.19+ for the A2A SDK, Codex SDK, current Pi, gateway, and worker. The published root `allagents` CLI keeps its Node 18 engine and does not import service-only dependencies. Governs R1, R10, R16.
 
 ### High-Level Technical Design
@@ -225,7 +405,10 @@ flowchart TB
   Gateway --> Auth[Auth, retained replay, new admission]
   Gateway --> Store[Generation-based Task and Artifact store]
   Gateway -->|mTLS/authenticated overlay or same-host Unix socket| Worker[Single-execution worker]
-  Worker --> Source[Hardened Git acquisition]
+  Worker --> Materialization[Workspace materializer registry]
+  Materialization --> Git[Hardened multi-repository Git]
+  Materialization --> OCI[Digest-pinned OCI snapshot]
+  Materialization --> Custom[Registered materializer image]
   Worker --> Registry[Closed backend registry]
   Registry --> Codex[Codex SDK]
   Registry --> Pi[Pi RPC process]
@@ -260,7 +443,8 @@ sequenceDiagram
     G->>W: Dispatch(attempt, fence, command revision)
     W->>W: Verify command record before workspace creation
     W-->>G: Accepted(attempt, fence)
-    W->>W: Materialize, verify, setup, baseline
+    W->>W: Materialize into staging and validate workspace manifest
+    W->>W: Destroy acquisition boundary, publish atomically, setup, baseline
     W->>B: Invoke with isolated roots and credential boundary
     B-->>W: Progress, usage, native evidence
     W-->>G: Sequenced fenced progress
@@ -356,6 +540,12 @@ packages/execution-service/
       reaper.ts
       lease.ts
       workspace.ts
+      materializers/
+        types.ts
+        registry.ts
+        git.ts
+        oci.ts
+        external.ts
       evidence.ts
       adapters/
         types.ts
@@ -383,10 +573,51 @@ docs/src/content/docs/
 
 ### Configuration Contract
 
-- Gateway configuration defines the listener/public URL, a named trusted TLS termination boundary for production ingress, auth and canonical owner mapping, store/retention, admission and subscription quotas, low-space watermarks, Artifact limits, worker routes, internal capability secrets, and profiles. Each remote worker route declares mTLS or an explicitly equivalent authenticated encrypted overlay, pinned worker identity/capabilities, and trust material; a same-host route may declare a Unix socket. Plaintext remote URLs are invalid.
-- Each profile defines backend, worker route, allowed Git origins/addresses, provider/model settings, phase-specific environment allowlists, deterministic permissions, setup/check commands, artifact globs, effective deadline ceiling, trust class, resource limits, cleanup policy, evidence budgets, and the required provider/tool credential-boundary capability for credentialed execution.
-- Worker configuration fixes a private listener, worker identity, one-execution concurrency, workspace root, minimal worker-local command-record location, execution-supervisor mechanism, pre-readiness orphan policy, lease grace, backend runtime constraints, trust domain, resource-control and provider/tool credential-boundary capabilities, and request/result limits.
-- Production worker readiness requires authenticated route identity, protected remote transport or a same-host Unix socket, an enforceable credential boundary for every credentialed profile, and a supervisor that proves complete descendant termination and root ownership. The supported supervisor baseline is a dedicated worker container process namespace under a minimal init/reaper; bare-host deployment requires an equivalent systemd/cgroup mechanism.
+- Gateway configuration defines the listener/public URL, a named trusted TLS
+  termination boundary for production ingress, auth and canonical owner
+  mapping, store/retention, admission and subscription quotas, low-space
+  watermarks, Artifact limits, worker routes, internal capability secrets,
+  non-secret materializer descriptors, and profiles. A descriptor contains the
+  materializer ID, bounded input schema, expected definition digest, expected
+  output-manifest version, and required worker capabilities. Each remote worker
+  route declares mTLS or an explicitly equivalent authenticated encrypted
+  overlay, pinned worker identity/capabilities, source modes and matching
+  materializer definition digests, and trust material; a same-host route may
+  declare a Unix socket. Plaintext remote URLs are invalid.
+- Each profile defines backend, worker route, allowed workspace source modes,
+  allowed materializer IDs, exact Git repository or namespace rules, allowed
+  Git origins/addresses, OCI namespace/registry/signature policy, structured
+  materializer-input resource selectors, authorization-scope derivation and
+  source-authorization revocation epoch, provider/model settings,
+  phase-specific environment allowlists, deterministic permissions,
+  setup/check commands, artifact globs, effective deadline ceiling, trust
+  class, resource limits, cleanup policy, evidence budgets, and required
+  acquisition/provider/tool isolation capabilities.
+- Worker configuration fixes a private listener, worker identity,
+  one-execution concurrency, one same-filesystem publication root containing
+  private staging and final workspace directories, a closed materializer
+  runtime registry, minimal worker-local command-record location,
+  execution-supervisor mechanism, pre-readiness orphan policy, lease grace,
+  backend runtime constraints, trust domain, resource-control and
+  credential-boundary capabilities, and request/result limits. Each external
+  materializer runtime entry matches the gateway descriptor's ID and expected
+  definition digest and additionally fixes a digest-pinned image, credential
+  handle names or mount identities, network destinations, resource/deadline
+  limits, cache policy, output version, and OCI runner or sandbox; it contains
+  no credential values. The worker derives, rather than trusts, the definition
+  digest from that complete non-secret runtime entry.
+- Production worker readiness requires authenticated route identity, protected
+  remote transport or a same-host Unix socket, exact agreement between the
+  gateway's expected descriptor digest and the worker's computed runtime
+  definition digest, a same-filesystem staging/publication root with atomic
+  rename and no copy fallback, and an OCI materializer runner or sandbox that
+  assigns supervisor-owned attempt/lease/fence labels without exposing its
+  control plane to the workspace. It also requires an enforceable credential
+  boundary for every credentialed phase and a supervisor that proves complete
+  descendant termination and enumerates or destroys orphan runner resources,
+  credential mounts, staging mounts, and roots before readiness. The supported
+  worker baseline is a dedicated process namespace under a minimal init/reaper;
+  bare-host deployment requires an equivalent systemd/cgroup mechanism.
 - Telemetry configuration defines the OTLP destination, filtering/redaction bounds, opaque owner-correlation derivation, and telemetry-specific operator access and retention. The service version fixes the metadata allowlist; configuration cannot extend it to prompt/output/tool/source/file-body attributes, secret-bearing fields, raw caller identity, or unfiltered backend-native/OpenInference attribute passthrough.
 - Configuration contains environment-variable names but never secret values. Startup resolves the complete graph and becomes ready only when trusted ingress, worker transports/identities, store, runtimes, quotas, free-space reserves, supervisor/orphan recovery, and declared profile capabilities pass. Any unprotected remote endpoint or unproved credential/supervisor boundary fails readiness.
 
@@ -394,14 +625,14 @@ docs/src/content/docs/
 
 | Condition | A2A result | Required extension detail |
 |---|---|---|
-| New-admission authentication, malformed/unsupported extension carrier, invalid source/profile, unauthorized policy, expired deadline, current-profile/readiness failure, or pre-claim quota failure | Operation error; no Task | Safe standard/extension code and field; no invocation claim |
+| New-admission authentication, malformed/unsupported extension carrier, invalid workspace source/profile, unknown or profile-disallowed materializer, unauthorized policy, expired deadline, current-profile/readiness failure, or pre-claim quota failure | Operation error; no Task | Safe standard/extension code and field; no invocation claim |
 | Identical retained invocation replay | Existing Task | Returned from stored original request/profile/schema bindings before current deadline, quota, authorization, readiness, or profile checks; no new Task, worker attempt, or quota reservation |
 | Conflicting invocation key or inconsistent stored binding | Operation error; no new Task | Conflict code; existing Task unchanged |
 | Worker capacity loss after acceptance | `TASK_STATE_FAILED` | `dispatch/capacity_exhausted`, retriable fact, no workspace created; gateway does not retry |
 | Lost acknowledgement or ambiguous dispatch | `TASK_STATE_FAILED` | `dispatch/dispatch_unknown`; old fence invalidated and cleanup unknown until proven |
 | Known profile permission denial after acceptance | `TASK_STATE_REJECTED` | Policy decision plus provider stop and cleanup outcomes |
 | Unknown permission or provider protocol shape | `TASK_STATE_FAILED` | Adapter incompatibility, never mislabeled as policy |
-| Failure before result-candidate production | `TASK_STATE_FAILED` | Typed primary source/setup/provider/dispatch/crash/infrastructure phase, safe message, retriable fact, requested structured result `not_produced`, separate termination/cleanup/completeness |
+| Failure before result-candidate production | `TASK_STATE_FAILED` | Typed primary dispatch/materialization/setup/provider/crash/infrastructure phase, including manifest or materializer failure; safe message, retriable fact, requested structured result `not_produced`, separate termination/cleanup/completeness, and bounded workspace provenance |
 | Check, mandatory-evidence, cleanup, crash, or infrastructure failure after result validation | `TASK_STATE_FAILED` | Preserve selected `valid` or `invalid`; preserve exactly one fixed structured-result Artifact for `valid`; later phase remains primary failure |
 | Requested structured result is missing or invalid after an otherwise successful action | `TASK_STATE_FAILED` | Typed `structured_result/missing` with `not_produced`, or `structured_result/invalid` with `invalid`; no structured-result Artifact |
 | Cancellation/deadline wins and stop/cleanup verify | `TASK_STATE_CANCELED` | First source plus contributors and native abort; use `not_produced` only before a candidate, otherwise preserve `valid`/`invalid` and the valid Artifact; record termination and cleanup |
@@ -415,7 +646,11 @@ docs/src/content/docs/
 
 1. Create the private Node 22 service package and freeze the public extension URI and standard carriers, integrity and structured-result Artifacts, portable result-schema subset, worker protocol including command revisions/tombstones, profiles, fixtures, and error vocabulary.
 2. Build authenticated durable A2A Task handling, retained-claim-first replay, and trusted fenced worker dispatch against a fake worker; startup terminalizes interrupted Tasks without attempting provider reattachment.
-3. Build the supervised single-execution worker lifecycle, monotonic command record, failed-quiescence boundary recycling, pre-readiness orphan reaper, OS credential boundary, and hardened source/evidence handling against a fake adapter.
+3. Build the supervised single-execution worker lifecycle, monotonic command
+   record, failed-quiescence boundary recycling, pre-readiness orphan reaper,
+   OS credential boundaries, the direct Git/OCI/registered-materializer
+   registry, and hardened workspace/evidence handling against fake
+   materializers and a fake backend.
 4. Add the direct Codex SDK adapter and prove structured output, cancellation, OS-enforced provider/tool credential separation, and native evidence.
 5. Add the Pi RPC adapter against the same contract, with repository extensions and built-in tools disabled and one worker-owned policy extension providing OS-confined tools plus the terminating result tool.
 6. Package the services and run cross-backend, transport, security, process, and A2A conformance before enabling a consumer.
@@ -425,7 +660,15 @@ docs/src/content/docs/
 - **Package surface:** A private Node 22 execution-service workspace and two container entrypoints are added. The published root `allagents` CLI package, Node 18 engine, command surface, and imports remain unchanged.
 - **Runtime support:** Gateway and worker require Node 22.19+; startup checks SDK/CLI versions. The Linux worker is one execution per instance and scales by adding instances, not concurrent work inside one trust domain.
 - **Filesystem:** The gateway owns a generation-based private Task/Artifact store. Workers own isolated invocation and backend roots. Existing workspace/profile paths are never execution workspaces.
-- **Security:** New review-critical surfaces are trusted public/private transports, auth, owner-key derivation, retained-replay ordering, source SSRF, admission/resource quotas, setup/check policy, OS-enforced provider/tool credential separation, Pi extension/tool replacement, phase-scoped secrets, metadata-only telemetry filtering and operator boundaries, internal fences and monotonic command records, Artifact capture/serving, and reviewed-source trust enforcement.
+- **Security:** New review-critical surfaces are trusted public/private
+  transports, auth, owner-key derivation, retained-replay ordering, Git and OCI
+  source SSRF, materializer image supply chain, materializer input schemas,
+  phase-scoped source credentials and egress, workspace manifest validation,
+  admission/resource quotas, setup/check policy, OS-enforced provider/tool
+  credential separation, Pi extension/tool replacement, metadata-only
+  telemetry filtering and operator boundaries, internal fences and monotonic
+  command records, Artifact capture/serving, and reviewed-source trust
+  enforcement.
 - **Operations:** Gateway and worker health, readiness, transport/peer identity, quotas, low-space state, allowlisted metadata-only structured logs/traces, telemetry-specific access/retention, command tombstones, lease expiry, poisoned-worker exit, supervisor boundary health, orphan-root quarantine/reaping, stale event rejection, and graceful shutdown need independent signals.
 - **Consumers:** AI Evals can build its runner provider only after the Agent Card, extension schemas, and conformance fixtures are versioned and published.
 
@@ -439,7 +682,15 @@ docs/src/content/docs/
 - **Orphan processes and roots:** Combine explicit cancel, native abort, process-set verification, one-execution supervisor/container death, lease expiry, and pre-readiness orphan reaping or quarantine. Failed quiescence poisons admission and exits the worker so the supervisor destroys the boundary; termination/filesystem outcomes remain separate.
 - **False recovery claims:** Persist Task and evidence truth only. Startup fails active Tasks, invalidates fences, and relies on lease expiry or supervisor-boundary proof instead of resuming provider sessions.
 - **Structured-output drift:** Admit only the versioned closed schema subset, include its canonical digest in provenance and original claim bindings, pass the exact accepted schema through each adapter, validate with one shared validator, preserve an already selected result across later failures, and enforce the two fixed Artifact shapes.
-- **Source SSRF or credential leakage:** Enforce KTD13 for every connection and phase. Credentials are ephemeral and origin-bound. Credentialed profiles also enforce the R13 OS provider/tool boundary or broker; environment filtering remains defense in depth. Pi repository extensions and unrestricted built-in tools never load.
+- **Source SSRF, materializer compromise, or credential leakage:** Enforce
+  KTD13 for every source mode, connection, and phase. Pin external
+  materializer images and OCI snapshots by digest, validate their manifests,
+  isolate staging and acquisition processes, apply explicit egress and limits,
+  and atomically publish only validated outputs. Source credentials are
+  ephemeral, origin-bound, and removed before setup. Credentialed profiles also
+  enforce the R13 OS provider/tool boundary or broker; environment filtering
+  remains defense in depth. Pi repository extensions and unrestricted built-in
+  tools never load.
 - **Telemetry disclosure:** Apply KTD10's pre-export guard before every structured log/span processor and reject content or secret-bearing attributes rather than relying on exporter policy. Canary-secret and cross-owner-fragment tests cover agent, model, tool, stale-event, and error paths; telemetry operators receive only bounded metadata and opaque owner correlation under separate access and retention.
 - **Resource exhaustion:** Reserve per-owner/global gateway quota only for new claims, enforce store watermarks and stream limits, and require one-execution deployment CPU/memory/PID/network/filesystem controls before accepting a profile.
 - **Artifact race or disclosure:** Stop all invocation processes first; accept only stable regular files under the repository subdirectory; reject links, special files, mount crossings, unstable metadata, and unsafe sparse files; stage bounded bytes privately, hash once, and verify size/digest at gateway publication.
@@ -451,7 +702,10 @@ docs/src/content/docs/
 ### Assumptions
 
 - The first production deployment runs one gateway replica with persistent storage. Multi-replica transactional storage is deferred.
-- Git over hardened HTTPS and exact commit object ID covers the initial consumer. Other source transports require a later extension version or capability.
+- The initial public extension supports direct multi-repository Git,
+  digest-pinned OCI workspace snapshots, and operator-registered materializers.
+  A deployment may enable only the source modes its worker route advertises;
+  direct hardened Git remains the required baseline.
 - Setup and check commands are operator-controlled profile policy, not caller-supplied shell text.
 - Initial repositories are reviewed inside one configured mutual-trust domain. Credentialed profiles still enforce provider/tool credential separation, but that narrower boundary does not make hostile-code or cross-tenant execution available; those claims require a stronger sandbox driver.
 - Current implementation baselines are A2A SDK 1.x on Node 20+, Codex SDK 0.154.x, and Pi 0.85.x on Node 22.19+. The private service standardizes on Node 22.19+ and rechecks exact pins before lockfile changes.
@@ -462,17 +716,54 @@ docs/src/content/docs/
 
 ### U1. Versioned public and worker contracts
 
-- **Goal:** Freeze the standard public extension carriers, integrity and structured-result Artifacts, profile vocabulary, private worker protocol including monotonic command state, original idempotency bindings, typed failures, and conformance fixtures before either service endpoint.
+- **Goal:** Freeze the standard public extension carriers, versioned workspace
+  source and manifest contracts, materializer/profile vocabulary, integrity and
+  structured-result Artifacts, private worker protocol including monotonic
+  command state, original idempotency bindings, typed failures, and conformance
+  fixtures before either service endpoint.
 - **Requirements:** R2-R3, R6-R7, R10-R22; AE2-AE3, AE6-AE12, AE14; KTD2, KTD5-KTD12.
 - **Dependencies:** None.
 - **Files:** `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `packages/execution-service/src/execution/contract.ts`, `packages/execution-service/src/execution/extension-v1.ts`, `packages/execution-service/src/execution/result-schema-v1.ts`, `packages/execution-service/src/execution/worker-protocol-v1.ts`, `packages/execution-service/src/execution/errors.ts`, `packages/execution-service/src/execution/profiles.ts`, `packages/execution-service/tests/unit/execution/contracts.test.ts`, `packages/execution-service/tests/fixtures/execution/*.json`, `scripts/generate-execution-schemas.ts`, `package.json`, `bun.lock`.
 - **Approach:** Create the private Node 22 workspace package. Define strict Zod request/result/profile schemas and freeze `https://allagents.dev/a2a/extensions/coding-execution/v1`: required Agent Card advertisement, `A2A-Extensions` negotiation, `Message.extensions`, request data only at `Message.metadata[uri]`, and terminal integrity data only in the single Part of the fixed-name `allagents.execution-integrity` Artifact whose `extensions` contains the URI. Explicitly forbid `Task.extensions`. Define the portable result-schema subset, canonical caller/schema/profile digests, four result states, separate fixed `allagents.structured-result` Artifact, and shared validator. Define original claim bindings independently from mutable current policy. Add worker identity, attempt/fence/lease identity, monotonic command revision, unseen-attempt cancel tombstone, conditional effect revision, event sequence, terminal acknowledgement, and integrity rules. Generate checked-in schemas and fixtures from one source.
-- **Execution note:** Start with fixture-driven schema, framing, and digest tests. Observe failures for unknown versions, credential-bearing sources, mutable revisions, unsafe paths, invalid public states, stale fences, oversized records, and conflicting canonical inputs before implementing schemas.
+  The source contract is a strict `kind`-discriminated union for direct
+  repository lists, digest-pinned OCI snapshots, or a registered materializer
+  ID with an expected workspace-manifest digest and schema-validated structured
+  inputs; cross-variant fields are unrepresentable. Define the standard
+  workspace manifest, verification-method vocabulary, authorization scope and
+  revocation epoch, collision-safe destinations, and split gateway/worker
+  materializer descriptors. Define algorithm-qualified digest formats and
+  versioned, domain-separated canonical preimages for materializer definitions,
+  inputs, manifests, profiles, and caller requests; no public field can carry
+  acquisition code, image references, commands, credentials, or policy.
+- **Execution note:** Start with fixture-driven schema, framing, and digest
+  tests. Observe failures for unknown versions, credential-bearing sources,
+  mutable revisions or image tags, duplicate/unsafe destinations, unknown or
+  disallowed materializers, invalid structured inputs or workspace manifests,
+  unsafe paths, invalid public states, stale fences, oversized records, and
+  conflicting canonical inputs before implementing schemas.
 - **Patterns to follow:** `src/models/workspace-config.ts` for strict schemas, `scripts/generate-workspace-schemas.ts` for generated-schema drift checks, `src/core/native/types.ts` for safe error/provenance normalization, and Buzz's structurally non-secret intent template for the narrow digest-input pattern.
 - **Test scenarios:**
   - A minimal valid Message negotiates the exact URI in `A2A-Extensions`, includes it in `Message.extensions`, puts the bounded request only at `Message.metadata[uri]`, and produces a stable digest across object-key ordering; missing/mismatched carriers and any `Task.extensions` field are rejected. Every terminal fixture has exactly one `allagents.execution-integrity` Artifact with the URI in `Artifact.extensions` and the schema-defined envelope in its single `data` Part.
   - Changing prompt, source object ID, profile ID, result schema, artifact selection, or deadline changes the canonical caller digest; trace IDs and transport metadata do not. The original effective-profile and result-schema digests are stored separately for retained replay.
-  - Rotating a resolved secret value, changing attempt/lease/trace identity, or changing a per-run path leaves the profile digest unchanged; changing a policy field or environment-variable name changes it, and the digest serializer cannot accept secret-bearing runtime state.
+  - Direct repositories are order-canonicalized without erasing destination
+    identity; duplicate destinations, mutable refs, unsafe subdirectories, and
+    ambiguous URL forms fail. The checked-out commit and tree match the
+    requested object from the authorized remote. OCI tags and external layer
+    URLs fail while allowed manifest digests pass.
+  - The source discriminator rejects unknown `kind` values, cross-variant
+    fields, and missing variant fields. Registered materializer inputs validate
+    against the operator schema and resource selectors, the request pins the
+    expected workspace-manifest digest, the worker-derived definition digest
+    changes the effective-profile digest, gateway and worker descriptors agree,
+    and caller-supplied image/command/credential fields are unrepresentable.
+    Fixed cross-language vectors prove algorithm-qualified, domain-separated
+    canonical digests and every non-secret runtime-field mutation changes the
+    definition digest while secret-value rotation does not.
+  - Rotating a resolved secret value, changing attempt/lease/trace identity, or
+    changing a per-run path leaves the profile digest unchanged; changing a
+    policy field, environment-variable name, authorization scope, or revocation
+    epoch changes it, and the digest serializer cannot accept secret-bearing
+    runtime state.
   - Unsupported keywords, remote references, non-object roots, object schemas that omit `additionalProperties: false`, undeclared optional properties, format-dependent validation, or schemas over byte/depth/property/enum limits are rejected before Task creation; every accepted schema validates identically in admission, worker, Codex forwarding, and Pi tool generation.
   - Public Task fixtures accept only A2A states; cancellation, cleanup, evidence, and tombstone phases exist only in private records.
   - Worker fixtures reject missing/mismatched worker identities, attempt IDs, lease epochs, profile digests, command revisions, conditional-effect revisions, event sequences, bounds, and terminal acknowledgements. Cancel for an unseen attempt persists a tombstone; tombstoned or lower-revision dispatch is invalid before workspace creation.
@@ -530,17 +821,89 @@ docs/src/content/docs/
 
 ### U4. Worker protocol and safe workspace lifecycle
 
-- **Goal:** Implement the supervised single-execution worker with authenticated transport, a minimal monotonic command record, hardened immutable Git acquisition, OS-enforced credential separation, leases, isolated roots, resource controls, race-resistant evidence, failed-quiescence recycling, and cleanup independent of any provider.
+- **Goal:** Implement the supervised single-execution worker with authenticated
+  transport, a minimal monotonic command record, a closed workspace
+  materializer registry for hardened multi-repository Git, digest-pinned OCI,
+  and operator-registered images, standard manifest validation, OS-enforced
+  credential separation, leases, isolated roots, resource controls,
+  race-resistant evidence, failed-quiescence recycling, and cleanup independent
+  of any provider.
 - **Requirements:** R10-R22; F1, F3-F4; AE5-AE6, AE8-AE10, AE12, AE14; KTD2, KTD5-KTD7, KTD9-KTD10, KTD12-KTD14.
 - **Dependencies:** U1.
-- **Files:** `packages/execution-service/src/worker/config.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/worker/server.ts`, `packages/execution-service/src/worker/lease.ts`, `packages/execution-service/src/worker/workspace.ts`, `packages/execution-service/src/worker/evidence.ts`, `packages/execution-service/src/worker/adapters/types.ts`, `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/tests/unit/worker/supervisor.test.ts`, `packages/execution-service/tests/unit/worker/reaper.test.ts`, `packages/execution-service/tests/unit/worker/server.test.ts`, `packages/execution-service/tests/unit/worker/lease.test.ts`, `packages/execution-service/tests/unit/worker/workspace.test.ts`, `packages/execution-service/tests/unit/worker/evidence.test.ts`, `packages/execution-service/tests/fixtures/execution/fake-backend.ts`.
-- **Approach:** Authenticate the configured worker identity and fence every private command. Persist one minimal monotonic command record scoped to worker identity/lease before workspace creation: unseen-attempt cancel writes a tombstone, stale/lower-revision dispatch is rejected, and each dispatch/cancel effect conditionally rechecks the stored revision immediately before mutation. Reserve one execution only after that check. Validate profile/deployment and OS provider/tool credential-boundary capabilities, then emit sequenced NDJSON. Keep transition selection pure. Run inside a dedicated container process namespace under init/reaper or an equivalent systemd/cgroup boundary. After bounded termination escalation, prove the complete invocation process set empty; if proof fails, persist termination unknown/failed, poison admission, and exit so the supervisor destroys the boundary. Replacement readiness proves boundary termination and reaps/quarantines owned roots. Use KTD13 acquisition, separate roots, phase environments, budgets, and descriptor-safe evidence; clean in `finally`.
-- **Execution note:** Characterize every phase with a fake adapter, malicious fixtures, and disposable Git servers before real providers. Fault-inject dispatch acknowledgement, events, leases, acquisition, processes, evidence publication, and cleanup.
+- **Files:** `packages/execution-service/src/worker/config.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/worker/server.ts`, `packages/execution-service/src/worker/lease.ts`, `packages/execution-service/src/worker/workspace.ts`, `packages/execution-service/src/worker/materializers/types.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/worker/materializers/git.ts`, `packages/execution-service/src/worker/materializers/oci.ts`, `packages/execution-service/src/worker/materializers/external.ts`, `packages/execution-service/src/worker/evidence.ts`, `packages/execution-service/src/worker/adapters/types.ts`, `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/tests/unit/worker/supervisor.test.ts`, `packages/execution-service/tests/unit/worker/reaper.test.ts`, `packages/execution-service/tests/unit/worker/server.test.ts`, `packages/execution-service/tests/unit/worker/lease.test.ts`, `packages/execution-service/tests/unit/worker/workspace.test.ts`, `packages/execution-service/tests/unit/worker/materializers.test.ts`, `packages/execution-service/tests/unit/worker/evidence.test.ts`, `packages/execution-service/tests/fixtures/execution/fake-backend.ts`, `packages/execution-service/tests/fixtures/execution/fake-materializer.ts`.
+- **Approach:** Authenticate the configured worker identity and fence every
+  private command. Persist one minimal monotonic command record scoped to worker
+  identity/lease before workspace creation: unseen-attempt cancel writes a
+  tombstone, stale/lower-revision dispatch is rejected, and each dispatch/cancel
+  effect conditionally rechecks the stored revision immediately before
+  mutation. Reserve one execution only after that check. Validate the fully
+  canonicalized source against profile resource policy before cache lookup;
+  bind cache entries to owner or authorization-scope digest, revocation epoch,
+  canonical source, definition digest, and expected/actual manifest digests.
+  Validate deployment, worker-computed materializer definition digest, and
+  acquisition plus provider/tool credential-boundary capabilities, then emit
+  sequenced NDJSON. Keep transition selection pure. Run inside a dedicated
+  container process namespace under init/reaper or an equivalent systemd/cgroup
+  boundary. Resolve only the closed KTD13 materializer registry.
+
+  Launch an external materializer through the configured OCI runner or sandbox
+  as a supervisor-owned resource labeled by worker, attempt, lease, and fence,
+  with only schema-validated and resource-authorized inputs, its source
+  credentials, allowed egress, and a private host-owned staging mount under the
+  final publication root. Never expose gateway, provider, backend,
+  final-workspace roots, or the runner control socket. Treat the digest-pinned
+  image as operator-trusted deployment code. Verify the versioned output
+  manifest, request-pinned digest, content, immutable identities, and
+  verification-method labels. Terminate the acquisition process, credential
+  scope, mounts, and runner resource while retaining the validated host-owned
+  tree; prove that boundary gone before an atomic same-filesystem rename,
+  setup, and baseline. No copy fallback exists. After bounded termination
+  escalation, prove the complete invocation process set empty; if proof fails,
+  persist termination unknown/failed, poison admission, and exit so the
+  supervisor destroys the boundary. Replacement readiness enumerates and
+  destroys or quarantines orphan runner resources, credential/staging mounts,
+  and roots. Use separate phase environments, budgets, and descriptor-safe
+  evidence; clean in `finally`.
+- **Execution note:** Characterize every phase with a fake adapter, fake
+  registered materializer, local OCI registry, malicious fixtures, and
+  disposable Git servers before real providers or private artifact systems.
+  Fault-inject dispatch acknowledgement, events, leases, every acquisition
+  mode, manifest publication, processes, evidence publication, and cleanup.
 - **Patterns to follow:** `src/core/managed-repos.ts` and `src/core/git.ts` for Git execution shape, `src/core/native/types.ts` for child-process results and redaction, `src/core/profile/files.ts` for filesystem ownership, profile adapter context isolation under `src/core/profile/adapters/`, `tests/helpers/env.ts` for isolated state, and Buzz's bounded process-group/job-object cancellation as a lifecycle characterization checklist rather than copied code.
 - **Test scenarios:**
-  - Covers AE5. Exact object ID verifies; wrong/missing object, disallowed URL/host/address/port, credential-bearing URL, redirect, DNS rebinding, unsafe subdirectory, fetch failure, and setup failure stop before adapter invocation. After worker acceptance each such source/setup failure emits the selected `Submitted -> Working -> Failed` public trace.
-  - Repositories with LFS configuration/pointers, submodules, hooks, filters, alternates, proxy/helper config, or non-HTTPS secondary protocols cause no secondary connection or helper execution.
-  - Source credentials leave no repository config, process argument, child phase environment, log, error, evidence, or retained workspace trace.
+  - Covers AE5. Every repository checkout matches its requested full object ID
+    and tree and destinations are disjoint; wrong/missing objects, disallowed
+    repository/namespace/URL/host/address/port, credential-bearing URLs,
+    redirects, DNS rebinding, unsafe subdirectories, fetch failure, and setup
+    failure stop before adapter invocation. After worker acceptance each
+    materialization/setup failure emits the selected
+    `Submitted -> Working -> Failed` public trace.
+  - Repositories with LFS configuration/pointers, submodules, hooks, filters,
+    alternates, proxy/helper config, or non-HTTPS secondary protocols cause no
+    secondary connection or helper execution.
+  - Source credentials leave no repository config, process argument, child
+    phase environment, log, error, evidence, or retained workspace trace.
+  - OCI tags, foreign/external URLs, cross-origin credential forwarding,
+    disallowed registry/auth/blob host/address/port, redirects, DNS rebinding,
+    manifest/layer mismatches, unsafe layers, missing workspace manifests, and
+    expansion-limit violations fail before publication. A valid digest-pinned
+    snapshot produces the same manifest contract as direct Git.
+  - Unknown, profile-disallowed, unpinned, or definition-drifted materializers;
+    unauthorized structured-input resources; gateway/worker descriptor
+    mismatch; missing expected workspace-manifest digest; schema-invalid
+    inputs; undeclared egress; malformed output manifests; and mismatched
+    expected/reported repository or output identities fail before setup. The
+    request cannot select an image or command.
+  - Materializer credential environments/mounts, process state, runner control
+    plane, and staging mounts are inaccessible to later phases. Literal secret
+    canaries in output or retained logs fail publication. This verifies phase
+    teardown, not safety from a malicious operator-registered image that
+    intentionally transforms a credential. Provenance labels its unverified
+    source assertions as materializer-attested. A cache hit occurs only after
+    current authorization and revalidates content plus the same owner or
+    authorization scope, revocation epoch, canonical source,
+    materializer-definition, expected-output, and actual output-manifest
+    digests inside the same trust domain.
   - Setup changes establish the baseline; setup and checks receive no provider/control secrets. Credentialed provider runtimes and model tools run across the declared OS UID/process/mount boundary or broker, with disjoint config/data roots and ambient selectors removed.
   - Covers AE6. Cancel, deadline in every phase, lease expiry, worker shutdown, and adapter failure terminate/clean once; late adapter completion cannot change the result.
   - Block dispatch after effect selection, complete a newer cancel for the unseen attempt, then release dispatch: the command tombstone/revision check rejects it before workspace or provider creation. Duplicate commands remain idempotent and all effects stay fence-bound.
@@ -550,8 +913,22 @@ docs/src/content/docs/
   - Covers AE9. Known permissions receive one-invocation decisions; prompt-required profiles fail startup; unknown permission types fail the adapter.
   - Covers AE10. Predictable evidence limits retain the integrity kernel and explicit gaps. A valid or invalid result selected before a later check/evidence failure is preserved, including the valid Artifact; only a pre-candidate failure records `not_produced`.
   - Background swap attacks, links, mount crossings, FIFOs/devices/sockets, unstable files, and tampering between worker staging and gateway publication never expose external bytes or partial Artifacts.
-  - SIGKILL before and after provider spawn proves supervisor descendant death and replacement root recovery; the gateway retains one failed Task with separate termination and cleanup outcomes.
-- **Verification:** A built supervised worker mutates a disposable exact-SHA repository through the fake adapter and proves authenticated revisioned dispatch, unseen-cancel tombstones, source hardening, OS credential separation, budgets, result preservation, quiescence or poisoned-boundary exit, evidence integrity, worker-crash containment, orphan-root handling, and cleanup.
+  - SIGKILL during materialization and before or after provider spawn proves
+    supervisor-owned runner/process death, credential/staging mount removal,
+    and replacement root recovery before readiness; unresolved resources keep
+    readiness false, and the gateway retains one failed Task with separate
+    termination and cleanup outcomes.
+  - Cross-filesystem staging/publication configuration fails readiness. Faults
+    around the final rename expose either no final workspace or the complete
+    validated tree, never a copy fallback or partial publication.
+- **Verification:** A built supervised worker materializes equivalent
+  workspaces through disposable exact-SHA repositories, a local digest-pinned
+  OCI snapshot, and a fake registered materializer; validates one standard
+  manifest; mutates each through the fake adapter; and proves authenticated
+  revisioned dispatch, unseen-cancel tombstones, acquisition hardening and
+  credential teardown, budgets, result preservation, quiescence or
+  poisoned-boundary exit, evidence integrity, worker-crash containment,
+  orphan-root handling, and cleanup.
 
 ### U5. Codex backend adapter
 
@@ -595,16 +972,42 @@ docs/src/content/docs/
 - **Goal:** Compose exactly two production adapters and package independently runnable gateway and supervised worker services with trusted transports, peer identity, credential-boundary and supervisor readiness, safe startup/shutdown, tracing, and reproducible containers.
 - **Requirements:** R1, R5, R7-R22; AE7-AE8, AE12, AE14; KTD4-KTD8, KTD10-KTD15.
 - **Dependencies:** U3-U6.
-- **Files:** `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/src/gateway/index.ts`, `packages/execution-service/src/worker/index.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/execution/telemetry.ts`, `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `package.json`, `bun.lock`, `containers/gateway.Dockerfile`, `containers/worker.Dockerfile`, `.dockerignore`, `.github/workflows/ci.yml`, `.github/workflows/publish.yml`, `packages/execution-service/tests/unit/worker/adapters/registry.test.ts`, `packages/execution-service/tests/e2e/service-lifecycle.test.ts`.
-- **Approach:** Register only Codex and Pi. Add gateway and supervised worker entrypoints inside the private Node 22 workspace. Before readiness, validate named public TLS termination, every remote worker's mTLS/equivalent transport and pinned identity/capabilities, Unix-socket locality, store, runtimes, monotonic command storage, OS credential-boundary capability, supervisor boundary, orphan roots, trust, quotas, and resource controls. Propagate `traceparent`, then apply KTD10's small shared metadata allowlist and bounded filtering/redaction before any structured log/span processor or OTLP exporter; neither OpenInference nor backend-native attributes bypass it. Build a minimal gateway image with no provider runtime and a one-execution worker image whose init kills the complete boundary when the worker server exits, including poisoned failed-quiescence exit.
+- **Files:** `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/gateway/index.ts`, `packages/execution-service/src/worker/index.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/execution/telemetry.ts`, `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `package.json`, `bun.lock`, `containers/gateway.Dockerfile`, `containers/worker.Dockerfile`, `.dockerignore`, `.github/workflows/ci.yml`, `.github/workflows/publish.yml`, `packages/execution-service/tests/unit/worker/adapters/registry.test.ts`, `packages/execution-service/tests/unit/worker/materializers/registry.test.ts`, `packages/execution-service/tests/e2e/service-lifecycle.test.ts`.
+- **Approach:** Register only Codex and Pi as backend adapters and register the
+  built-in Git/OCI materializers plus configured external materializers through
+  a separate closed registry. Add gateway and supervised worker entrypoints
+  inside the private Node 22 workspace. Before readiness, validate named public
+  TLS termination, every remote worker's mTLS/equivalent transport and pinned
+  identity/capabilities, Unix-socket locality, store, runtimes, matching
+  gateway/worker materializer definition digests, image digests, schemas,
+  credential names, egress, limits, and OCI runner/sandbox isolation, monotonic
+  command storage, acquisition and provider/tool credential-boundary
+  capabilities,
+  supervisor boundary, orphan roots, trust, quotas, and resource controls.
+  Propagate `traceparent`, then apply KTD10's small shared metadata allowlist and
+  bounded filtering/redaction before any structured log/span processor or OTLP
+  exporter; neither OpenInference nor backend-native attributes bypass it.
+  Build a minimal gateway image with no provider or materializer runtime and a
+  one-execution worker image whose init kills the complete boundary when the
+  worker server exits, including poisoned failed-quiescence exit.
 - **Execution note:** Treat this as integration and packaging work; prove it with built-process and container smoke tests rather than source-shape assertions.
 - **Patterns to follow:** `src/core/profile/adapters/registry.ts` for explicit adapter composition, root package scripts for workspace delegation, `src/core/mcp-http-stdio-proxy.ts` for server lifecycle, `.github/workflows/ci.yml` for quality gates, and `.github/workflows/publish.yml` for immutable releases.
 - **Test scenarios:**
   - Registry exposes exactly Codex and Pi, reports their capabilities/versions, accepts an injected fake registry in tests, and rejects OpenCode or unknown backend IDs before workspace creation.
+  - Materializer registry exposes built-in Git and OCI plus only configured
+    external IDs, resolves every external image to the configured digest,
+    rejects duplicates/tags/unknown IDs, and cannot be influenced by request
+    image, command, credential, or policy fields.
   - Gateway and supervised worker start from built outputs, become ready only after trusted transport/identity, credential and supervisor boundaries, dependencies, and orphan recovery pass, and stop gracefully on SIGTERM.
   - Gateway readiness fails for malformed auth, missing/mismatched named TLS termination, plaintext production public ingress, invalid aggregate store, unavailable required worker, quota/free-space failure, or non-loopback unauthenticated bind.
   - Worker-route readiness fails for plaintext remote URL, wrong/untrusted certificate, worker identity/capability mismatch, or replayed capability; mTLS/equivalent authenticated encryption and same-host Unix sockets pass.
   - Worker readiness fails for concurrency above one, unsupported trust claim, unavailable OS credential/supervisor/resource enforcement, unproved or unrecoverable orphan roots, or unavailable/incompatible Codex or Pi runtime.
+  - Worker readiness fails when a profile allows a materializer absent from its
+    route, gateway and worker definition digests differ, an external image is
+    not digest-pinned, an input schema or output manifest version is
+    unsupported, named credentials or the OCI runner/sandbox are unavailable,
+    the runner control plane would be visible to the workspace, or configured
+    egress and resource enforcement cannot be provided.
   - Killing or poisoning the worker server while an adapter child and invocation root exist makes the supervisor destroy the boundary; replacement readiness waits for root deletion/quarantine and never reuses it.
   - Trace context crosses the authenticated private call and correlates result identities using only opaque owner correlation. Exporter probes for agent, model, tool, stale-event, and error spans contain allowlisted bounded metadata but no canary secret, prompt/output, tool argument/result, file body/source fragment, raw caller identity, or cross-owner fragment; exporter failure cannot change Task status.
   - Gateway image contains no Codex, Pi, Git workspace, provider credential material, or worker trust private keys.
@@ -619,6 +1022,14 @@ docs/src/content/docs/
 - **Dependencies:** U1-U7.
 - **Files:** `packages/execution-service/tests/e2e/execution-gateway.test.ts`, `packages/execution-service/tests/fixtures/execution/conformance-cases.ts`, `examples/gateway/gateway.yaml`, `examples/gateway/worker.yaml`, `docs/src/content/docs/guides/execution-gateway.mdx`, `docs/src/content/docs/reference/execution-gateway-configuration.mdx`, `README.md`, `CHANGELOG.md`.
 - **Approach:** Run one conformance suite against the fake backend and each provider fixture, plus opt-in credentialed smoke cases, with gateway and supervised worker as separate processes. Each race fixture declares attempt/fence correlation, required durable transitions and observed effects, required happens-before edges, maximum occurrence counts, and effects forbidden after terminalization. A deliberately small test-side checker evaluates those constraints against durable records plus observed worker/process outcomes without calling the production selector. It remains coverage protection—not TLA+, a model checker, event sourcing, or a second lifecycle implementation. Document the exact extension URI and legal Agent Card/header/Message/Artifact carriers, both fixed Artifacts and four result states, retained-replay ordering, worker transport/identity, monotonic command tombstones, failed-quiescence recycling, the narrow OS credential boundary, reviewed-domain limitation, metadata-only telemetry and its separate operator access/retention, storage/HA limits, lack of execution resume, source hardening, quotas, retention, and operations.
+  Document all three source modes, the exact source discriminator, canonical
+  repository/namespace and materializer-input authorization, multi-repository
+  destinations, the standard workspace manifest and verification-method
+  labels, materializer registration, worker-derived definition digests,
+  profile allowlisting, digest/profile/idempotency boundaries, same-filesystem
+  publication, supervisor-owned runner cleanup, acquisition credential
+  teardown, authorization-scoped cache reuse/revocation, source-mode
+  capabilities, and the prohibition on caller-supplied acquisition code.
 - **Execution note:** Use a disposable local Git HTTP server, temporary gateway store, temporary worker root, and loopback ports. Never read the developer's real home, sessions, or credentials in deterministic tests.
 - **Patterns to follow:** Existing `tests/e2e/*` built-process style, `tests/helpers/env.ts` home isolation, Starlight guide/reference organization under `docs/src/content/docs/`, and Buzz's required-critical-action coverage rule without importing its TLA+ model or production implementation.
 - **Test scenarios:**
@@ -626,16 +1037,50 @@ docs/src/content/docs/
   - Agent Card required-extension advertisement, `A2A-Extensions`, `Message.extensions`, request `Message.metadata[uri]`, and the single fixed integrity Artifact carrier interoperate; missing/mismatched carriers and `Task.extensions` fail.
   - Identical retained replay after deadline expiry, quota exhaustion, readiness loss, authorization change, or profile replacement returns the original Task; changed request/schema or inconsistent original bindings conflict.
   - The same accepted schema, valid result, invalid result, missing result, and pre-output failure pass through Codex and Pi with identical decisions. A valid-result-then-check-failure and invalid-result-then-evidence-failure preserve the selected state and only the valid Artifact; `not_produced` remains pre-candidate only.
-  - Source mismatch and setup failure after worker acceptance produce the selected `Submitted -> Working -> Failed` trace; provider invocation never begins, and durable snapshots, streams, and conformance records agree.
+  - Direct Git object/destination/authorization mismatch, OCI
+    digest/manifest/namespace mismatch, registered materializer
+    descriptor/input/resource/expected-output mismatch, direct known-secret
+    disclosure, and setup failure after worker acceptance produce the selected
+    `Submitted -> Working -> Failed` trace; provider invocation never begins,
+    and durable snapshots, streams, and conformance records agree. A policy
+    revocation before lookup cannot consume a previously populated cache entry.
   - Pause dispatch after selection, complete unseen-attempt cancel, then release dispatch; the stale command creates no workspace/process. The small independent checker enforces each fixture's attempt/fence correlation, happens-before edges, maximum counts, and forbidden post-terminal effects. Deliberately bad traces that still contain every required action name fail for wrong order, wrong fence, duplicate-over-maximum effects, and an extra stale dispatch after terminalization.
   - Concurrent callers cannot observe each other's Tasks, streams, cancellations, page tokens, quotas, or Artifacts; one worker serializes admitted work.
-  - Gateway restart, reconnect, ambiguous dispatch, duplicate/out-of-order commands/events, worker crash, lease expiry, cancellation, provider failure, evidence truncation, logical expiry, and cleanup failure preserve one truthful terminal outcome without provider reattachment or replay.
-  - A child that calls `setsid` and ignores graceful signals forces termination unknown/failed, poisoned-worker exit, supervisor boundary destruction, and replacement orphan recovery before readiness; no next reservation is accepted by the poisoned worker.
+  - Gateway restart, reconnect, ambiguous dispatch, duplicate/out-of-order
+    commands/events, worker crash, lease expiry, cancellation, provider failure,
+    evidence truncation, logical expiry, and cleanup failure preserve one
+    truthful terminal outcome without provider reattachment or replay.
+  - SIGKILL during external materialization and before or after provider spawn
+    forces supervisor-owned runner/process death, credential/staging mount
+    removal, and replacement orphan recovery before readiness. A child that
+    calls `setsid` and ignores graceful signals forces termination
+    unknown/failed, poisoned-worker exit, supervisor boundary destruction, and
+    replacement orphan recovery; no poisoned worker accepts a next reservation.
   - Public plaintext, wrong TLS boundary, private plaintext, wrong certificate/worker identity, and capability replay fail readiness/dispatch; configured TLS, mTLS/equivalent overlay, and same-host Unix socket cases pass.
   - Both adapters block model-tool probes of parent/sibling environments, procfs/process listings, known/discovered backend roots, and network secret exfiltration under the OS credential boundary. Environment filtering alone is never accepted as proof, and hostile-source/cross-tenant claims remain rejected.
   - End-to-end exporter capture repeats the agent/model/tool/stale-event/error canary and cross-owner probes, proving only bounded allowlisted metadata and opaque owner correlation cross the telemetry boundary while Task/Artifact access and retention remain independent.
-  - Redirect/DNS-rebinding, secondary Git fetch, resource exhaustion, malicious file types/link swaps, repository Pi extensions, and unrestricted built-ins remain blocked within the documented reviewed-source boundary.
-  - Examples validate with production schemas and use only secret variable names. Docs state the two transport boundaries, one gateway replica, one execution per worker, reviewed trust domain, narrow credential isolation versus deferred hostile-code isolation, metadata-only telemetry with its fixed pre-processor allowlist and separate operator access/retention, runtime floors, and ephemeral provider sessions.
+  - Redirect/DNS-rebinding and unauthorized-resource cases cover every Git and
+    OCI registry/auth/manifest/blob connection. Secondary Git fetch, OCI tag,
+    foreign/external layer URL, cross-origin credential forwarding,
+    layer/manifest mismatch, unregistered or unpinned materializer, undeclared
+    materializer egress, malicious output manifest, resource exhaustion,
+    malicious file types/link swaps, repository Pi extensions, and unrestricted
+    built-ins remain blocked within the documented reviewed-source boundary.
+  - Same-filesystem publication succeeds by atomic rename; a cross-filesystem
+    staging root fails readiness and fault injection never observes a partial
+    final tree or copy fallback. Provenance distinguishes worker-verified and
+    trusted-service identities from materializer-attested claims.
+  - Examples validate with production schemas and use only secret variable
+    names. Docs state the three source modes and exact discriminator, standard
+    workspace manifest and provenance labels, materializer registry/profile
+    boundary, worker-derived definition digest, resource authorization and
+    cache-revocation boundary, prohibition on caller-supplied acquisition code,
+    same-filesystem publication, supervisor-owned runner cleanup, acquisition
+    credential teardown, two transport boundaries, one gateway replica, one
+    execution per worker, reviewed trust domain, narrow credential isolation
+    versus deferred hostile-code isolation, metadata-only telemetry with its
+    fixed pre-processor allowlist and separate operator access/retention,
+    runtime floors, and ephemeral provider sessions.
   - Opt-in real-provider smoke tests record backend/runtime and credential-boundary prerequisites, skipping only when a named prerequisite is absent.
 - **Verification:** A clean install builds root CLI and private service without raising the CLI engine floor; full suites and docs pass; the official A2A client exercises every advertised operation including the `Submitted -> Working -> Failed` source/setup path; exporter capture proves the telemetry canary/cross-owner contract; the independent checker rejects all-name-present traces with wrong order/fence/multiplicity or forbidden stale dispatch; and release evidence records each available real backend plus explicit skipped prerequisites.
 
@@ -645,16 +1090,16 @@ docs/src/content/docs/
 
 | Gate | Applies to | Required evidence |
 |---|---|---|
-| Contract generation | U1 | Exact extension URI/carriers, both fixed Artifact schemas, original replay bindings, command revisions/tombstones, result-state preservation, and positive/negative fixtures report no drift. |
-| Focused unit tests | U1-U7 | Active-unit tests pass with replay ordering, fault injection, state races, unseen cancel, limits, result preservation, failed-quiescence exit, credential probes, and cleanup. |
-| Gateway/worker integration | U3-U4, U7-U8 | Built processes agree on authenticated revisioned dispatch, worker identity, command tombstones, leases, Task/Artifact persistence, poisoned exit, orphan recovery, and cleanup. |
+| Contract generation | U1 | Exact extension URI/carriers, closed workspace source discriminator and manifest, algorithm-qualified materializer/profile/input/output digest preimages and vectors, verification-method vocabulary, authorization-scope/revocation fields, both fixed Artifact schemas, original replay bindings, command revisions/tombstones, result-state preservation, and positive/negative fixtures report no drift. |
+| Focused unit tests | U1-U7 | Active-unit tests pass with replay ordering, fault injection, state races, unseen cancel, limits, result preservation, failed-quiescence exit, credential probes, source authorization/cache revocation, and cleanup. |
+| Gateway/worker integration | U3-U4, U7-U8 | Built processes agree on authenticated revisioned dispatch, worker identity, command tombstones, leases, direct Git/OCI/registered materialization, worker-derived registry digests, acquisition credential teardown, supervisor-owned materializer runners, same-filesystem atomic publication, workspace-manifest provenance labels, Task/Artifact persistence, poisoned exit, orphan recovery, and cleanup. |
 | Backend conformance | U5-U8 | One shared suite passes against Codex and Pi, including the versioned schema subset, four result states, valid/invalid preservation across later failure, integrity Artifact carrier, and structured-result Artifact rule. |
-| Credentialed provider smoke | U5-U6, U8 | Each available provider mutates a disposable exact-SHA repository while adversarial tool probes cannot cross the OS credential boundary; missing credentials/runtime/boundary capability are recorded as skipped prerequisites. |
+| Credentialed provider smoke | U4-U6, U8 | An available operator-trusted registered materializer and each available provider mutate a disposable immutable workspace while adversarial later-phase probes cannot directly access acquisition/provider credential environments, mounts, processes, roots, or runner control planes and literal canaries remain absent; missing credentials/runtime/boundary capability are recorded as skipped prerequisites. |
 | A2A interoperability | U3, U8 | Official `@a2a-js/sdk` client passes required-extension negotiation and legal carriers, immediate/waiting send, stream, reconnect, get, list/filter/page, subscribe, retained replay, cancel races, expiry, and owner isolation without `Task.extensions`. |
-| Security and abuse | U2-U4, U7-U8 | Fixtures prove trusted public/private transport and peer identity, auth-before-lookup, retained-claim-first replay, opaque owners, Git SSRF controls, OS provider/tool credential separation, quotas, monotonic cancel/dispatch, failed-quiescence recycling, race-resistant capture, and trust-topology rejection. |
+| Security and abuse | U2-U4, U7-U8 | Fixtures prove trusted public/private transport and peer identity, auth-before-lookup, retained-claim-first replay, opaque owners, exact source-resource authorization, per-connection Git/OCI SSRF and credential-origin controls, authorization-scoped cache revocation, digest-pinned registered materializers, schema/manifest validation, truthful provenance labels, acquisition and provider/tool credential separation, quotas, monotonic cancel/dispatch, failed-quiescence recycling, race-resistant capture, and trust-topology rejection. |
 | Lifecycle trace conformance | U8 | The small test-side checker, independently of production selectors, validates attempt/fence correlation, required happens-before edges, maximum occurrence counts, and forbidden post-terminal effects against durable records plus observed worker/process outcomes; all-name-present bad traces fail for wrong order/fence/multiplicity and stale post-terminal dispatch. |
 | Telemetry safety | U7-U8 | Exporter capture across agent, model, tool, stale-event, and error spans proves the pre-processor allowlist and bounded redaction exclude prompt/output/tool/source/file content, canary secrets, raw identities, and cross-owner fragments while retaining only bounded operational metadata and opaque owner correlation. |
-| Service packaging | U7-U8 | Root Node 18 install, private Node 22 build, gateway/supervised-worker smoke, transport and credential readiness, poisoned/crashed worker containment, orphan recovery, and both container builds pass. |
+| Service packaging | U7-U8 | Root Node 18 install, private Node 22 build, gateway/supervised-worker smoke, backend and materializer registry readiness, transport and credential readiness, poisoned/crashed worker containment, orphan recovery, and both service container builds pass. |
 | Repository quality | All | `bun run schema:check`, `bun run typecheck`, `bun run lint`, and `bun test` pass. |
 | Documentation | U8 | `bun run docs:build` passes and examples validate against current schemas. |
 
@@ -673,7 +1118,17 @@ The authoritative behavioral proof is the built-process E2E path with the offici
 - Authentication and bounded parsing precede owner-scoped retained lookup; identical replay uses stored original bindings before mutable admission, while current authorization/profile/readiness/deadline and quota apply only to atomic new claims.
 - Production public ingress uses its named TLS boundary, remote worker routes authenticate and encrypt peers with worker identity/capability binding, and same-host Unix sockets are the only non-network alternative; unprotected remote endpoints fail readiness.
 - Cancellation/deadlines use monotonic worker command tombstones and one native abort. Stale dispatch cannot create work, and failed quiescence poisons and exits the worker so supervisor destruction and replacement orphan recovery precede new admission.
-- Source hardening, the OS-enforced provider/tool credential boundary, phase-scoped secrets, disabled repository Pi extensions/unrestricted built-ins, one-execution reviewed-domain policy, resource limits, Artifact race defenses, completeness, provenance, and authenticated expiry are enforced end to end without claiming hostile-source/cross-tenant isolation.
+- Workspace source validation and exact resource authorization,
+  per-connection direct Git/OCI controls, worker-derived registered-materializer
+  digests, the standard workspace manifest and truthful provenance labels,
+  authorization-scoped cache revocation, same-filesystem atomic publication,
+  supervisor-owned runner cleanup, acquisition credential teardown,
+  OS-enforced provider/tool credential boundary, phase-scoped secrets, disabled
+  repository Pi extensions/unrestricted built-ins, one-execution
+  reviewed-domain policy, resource limits, Artifact race defenses,
+  completeness, provenance, and authenticated expiry are enforced end to end
+  without accepting caller acquisition code or claiming hostile-source or
+  cross-tenant isolation.
 - Metadata-only telemetry is filtered through the fixed allowlist and bounded redaction before processing/export; canary secrets, content, raw caller identities, and cross-owner fragments never reach exporters, and only opaque owner correlation crosses the separately governed operator boundary.
 - Required source/setup and race traces satisfy attempt/fence, happens-before, maximum-count, and forbidden-post-terminal constraints in the independent test-side checker; all-name-present malformed traces fail without introducing a parallel lifecycle implementation.
 - Focused tests, full repository gates, built-process smoke, container builds, docs build, and applicable credentialed backend smoke tests have recorded outcomes.
@@ -682,11 +1137,31 @@ The authoritative behavioral proof is the built-process E2E path with the offici
 
 ### Per unit
 
-- U1: Standard extension carriers, integrity/structured-result Artifact schemas, four result states, original claim digests, command revisions/tombstones, fence rules, typed failures, and fixtures are generated and stable.
+- U1: Standard extension carriers, closed workspace source/manifest contracts,
+  algorithm-qualified materializer/profile/input/output digest preimages,
+  verification and authorization vocabulary, integrity/structured-result
+  Artifact schemas, four result states, original claim digests, command
+  revisions/tombstones, fence rules, typed failures, and fixtures are generated
+  and stable.
 - U2: Trusted ingress, auth, opaque owner isolation, retained-claim-first replay, original bindings, atomic new admission, CAS settlement, pagination, startup recovery, quotas, Artifact access, tombstones, and cleanup pass fault injection.
 - U3: Every advertised A2A operation agrees across stream and lookup while extension negotiation, replay ordering, authenticated worker routes, fencing, monotonic cancellation, and races preserve one Task.
-- U4: Worker command state, OS credential separation, supervision, poisoned-exit/orphan recovery, and dispatch/source/setup/action/check/quiescence/evidence/cleanup pass malicious, crashed, and faulted scenarios.
+- U4: Worker command state, exact source authorization, direct
+  Git/OCI/registered materialization, workspace-manifest validation and
+  provenance classification, authorization-scoped cache revocation,
+  same-filesystem atomic publication, acquisition and provider credential
+  separation, supervisor-owned runner cleanup, poisoned-exit/orphan recovery,
+  and dispatch/materialization/setup/action/check/quiescence/evidence/cleanup
+  pass malicious, crashed, and faulted scenarios.
 - U5: Codex direct-SDK streaming, schema/signal forwarding, validated output, result preservation, OS credential separation, native evidence, fresh threads, cancellation, and failure mapping pass adapter and applicable smoke verification.
 - U6: Pi strict RPC/framing, terminating result, exact policy tools, disabled repository extensions/built-ins, OS-isolated credential store/provider runtime, result preservation, settlement, stats, abort, and process cleanup pass verification.
-- U7: Closed registry, trusted transport/identity readiness, credential/supervisor capability gating, poisoned-worker recycling, metadata-only pre-export telemetry controls, Node-version separation, tracing, shutdown, containers, and release artifacts work from built outputs.
-- U8: Cross-backend E2E, standard A2A carriers, retained replay, selected source/setup transitions, independent race-trace constraints, telemetry canary/cross-owner probes, transport and credential abuse cases, command/quiescence races, examples, operator docs, changelog, and release evidence are complete.
+- U7: Closed backend and materializer registries, trusted
+  transport/identity/readiness, acquisition/provider credential and supervisor
+  capability gating, poisoned-worker recycling, metadata-only pre-export
+  telemetry controls, Node-version separation, tracing, shutdown, containers,
+  and release artifacts work from built outputs.
+- U8: Cross-backend E2E, all three workspace source modes, standard manifest
+  provenance, acquisition credential teardown, standard A2A carriers, retained
+  replay, selected materialization/setup transitions, independent race-trace
+  constraints, telemetry canary/cross-owner probes, transport and credential
+  abuse cases, command/quiescence races, examples, operator docs, changelog,
+  and release evidence are complete.

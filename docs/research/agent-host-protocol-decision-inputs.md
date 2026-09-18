@@ -11,9 +11,9 @@ AHP does not replace ADR 0002's Task identity, caller-scoped idempotency,
 authorization, immutable source handling, cleanup, terminal evidence, or
 bounded result retention.
 
-The initial backend set is Codex, OpenCode, and Pi. They are peer execution
-adapters behind one conformance contract; provider-specific process, session,
-permission, cancellation, and evidence behavior stays below that seam.
+The initial backend set is Codex and Pi; OpenCode is deferred. They are peer
+execution adapters behind one conformance contract; provider-specific process,
+session, permission, cancellation, and evidence behavior stays below that seam.
 
 This note records the AllAgents-specific consequences. The reusable research,
 source inspection, and full protocol comparison live in the AI Research Wiki:

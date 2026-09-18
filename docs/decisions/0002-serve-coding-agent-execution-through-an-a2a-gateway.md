@@ -149,23 +149,116 @@ separate from the agent runtime and never exposes that runner's control socket
 to setup or model tools. Phase isolation prevents later code from receiving the
 materializer's credentials or mounts, but it cannot make a malicious
 operator-registered image safe from credentials intentionally given to it.
-Operators must review and pin that image; deployments that do not trust it need
-a credential broker or stronger acquisition service that never reveals reusable
-credentials to the materializer.
+Operators must review and pin that image. A deployment that will not trust it
+with credentials needs a separately versioned broker or central snapshot
+protocol, which is deferred from the initial architecture.
 
 The canonical source request enters caller idempotency. The resolved
 materializer definition digest enters the effective-profile binding, and both
 the definition and output-manifest digests enter terminal provenance. New-claim
 source authorization always runs before cache lookup. Cache metadata and keys
 include the canonical source, materializer-definition digest, authorization
-scope digest and revocation epoch, and configured trust domain. Reuse requires
-manifest and content revalidation under the current authorization scope;
-revocation advances the epoch and makes the old namespace unusable.
+scope digest and revocation epoch, configured trust domain, and, for GitHub App
+sources, the current installation-entitlement generation. Authenticated App
+lifecycle webhooks and bounded control-plane reconciliation advance that
+generation on uninstall, suspension, or repository-selection change. Unknown
+or stale installation state fails cache authorization rather than reusing an
+entry. Reuse also requires manifest and content revalidation under the current
+authorization scope. Cache metadata preserves the original acquisition
+provider metadata; terminal provenance distinguishes `cache_hit`, that original
+provider, and the provider selected by current policy instead of claiming that
+the current provider performed acquisition. Secret resolution and token minting
+remain cache-miss-only.
 
 This keeps Harbor's useful separation between content-addressed task acquisition
 and environment execution without adopting task-owned opaque source. The
 comparison is recorded in
 [Harbor repository materialization lessons](../research/harbor-repository-materialization.md).
+
+### Resolve GitHub source credentials from trusted deployment policy
+
+The public source request remains credential-free and does not select a
+credential provider. The trusted acquisition boundary normalizes the repository
+host and resolves a provider from operator configuration. `github.com` selects
+the built-in GitHub source backend; GitHub Enterprise Server hosts require an
+explicit host and API mapping because a custom hostname does not identify its
+provider. The effective profile authorizes the canonical repository and provider
+entitlement before cache lookup.
+
+For GitHub repositories, an ordered policy may prefer a GitHub App and permit a
+local GitHub CLI fallback. The App provider is applicable only when trusted
+operator configuration maps the requested repository to an installation ID;
+`@octokit/auth-app` does not discover that mapping. It mints an installation
+token scoped only to that repository, read-only contents permission, and its
+GitHub expiry. A trusted-local CLI provider is pinned to one configured
+non-secret account, which participates in its entitlement and effective-profile
+digests. It may run only when no App installation mapping applies, as
+`gh auth token --hostname <host> --user <account>`, with `GH_TOKEN`,
+`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` removed
+from its environment. Failure to resolve the configured account fails that
+provider. This is eligibility fallback, not authentication retry: after an App
+provider is selected, configuration, authentication, minting, permission,
+repository, rate-limit, or service failure terminates acquisition and never
+falls through to the broader user identity.
+
+When AllAgents owns GitHub App token minting, a trusted control-plane
+credential-provider component uses the focused `@octokit/auth-app` package
+rather than implementing App JWT, clock-skew, expiry, and installation-token
+renewal itself. Every cache-miss acquisition requests a fresh installation token
+with auth-app cache bypass (`refresh: true`). Its remaining lifetime must be
+strictly greater than the acquisition deadline plus the configured clock-skew
+margin, and the delivery lease cannot outlive the token. Readiness rejects an
+acquisition-phase ceiling that can exceed a fresh token's safe lifetime. Git
+remains the repository transport; the full Octokit client is not required.
+
+The initial remote architecture is one central token-minter path. The
+gateway/control-plane credential-lease controller is authoritative: an
+authenticated worker requests credentials only for its active attempt and
+fence; the controller rechecks the current command revision, lease epoch,
+tombstone, and fence in durable dispatch state, then derives the
+effective-profile digest, selected provider, host/API-mapping digest,
+installation ID, canonical repository, operation, worker route and identity,
+and expiry from durable dispatch and policy state. It issues a single-use,
+non-durable grant/response and, when the minter is separate, requires its
+configuration digest to agree with those selected bindings. Replay, worker
+field substitution, stale command state, and configuration disagreement fail
+closed.
+
+The authenticated delivery lease and channel bind that derived state to the
+worker identity, attempt, lease epoch, command revision, fence, operation, and
+expiry. Those bindings do not alter the bearer token: after delivery, the token
+is enforceably scoped only by GitHub to the repository, read-only contents
+permission, and token expiry. The remote worker never receives the App private
+key, and only its one-shot acquisition child receives the token. A remote App
+profile fails readiness when the central minter, authoritative lease controller,
+fresh-token lifetime check, or authenticated non-durable delivery capability is
+absent. A versioned central snapshot-delivery protocol is deferred and is not
+an initial readiness alternative.
+
+The local GitHub CLI provider and remote lease path expose their resolved tokens
+only to the one-shot acquisition process. Neither exposes credentials to setup,
+the coding-agent runtime, model tools, repository configuration, process
+arguments, logs, evidence, or the published workspace. Public failures use only
+deterministic coarse source-auth code, safe reason, and retryability:
+`source_auth_unavailable/no_eligible_provider`,
+`source_auth_denied/installation_repository_denied`, and
+`source_auth_failed` with `app_configuration_invalid`,
+`app_authentication_failed`, `app_mint_failed`, or
+`trusted_local_cli_failed` are not retryable; `source_auth_failed` with
+`provider_rate_limited` or `provider_unavailable` is retryable. Provider,
+installation, and account identifiers are non-secret but operator-only
+provenance. Cache-hit provenance separately records `cache_hit`, the original
+acquisition provider, and current policy selection.
+
+A standalone network broker is not required for trusted local execution: the
+CLI provider may be a subprocess and a trusted co-located deployment may host
+the App minter and lease controller inside its control plane. Remote routes
+still use the same authenticated central-minter contract; the minter may be
+split into a standalone service when private-key isolation, independent audit,
+scaling, or blast-radius requirements demand it.
+
+The supporting precedents and trust-boundary analysis are recorded in
+[Source credential broker precedents](../research/source-credential-broker-precedents.md).
 
 ### Persist Task truth, not live provider execution
 
@@ -428,6 +521,10 @@ but their product and ownership model requires a separate decision.
   profiles decide which callers may select them.
 - Direct Git, OCI snapshots, and registered materializers converge on one
   validated workspace manifest and provenance contract.
+- GitHub source credentials are selected by trusted host/profile policy rather
+  than caller input. GitHub App is preferred when applicable; GitHub CLI is a
+  local-only eligibility fallback and never masks an App authentication or
+  authorization failure.
 - Deployments that enable external materializers must operate their image,
   schema, credential, network, resource, and cache policies as worker
   configuration.

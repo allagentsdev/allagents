@@ -19,10 +19,12 @@ provenance. Future clients may need the same execution boundary without
 Promptfoo or evaluation semantics.
 
 A coding-agent execution is more than a model request. It includes immutable
-source selection, repository acquisition, environment setup, credentials,
-permissions, agent invocation, cancellation, evidence capture, process
-termination, and cleanup. Those responsibilities need one public contract while
-allowing materially different execution backends.
+workspace selection, repository or snapshot acquisition, environment setup,
+credentials, permissions, agent invocation, cancellation, evidence capture,
+process termination, and cleanup. A workspace may contain multiple repositories
+or be produced from a digest-pinned snapshot or organization-specific source.
+Those responsibilities need one public contract while allowing materially
+different execution backends and acquisition mechanisms.
 
 The contract must not turn AllAgents into an evaluation harness. Dataset
 expansion, repetition, assertions, scoring, experiment scheduling, and durable
@@ -60,10 +62,10 @@ process, session, structured-output, cancellation, and evidence behavior
 remains behind its adapter. OpenCode and other coding agents remain possible
 follow-up adapters rather than part of the first delivery.
 
-Execution backends own repository materialization, environment setup, agent
+Execution workers own workspace materialization, environment setup, agent
 invocation, evidence collection, process termination, and cleanup. The gateway
-must not execute evaluated agents or mount their writable repositories in the
-gateway process.
+must not execute evaluated agents, run materializer images, or mount writable
+workspaces in the gateway process.
 
 When deployed on Kubernetes, the gateway runs as its own Deployment and
 ClusterIP Service, separate from consumers and execution workers. A backend
@@ -74,6 +76,96 @@ topology.
 A separate gateway Pod is a service and failure boundary, not per-invocation
 security isolation. Deployments requiring hostile-code or tenant isolation
 must create or select a stronger execution boundary behind the gateway.
+
+### Make workspace materialization explicit and operator-registered
+
+The public extension represents one workspace as a closed discriminated union.
+The allowed `kind` values and shapes are:
+
+1. `repositories`, with a bounded list of direct Git repositories, each with a
+   canonical credential-free HTTPS URL, full commit object ID, collision-free
+   relative destination, and optional repository-relative subdirectory;
+2. `workspaceSnapshot`, with an OCI workspace snapshot referenced by manifest
+   digest and accompanied by the versioned AllAgents workspace manifest; or
+3. `materializer`, with an operator-registered materializer ID, an expected
+   workspace-manifest digest, and bounded structured inputs.
+
+Fields from another union variant are invalid.
+
+The third mode supports organization-specific acquisition such as JFrog,
+generated sources, or custom monorepo assembly without accepting executable
+configuration from the caller. The request cannot supply a builder image,
+Dockerfile, Compose file, shell command, credential, mutable image tag, network
+policy, or output contract.
+
+Direct Git and OCI acquisition revalidate scheme, normalized host, resolved
+address, port, and redirect policy for every connection. OCI foreign or
+external layer URLs are rejected by default, and registry credentials are never
+forwarded across origins.
+
+Each materializer ID is defined in an operator-owned deployment registry. The
+gateway receives only its non-secret descriptor: ID, bounded input schema,
+expected definition digest, expected output-manifest version, and required
+worker capabilities. The worker receives the runtime definition, which
+additionally pins an OCI image by digest and fixes credential handle names or
+mount identities, allowed network destinations, resource and phase deadlines,
+cache policy, and the OCI runner or sandbox capability. Credential values are
+not part of either descriptor.
+
+The worker computes an algorithm-qualified definition digest over a versioned,
+domain-separated canonical serialization of every non-secret,
+behavior-affecting runtime field. The expected workspace-manifest digest
+likewise identifies the canonical bytes of one declared manifest version. An
+execution profile explicitly allows source modes and materializer IDs and
+authorizes canonical Git repositories or namespaces, OCI namespaces, and
+resource selectors inside structured materializer inputs. At readiness the
+gateway matches its expected descriptor digest and profile against the
+authenticated worker's computed digest and capabilities. At admission it
+validates the selected ID, expected output digest, structured inputs, and
+resource authorization; the worker resolves the same definition locally and
+rejects missing, changed, or unsupported definitions before acquisition.
+
+Every source mode produces the same versioned workspace manifest. The manifest
+separates worker-verified observations from materializer-attested claims and
+records the verification method for each identity. It includes requested and
+resolved commits or OCI digests, destinations, materializer identity and image
+digest when applicable, normalized input and output digests, resulting tree
+identities, and completeness. Materializer assertions are not described as
+independently verified unless the worker or a configured trusted acquisition
+service performs that verification.
+
+The worker materializes into a worker-owned staging directory under the same
+filesystem publication root as the final workspace; readiness rejects a
+cross-filesystem layout and publication never falls back to copy-then-delete.
+After validating paths, file types, limits, identities, and the manifest, the
+worker stops the materializer and removes its credential, process, mount, and
+runner boundary. The validated host-owned staging tree remains. The worker then
+atomically renames that tree into its final location before profile-owned setup
+or any coding agent starts.
+
+The registered image is part of the deployment's trusted computing base. The
+worker launches it through a configured OCI runner or sandbox in a boundary
+separate from the agent runtime and never exposes that runner's control socket
+to setup or model tools. Phase isolation prevents later code from receiving the
+materializer's credentials or mounts, but it cannot make a malicious
+operator-registered image safe from credentials intentionally given to it.
+Operators must review and pin that image; deployments that do not trust it need
+a credential broker or stronger acquisition service that never reveals reusable
+credentials to the materializer.
+
+The canonical source request enters caller idempotency. The resolved
+materializer definition digest enters the effective-profile binding, and both
+the definition and output-manifest digests enter terminal provenance. New-claim
+source authorization always runs before cache lookup. Cache metadata and keys
+include the canonical source, materializer-definition digest, authorization
+scope digest and revocation epoch, and configured trust domain. Reuse requires
+manifest and content revalidation under the current authorization scope;
+revocation advances the epoch and makes the old namespace unusable.
+
+This keeps Harbor's useful separation between content-addressed task acquisition
+and environment execution without adopting task-owned opaque source. The
+comparison is recorded in
+[Harbor repository materialization lessons](../research/harbor-repository-materialization.md).
 
 ### Persist Task truth, not live provider execution
 
@@ -265,30 +357,39 @@ adopted by this decision.
 
 ### Make execution provenance and cleanup explicit
 
-The gateway and selected backend are collectively responsible for:
+The gateway and selected worker are collectively responsible for:
 
-1. resolving and verifying immutable source identity;
-2. acquiring or restoring source through the selected transport;
-3. creating a fresh working location for one execution attempt;
-4. running setup before the evaluated agent action;
-5. applying permissions and execution isolation;
-6. invoking the agent and propagating cancellation and deadlines;
-7. capturing bounded output, usage, cost, file changes, checks, and artifact
-   references;
-8. returning terminal status, evidence completeness, and provenance; and
-9. terminating processes and releasing or retaining resources according to the
-   documented lifecycle.
+1. validating one canonical immutable workspace request and the selected
+   profile's exact source-resource or materializer authorization;
+2. acquiring direct repositories, restoring a digest-pinned OCI snapshot, or
+   running the registered materializer in a phase-scoped boundary;
+3. producing and validating the standard workspace manifest;
+4. transferring the validated staging tree to worker ownership, destroying the
+   acquisition process/mount/credential boundary, and proving it gone;
+5. atomically publishing the host-owned tree on the same filesystem;
+6. running profile-owned setup before the evaluated agent action;
+7. applying permissions and execution isolation;
+8. invoking the agent and propagating cancellation and deadlines;
+9. capturing bounded output, usage, cost, file changes, checks, artifact
+   references, workspace identity, and materializer provenance;
+10. returning terminal status, evidence completeness, and provenance; and
+11. terminating processes and releasing or retaining resources according to
+    the documented lifecycle.
 
-Source transport and runtime transport are independent. A backend may use one
-immutable runtime image plus a separately digest-addressed source artifact; the
-contract does not require source code to be baked into the runtime image.
+Source transport, materializer image, workspace snapshot, and harness runtime
+are independent identities. A backend may use one immutable runtime image plus
+a separately digest-addressed workspace artifact; the contract does not require
+source code to be baked into the runtime image.
 
 Credentials remain deployment policy. Requests must not embed deployment
-credentials. The gateway authenticates callers, and the selected backend scopes
-source and model credentials to the execution boundary without returning
-secret-bearing paths or values. Provider and worker-control credentials must
-also be absent from model-initiated command environments, tool output, retained
-evidence, and repository-visible configuration.
+credentials. The gateway authenticates callers, and the selected worker scopes
+source credentials to materialization and model credentials to provider
+execution without returning secret-bearing paths or values. Materialization
+credentials are absent from profile setup, the harness, model-initiated command
+environments, tool output, retained evidence, and the published workspace.
+Provider and worker-control credentials must likewise be absent from
+model-initiated command environments, tool output, retained evidence, and
+repository-visible configuration.
 
 Retries must not multiply non-idempotent agent execution. Every request carries
 a caller-scoped stable invocation key through the AllAgents extension. The
@@ -322,6 +423,14 @@ but their product and ownership model requires a separate decision.
 - Gateway and execution workers scale and fail independently.
 - The gateway can remain lightweight; physical isolation and resource policy
   belong to the selected execution backend.
+- Custom acquisition remains available without making caller-supplied code part
+  of the trust boundary: operators register digest-pinned materializers and
+  profiles decide which callers may select them.
+- Direct Git, OCI snapshots, and registered materializers converge on one
+  validated workspace manifest and provenance contract.
+- Deployments that enable external materializers must operate their image,
+  schema, credential, network, resource, and cache policies as worker
+  configuration.
 - A2A supplies discovery and lifecycle semantics. AllAgents supplies the
   coding-specific evidence contract.
 - W3C Trace Context, OpenTelemetry/OTLP, OpenInference, optional ATIF, and the
@@ -361,6 +470,14 @@ cleanup, authorization, or evidence completeness.
 Rejected because Harbor's formats own benchmark orchestration, verification,
 and persisted runner state. The AllAgents gateway executes one coding-agent
 request and does not become an evaluation harness.
+
+### Let callers provide repository-acquisition code
+
+Rejected because a caller-selected image, Dockerfile, Compose file, or shell
+script would turn request parsing into privileged code execution and would make
+credential, network, provenance, and cache policy unreviewable. Callers may
+select only source modes and materializer IDs explicitly registered and allowed
+by the effective execution profile.
 
 ### Replace A2A with the Agent Host Protocol
 

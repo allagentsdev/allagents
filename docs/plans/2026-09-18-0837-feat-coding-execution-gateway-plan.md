@@ -66,6 +66,13 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   versioned workspace source mode; custom acquisition uses only
   operator-registered, digest-pinned materializers allowed by the profile.
   Governs R6, R11-R13, R16-R18, R21-R22.
+- **Resolve source credentials from trusted host and profile policy.** Callers
+  never select a credential provider. For GitHub, prefer an applicable GitHub
+  App installation and permit GitHub CLI only as an explicit trusted-local
+  fallback when no installation applies; never fall back after a selected App
+  provider fails. When AllAgents owns App token minting, use
+  `@octokit/auth-app` rather than a custom minter. (session-settled:
+  user-directed.) Governs R6, R12-R13, R16, R21-R22.
 
 ### Requirements
 
@@ -114,6 +121,60 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   materializer output must match the request's expected workspace-manifest
   digest before publication.
 - R13. Requests never contain deployment credentials or arbitrary secret values. Profiles name environment variables whose values are scoped to the required worker phase and excluded from repository configuration, process arguments, logs, errors, evidence, retained workspaces, structured logs/spans before processing or export, and every model-initiated command or tool environment. Credentialed profiles additionally require an OS-enforced provider/tool credential boundary: the credential-bearing provider runtime and model-invoked tools use distinct UID/process/mount policy that prevents tool access to provider processes, procfs entries, and backend config/data roots, or an equivalent credential broker keeps reusable credentials out of the agent runtime. Worker readiness fails when the declared boundary cannot be proved; environment filtering alone is not credential isolation.
+  Source credential selection is server-side deployment policy, not caller
+  input. The acquisition boundary maps normalized repository hosts to source
+  backends; `github.com` selects the built-in GitHub backend, while GitHub
+  Enterprise Server hosts require explicit operator host/API mappings. Profiles
+  name an ordered provider policy and authorize its non-secret entitlement
+  before cache lookup. An App provider is applicable only when trusted operator
+  configuration maps the repository to an installation ID; auth-app does not
+  discover installations. Authenticated lifecycle webhooks plus bounded
+  reconciliation advance an installation-entitlement generation on uninstall,
+  suspension, or repository-selection change. Unknown or stale installation
+  state fails cache authorization. Cache metadata preserves the original
+  acquisition-provider metadata, while hit provenance separately records
+  `cache_hit`, that original provider, and current policy selection/entitlement.
+  Secret lookup and token minting remain cache-miss-only.
+  For a cache-miss GitHub acquisition, an applicable configured App installation
+  is preferred. Focused `@octokit/auth-app` minting uses `refresh: true` to
+  produce a fresh token scoped only to the authorized repository, read-only
+  contents permission, and GitHub expiry. Remaining lifetime must be strictly
+  greater than the acquisition deadline plus clock-skew margin, and the
+  credential lease cannot outlive the token. Readiness rejects an acquisition
+  ceiling that can exceed a fresh token's safe lifetime. A trusted-local
+  `github-cli` provider may run only when no App installation mapping applies;
+  it is pinned to a configured non-secret account included in entitlement and
+  effective-profile digests, invokes
+  `gh auth token --hostname <host> --user <account>` without `GH_TOKEN`,
+  `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, or `GITHUB_ENTERPRISE_TOKEN`, and
+  fails if that account cannot be resolved. After App selection, no failure
+  falls through to `gh`.
+  The initial remote path requires a trusted central token minter and
+  authoritative gateway/control-plane credential-lease controller. The
+  authenticated worker requests only by active attempt and fence. From durable
+  dispatch and policy state, the controller rechecks active command revision,
+  lease epoch, tombstone, and fence, then derives the effective-profile digest,
+  selected provider, host/API-mapping digest, installation ID, canonical
+  repository, operation, worker route and identity, and expiry. It issues and
+  atomically consumes a single-use non-durable grant/response; a separately
+  deployed minter must agree with the selected configuration digest. Replay,
+  substitution, stale state, and controller/minter digest disagreement fail
+  closed. The authenticated lease/channel binds the derived repository and
+  provider state to worker identity, attempt, lease epoch, command revision,
+  fence, operation, and expiry; those are not token claims. The remote worker
+  never receives the App private key. Readiness fails without this complete
+  path. Versioned central snapshot delivery is deferred and is not an initial
+  readiness alternative.
+  Public failures expose only deterministic coarse code, safe reason, and
+  retryability; provider, installation, and account identifiers remain
+  operator-only. `source_auth_unavailable/no_eligible_provider`,
+  `source_auth_denied/installation_repository_denied`,
+  `source_auth_failed/app_configuration_invalid`,
+  `source_auth_failed/app_authentication_failed`,
+  `source_auth_failed/app_mint_failed`, and
+  `source_auth_failed/trusted_local_cli_failed` are not retryable.
+  `source_auth_failed/provider_rate_limited` and
+  `source_auth_failed/provider_unavailable` are retryable.
   Materializer IDs are defined in an operator-owned deployment registry. The
   gateway holds only the non-secret ID, bounded input schema, expected
   definition digest, expected output-manifest version, and required worker
@@ -133,8 +194,8 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   provider execution, or model tools. The registered image is operator-trusted
   deployment code: phase isolation protects later phases but cannot make a
   malicious registered image safe from credentials deliberately given to it.
-  Deployments requiring that stronger claim use a credential broker or
-  acquisition service that withholds reusable credentials.
+  Deployments requiring that stronger claim are deferred pending a separately
+  versioned broker or central snapshot-delivery protocol.
 - R14. The effective deadline is the earlier of the caller deadline and profile ceiling and is persisted before dispatch. The first durable terminal-or-cancel-intent write wins; cancellation is idempotent, reaches the worker and provider once, suppresses late success, and records termination and cleanup before publishing canceled. Stream or HTTP disconnect alone does not cancel a Task.
 - R15. Initial profiles are unattended. Known provider permission requests are deterministically approved or denied by profile policy for one invocation; unknown permission types fail as adapter incompatibility. The gateway never emits `INPUT_REQUIRED` or `AUTH_REQUIRED` for these profiles and never depends on a live client.
 - R16. A worker creates a fresh invocation directory, fresh provider session, and isolated backend configuration/data roots, runs setup, captures a post-setup baseline, invokes the provider, validates any requested structured result, and runs configured checks. It then proves the complete invocation process set quiescent before final evidence/artifact capture and cleanup or explicit retention. No workspace or provider session is reused after interruption. If bounded termination escalation cannot prove quiescence, the worker persists termination as unknown/failed, poisons admission, and exits so the external supervisor destroys the complete process boundary; replacement readiness performs orphan recovery before accepting work. The same supervisor boundary handles a worker crash.
@@ -247,10 +308,30 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   peer identity, readiness fails; a same-host Unix worker socket is accepted.
   Given a credentialed reviewed-domain profile, model tools cannot inspect
   provider process environments, process listings, backend config/data roots,
-  or exfiltrate provider/control credentials across the configured OS
-  boundary. Given a registered materializer with source credentials, setup,
-  provider processes, and model tools have no access to its process, runner
-  control socket, credential environment/mounts, or staging root after
+  or exfiltrate provider/control credentials across the configured OS boundary.
+  Given a GitHub repository, a trusted operator repository-to-installation
+  mapping wins over GitHub CLI; auth-app never discovers the installation.
+  Without a mapping, only an explicitly enabled trusted-local provider may
+  invoke the configured account through
+  `gh auth token --hostname <host> --user <account>` with all four ambient
+  GitHub token variables absent. Any selected-App failure never invokes `gh`.
+  A remote worker requests a credential only by its active attempt/fence; the
+  controller derives all provider/repository/route bindings, rechecks current
+  command state, consumes one single-use grant, and rejects replay,
+  substitution, stale state, or minter configuration-digest disagreement.
+  The fresh token has repository/read-only/expiry scope only; the authenticated
+  lease carries worker, attempt, lease epoch, command revision, fence,
+  operation, and expiry bindings. Near-expiry cached auth-app output is bypassed
+  with `refresh: true`, lease expiry never exceeds token expiry, and an unsafe
+  acquisition ceiling fails readiness without CLI fallback. Authenticated App
+  lifecycle webhooks and bounded reconciliation invalidate old entitlement
+  generations; unknown or stale state cannot authorize a cache hit. Cache-hit
+  provenance distinguishes the original acquisition provider from current
+  policy selection. Every source-auth failure maps to the specified safe
+  code/reason/retryability, while provider, installation, and account identities
+  remain operator-only. Given a registered materializer with source credentials,
+  setup, provider processes, and model tools have no access to its process,
+  runner control socket, credential environment/mounts, or staging root after
   materialization, and direct known-secret canaries are absent from retained
   logs, evidence, and published workspace files. The registered materializer
   remains operator-trusted code; hostile-materializer, hostile-source, and
@@ -291,6 +372,9 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - Push-notification configuration, gRPC, JSON-RPC transport, and A2A extended Agent Cards.
 - AHP server/client surfaces, long-lived interactive sessions, and client-contributed tools.
 - Optional ATIF conversion after the format and tooling mature.
+- Versioned central source-snapshot acquisition and delivery; the initial
+  remote GitHub path is central token minting plus an authenticated non-durable
+  delivery lease.
 
 **Outside this product's identity**
 
@@ -302,6 +386,9 @@ The two initial runtimes expose different programmatic contracts. Codex provides
 - [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md)
 - [AHP decision inputs](../research/agent-host-protocol-decision-inputs.md)
 - [Harbor repository materialization lessons](../research/harbor-repository-materialization.md)
+- [GitHub source credential broker precedents](../research/source-credential-broker-precedents.md)
+- [GitHub App installation access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+- [`@octokit/auth-app`](https://github.com/octokit/auth-app.js)
 - [AI Evals ADR 0036](https://github.com/WiseTechGlobal/ai-evals/blob/main/docs/adr/0036-remove-the-ai-evals-workspace-runtime.md)
 - [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/)
 - [Official A2A JavaScript SDK](https://github.com/a2aproject/a2a-js)
@@ -344,12 +431,16 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   selectors for structured materializer inputs. New admission authorizes the
   fully canonicalized resource and credential entitlement before cache lookup.
   Resolve a versioned canonical `EffectiveProfileIntent` containing the
-  selected materializer definition digest, authorization-scope digest, and
-  source-authorization revocation epoch when applicable; compute its digest
-  without resolved secrets or per-attempt state and persist it with the
-  canonical caller request and result-schema digest. Retained replay compares
-  those stored original bindings and never substitutes or re-resolves current
-  policy. Governs R6, R11-R16, R21-R22.
+  selected materializer definition digest, authorization-scope digest,
+  source-authorization revocation epoch, provider policy and pinned CLI account,
+  and current GitHub App entitlement generation when applicable; compute its
+  digest without resolved secrets or per-attempt state and persist it with the
+  canonical caller request and result-schema digest. Unknown or stale App
+  entitlement state fails cache authorization. Cache metadata retains original
+  acquisition-provider metadata, while cache-hit provenance records `cache_hit`
+  plus current policy selection separately. Retained replay compares stored
+  original bindings and never substitutes or re-resolves current policy.
+  Governs R6, R11-R16, R21-R22.
 - KTD10. **Keep durable evidence and operational telemetry as separate bounded layers.** The worker verifies source, runs setup, records a post-setup Git tree, invokes the adapter, runs checks, and stops every invocation process before final Git/artifact capture. Provider-native events remain a distinct bounded evidence layer; neither Git nor provider evidence is promoted as exact causality when incomplete. Telemetry is a third, non-durable metadata-only channel: one small shared pre-export sanitizer applies an explicit operational-metadata allowlist plus bounded filtering/redaction before every structured log or span processor, and only opaque owner correlation may cross the separately governed operator boundary. OpenInference and backend-native attributes receive no bypass. This is an export guard, not a telemetry framework or alternate evidence store. Governs R13, R16-R19.
 - KTD11. **Treat Codex and Pi as the complete initial backend set.** Codex lands first; Pi lands second against the established contract; OpenCode is deferred. (session-settled: user-directed.) Governs R10.
 - KTD12. **Separate terminal integrity from optional evidence bodies.** The fixed `allagents.execution-integrity` Artifact validates identity, action outcome, the four-state structured-result record, failure/cancellation, separate termination and filesystem cleanup, Artifact index, completeness, and provenance before terminal publication. `not_produced` applies only before result-candidate production. Once validation selects `valid` or `invalid`, a later check, evidence, cleanup, infrastructure, or crash failure preserves that state and, for `valid`, the separate fixed structured-result Artifact while retaining the later phase as the primary Task failure. Predictable optional-body truncation/redaction may preserve completion; failure that breaks the integrity kernel fails in the evidence phase. Governs R3-R4, R17-R18.
@@ -357,11 +448,13 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   closed `kind`-discriminated workspace-source union and one output manifest;
   reject unknown kinds and cross-variant fields. The built-in Git path accepts
   canonical HTTPS repository identities and full commit IDs only, uses
-  hermetic Git configuration, disables redirects, proxies, helpers, hooks,
-  filters, LFS smudge, submodule recursion, alternates, and non-HTTPS
-  protocols, revalidates normalized host/address policy for every connection,
-  fetches into an isolated object database from the authorized remote, and
-  verifies the checked-out commit and resulting tree. The OCI path accepts
+  hermetic Git configuration; disables inherited redirects, proxies,
+  credential helpers, hooks, filters, LFS smudge, submodule recursion,
+  alternates, and non-HTTPS protocols; injects only the KTD16-selected
+  one-shot credential channel; revalidates normalized host/address policy for
+  every connection; fetches into an isolated object database from the
+  authorized remote; and verifies the checked-out commit and resulting tree.
+  The OCI path accepts
   manifest digests, not tags; rejects foreign/external URLs by default;
   revalidates scheme, host, resolved address, port, redirect, and credential
   origin for every registry/auth/manifest/blob request; and verifies every
@@ -391,9 +484,61 @@ The two initial runtimes expose different programmatic contracts. Codex provides
   trusted computing base, not hostile caller code. Its runner or sandbox
   control plane is never mounted into the workspace or exposed to setup,
   providers, or model tools. A deployment that does not trust the registered
-  image with source credentials must use a broker or stronger acquisition
-  service and advertise that capability explicitly.
+  image with source credentials is outside the initial trust model and must not
+  enable that registered materializer. Support requires the separately
+  versioned broker or central snapshot-delivery protocol deferred by R13.
 - KTD15. **Keep service dependencies out of the Node 18 CLI package.** Add a private `packages/execution-service` workspace requiring Node 22.19+ for the A2A SDK, Codex SDK, current Pi, gateway, and worker. The published root `allagents` CLI keeps its Node 18 engine and does not import service-only dependencies. Governs R1, R10, R16.
+- KTD16. **Resolve GitHub credentials through an authoritative ordered provider
+  registry and lease controller.** The caller supplies only a canonical
+  credential-free repository URL. The acquisition boundary maps `github.com`
+  to the built-in GitHub backend and requires explicit host/API mappings for
+  GitHub Enterprise Server. The profile supplies provider eligibility and
+  order, not secrets. A configured App provider is applicable only when trusted
+  operator configuration maps the authorized repository to an installation ID;
+  auth-app does not discover installations. A `github-cli` provider may follow
+  only in a trusted-local profile, only when no App mapping applies, and only
+  for its configured non-secret account. That account participates in
+  entitlement and effective-profile digests. Invoke
+  `gh auth token --hostname <host> --user <account>` with `GH_TOKEN`,
+  `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` removed,
+  and fail when the configured account cannot be resolved. Selection is sticky:
+  App configuration, authentication, minting, authorization, rate-limit, or
+  service failure never falls through to the broader user identity.
+
+  When AllAgents owns minting, its trusted central minter depends on focused
+  `@octokit/auth-app` rather than implementing App JWT, clock-skew, expiry, and
+  renewal; Git remains the transport and the full Octokit client is not added.
+  Every cache-miss acquisition uses `refresh: true` and accepts only a fresh
+  token whose remaining lifetime is strictly greater than the acquisition
+  deadline plus clock-skew margin. The token is scoped only to the repository,
+  read-only contents permission, and GitHub expiry. Lease expiry cannot exceed
+  token expiry, and readiness rejects an acquisition ceiling that can exceed a
+  fresh token's safe lifetime.
+
+  The gateway/control-plane credential-lease controller, not the worker, is
+  authoritative. An authenticated worker request supplies only active attempt
+  and fence. The controller rechecks durable command revision, lease epoch,
+  tombstone, and fence and derives effective-profile digest, selected provider,
+  host/API-mapping digest, installation ID, canonical repository, operation,
+  worker route/identity, and expiry from durable dispatch and policy state. It
+  issues a single-use non-durable grant/response; a separate minter atomically
+  consumes the grant and must agree with the selected configuration digest.
+  Replay, substitution, stale command state, and digest disagreement fail
+  closed. The authenticated lease/channel binds the derived state to worker
+  identity, attempt, lease epoch, command revision, fence, operation, and
+  expiry. A remote worker never receives the App private key. Remote App
+  profiles fail readiness without that complete central path. A trusted
+  co-located deployment may keep the controller and minter in its control
+  plane. Versioned central snapshot delivery is deferred.
+
+  Authenticated App lifecycle webhooks and bounded reconciliation advance an
+  installation-entitlement generation on uninstall, suspension, or
+  repository-selection change; unknown or stale state fails cache
+  authorization. Minting remains miss-only. Provenance distinguishes
+  `cache_hit`, original acquisition-provider metadata, and current policy
+  selection/entitlement. Public source-auth details contain only the specified
+  safe code, reason, and retryability; provider, installation, and account
+  identifiers are operator-only. Governs R6, R12-R13, R16, R21-R22.
 
 ### High-Level Technical Design
 
@@ -405,8 +550,13 @@ flowchart TB
   Gateway --> Auth[Auth, retained replay, new admission]
   Gateway --> Store[Generation-based Task and Artifact store]
   Gateway -->|mTLS/authenticated overlay or same-host Unix socket| Worker[Single-execution worker]
+  Gateway --> LeaseController[Authoritative credential lease controller]
+  LeaseController --> AppMinter[Trusted GitHub App token minter]
   Worker --> Materialization[Workspace materializer registry]
   Materialization --> Git[Hardened multi-repository Git]
+  Git --> SourceCredentials[Source credential client]
+  SourceCredentials -->|Active attempt and fence| LeaseController
+  SourceCredentials --> GitHubCLI[Account-pinned trusted-local gh helper]
   Materialization --> OCI[Digest-pinned OCI snapshot]
   Materialization --> Custom[Registered materializer image]
   Worker --> Registry[Closed backend registry]
@@ -427,6 +577,8 @@ sequenceDiagram
   participant S as Durable aggregate store
   participant W as Worker
   participant B as Backend adapter
+  participant L as Credential lease controller
+  participant M as App token minter
 
   C->>G: SendMessage + header/Message extension + metadata[uri]
   G->>G: Authenticate, check extension, canonicalize within bounds
@@ -443,6 +595,14 @@ sequenceDiagram
     G->>W: Dispatch(attempt, fence, command revision)
     W->>W: Verify command record before workspace creation
     W-->>G: Accepted(attempt, fence)
+    opt private GitHub cache miss
+      W->>L: Request(active attempt, fence)
+      L->>S: Recheck command revision, lease epoch, tombstone, fence
+      L->>L: Derive profile/provider/mapping/install/repository/operation/route
+      L->>M: Single-use non-durable grant + configuration digest
+      M-->>L: Fresh repository/read-only token + GitHub expiry
+      L-->>W: Authenticated lease response bound to current command
+    end
     W->>W: Materialize into staging and validate workspace manifest
     W->>W: Destroy acquisition boundary, publish atomically, setup, baseline
     W->>B: Invoke with isolated roots and credential boundary
@@ -520,6 +680,13 @@ packages/execution-service/
       errors.ts
       profiles.ts
       telemetry.ts
+    source-credentials/
+      contract.ts
+      registry.ts
+      github.ts
+      github-app-minter.ts
+      github-app-client.ts
+      github-cli.ts
     gateway/
       index.ts
       config.ts
@@ -559,6 +726,7 @@ packages/execution-service/
     unit/execution/
     unit/gateway/
     unit/worker/
+    unit/source-credentials/
     e2e/execution-gateway.test.ts
 containers/
   gateway.Dockerfile
@@ -587,12 +755,39 @@ docs/src/content/docs/
 - Each profile defines backend, worker route, allowed workspace source modes,
   allowed materializer IDs, exact Git repository or namespace rules, allowed
   Git origins/addresses, OCI namespace/registry/signature policy, structured
-  materializer-input resource selectors, authorization-scope derivation and
-  source-authorization revocation epoch, provider/model settings,
-  phase-specific environment allowlists, deterministic permissions,
-  setup/check commands, artifact globs, effective deadline ceiling, trust
-  class, resource limits, cleanup policy, evidence budgets, and required
-  acquisition/provider/tool isolation capabilities.
+  materializer-input resource selectors, authorization-scope derivation,
+  source-authorization revocation epoch, and applicable GitHub App
+  entitlement-generation authority, provider/model settings, phase-specific
+  environment allowlists, deterministic permissions, setup/check commands,
+  artifact globs, acquisition and effective deadline ceilings, clock-skew
+  margin, trust class, resource limits, cleanup policy, evidence budgets, and
+  required acquisition/provider/tool isolation capabilities.
+- Source-credential configuration defines normalized-host backend mappings and
+  ordered provider entries. `github.com` has a built-in GitHub mapping; every
+  GitHub Enterprise Server hostname and API base URL is explicit. A
+  control-plane `github-app` entry references an App ID, private-key secret
+  handle, installation ID or deterministic repository-to-installation mapping,
+  requested read-only contents permission, entitlement-generation store,
+  authenticated lifecycle-webhook configuration, bounded reconciliation
+  interval and stale-state limit, fresh-token lifetime policy, and a
+  versioned non-secret provider/host/API-mapping configuration digest. The
+  worker receives no App private-key handle. A worker-local `github-cli` entry
+  contains no token, names one non-secret account/login included in entitlement
+  and effective-profile digests, and is valid only for an explicitly
+  trusted-local profile. It invokes the configured `gh` binary with
+  `auth token --hostname <host> --user <account>` after removing `GH_TOKEN`,
+  `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN`.
+- Every remote route using a GitHub App declares the authenticated central
+  token minter, authoritative credential-lease controller, and single-use
+  non-durable grant/response protocol. Startup rejects remote App profiles
+  without that complete path, `github-cli` on remote or multi-tenant routes,
+  missing central App secret handles, unsupported hosts, ambiguous
+  equal-priority providers, policies that allow runtime failure to trigger
+  identity fallback, or acquisition ceilings that can exceed a fresh token's
+  safe lifetime. Configuration and effective-profile digests include provider
+  IDs, order, host/API mappings, route capability, pinned CLI account,
+  non-secret entitlement policy, and mapping/configuration digest, but exclude
+  private keys, resolved tokens, lease payloads, and per-attempt state.
 - Worker configuration fixes a private listener, worker identity,
   one-execution concurrency, one same-filesystem publication root containing
   private staging and final workspace directories, a closed materializer
@@ -618,6 +813,19 @@ docs/src/content/docs/
   credential mounts, staging mounts, and roots before readiness. The supported
   worker baseline is a dedicated process namespace under a minimal init/reaper;
   bare-host deployment requires an equivalent systemd/cgroup mechanism.
+- Remote App readiness additionally proves that the configured central minter
+  and gateway/control-plane lease controller authenticate the selected worker
+  route, agree on the selected provider/host/API-mapping configuration digest,
+  and support fresh `refresh: true` minting plus a single-use non-durable
+  grant/response. The controller must derive profile/provider/mapping/
+  installation/repository/operation/route/identity/expiry from durable state,
+  recheck current command revision, lease epoch, tombstone, and fence, reject
+  replay or substitution, and bind delivery to worker identity, attempt, lease
+  epoch, command revision, fence, operation, and expiry. Readiness also proves
+  the acquisition ceiling plus clock-skew margin fits within a fresh token's
+  safe lifetime, lease expiry cannot exceed token expiry, token payloads never
+  persist in Task or command records, and delivery reaches only the acquisition
+  phase. The worker image and configuration contain no App private-key handle.
 - Telemetry configuration defines the OTLP destination, filtering/redaction bounds, opaque owner-correlation derivation, and telemetry-specific operator access and retention. The service version fixes the metadata allowlist; configuration cannot extend it to prompt/output/tool/source/file-body attributes, secret-bearing fields, raw caller identity, or unfiltered backend-native/OpenInference attribute passthrough.
 - Configuration contains environment-variable names but never secret values. Startup resolves the complete graph and becomes ready only when trusted ingress, worker transports/identities, store, runtimes, quotas, free-space reserves, supervisor/orphan recovery, and declared profile capabilities pass. Any unprotected remote endpoint or unproved credential/supervisor boundary fails readiness.
 
@@ -632,6 +840,14 @@ docs/src/content/docs/
 | Lost acknowledgement or ambiguous dispatch | `TASK_STATE_FAILED` | `dispatch/dispatch_unknown`; old fence invalidated and cleanup unknown until proven |
 | Known profile permission denial after acceptance | `TASK_STATE_REJECTED` | Policy decision plus provider stop and cleanup outcomes |
 | Unknown permission or provider protocol shape | `TASK_STATE_FAILED` | Adapter incompatibility, never mislabeled as policy |
+| No eligible GitHub provider after acceptance | `TASK_STATE_FAILED` | `materialization/source_auth_unavailable`; safe reason `no_eligible_provider`; `retriable: false`; no provider identity in public detail |
+| Selected installation does not cover the repository | `TASK_STATE_FAILED` | `materialization/source_auth_denied`; safe reason `installation_repository_denied`; `retriable: false`; installation identity is operator-only; no `gh` fallback |
+| Selected App configuration is invalid | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `app_configuration_invalid`; `retriable: false`; operator-only provider detail; no `gh` fallback |
+| Selected App authentication fails | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `app_authentication_failed`; `retriable: false`; operator-only provider detail; no `gh` fallback |
+| Selected App token mint or fresh-lifetime validation fails | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `app_mint_failed`; `retriable: false`; operator-only provider detail; no `gh` fallback |
+| Selected App provider is rate limited | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `provider_rate_limited`; `retriable: true`; no provider identity in public detail; no `gh` fallback |
+| Selected App provider service is unavailable | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `provider_unavailable`; `retriable: true`; no provider identity in public detail; no `gh` fallback |
+| Eligible trusted-local GitHub CLI provider fails | `TASK_STATE_FAILED` | `materialization/source_auth_failed`; safe reason `trusted_local_cli_failed`; `retriable: false`; configured account identity is operator-only |
 | Failure before result-candidate production | `TASK_STATE_FAILED` | Typed primary dispatch/materialization/setup/provider/crash/infrastructure phase, including manifest or materializer failure; safe message, retriable fact, requested structured result `not_produced`, separate termination/cleanup/completeness, and bounded workspace provenance |
 | Check, mandatory-evidence, cleanup, crash, or infrastructure failure after result validation | `TASK_STATE_FAILED` | Preserve selected `valid` or `invalid`; preserve exactly one fixed structured-result Artifact for `valid`; later phase remains primary failure |
 | Requested structured result is missing or invalid after an otherwise successful action | `TASK_STATE_FAILED` | Typed `structured_result/missing` with `not_produced`, or `structured_result/invalid` with `invalid`; no structured-result Artifact |
@@ -649,8 +865,9 @@ docs/src/content/docs/
 3. Build the supervised single-execution worker lifecycle, monotonic command
    record, failed-quiescence boundary recycling, pre-readiness orphan reaper,
    OS credential boundaries, the direct Git/OCI/registered-materializer
-   registry, and hardened workspace/evidence handling against fake
-   materializers and a fake backend.
+   registry, the central GitHub App minter/client and trusted-local GitHub CLI
+   source-credential registry using `@octokit/auth-app`, and hardened
+   workspace/evidence handling against fake materializers and a fake backend.
 4. Add the direct Codex SDK adapter and prove structured output, cancellation, OS-enforced provider/tool credential separation, and native evidence.
 5. Add the Pi RPC adapter against the same contract, with repository extensions and built-in tools disabled and one worker-owned policy extension providing OS-confined tools plus the terminating result tool.
 6. Package the services and run cross-backend, transport, security, process, and A2A conformance before enabling a consumer.
@@ -658,6 +875,10 @@ docs/src/content/docs/
 ### System-Wide Impact
 
 - **Package surface:** A private Node 22 execution-service workspace and two container entrypoints are added. The published root `allagents` CLI package, Node 18 engine, command surface, and imports remain unchanged.
+- **Dependency surface:** `@octokit/auth-app` is private to the Node 22
+  execution-service package and used only by the trusted control-plane GitHub
+  App minter. The root Node 18 CLI, remote worker, and acquisition subprocess
+  do not import the full Octokit client or hold App private-key material.
 - **Runtime support:** Gateway and worker require Node 22.19+; startup checks SDK/CLI versions. The Linux worker is one execution per instance and scales by adding instances, not concurrent work inside one trust domain.
 - **Filesystem:** The gateway owns a generation-based private Task/Artifact store. Workers own isolated invocation and backend roots. Existing workspace/profile paths are never execution workspaces.
 - **Security:** New review-critical surfaces are trusted public/private
@@ -691,6 +912,20 @@ docs/src/content/docs/
   enforce the R13 OS provider/tool boundary or broker; environment filtering
   remains defense in depth. Pi repository extensions and unrestricted built-in
   tools never load.
+- **Credential fallback, stale entitlement, or issuer-key escalation:** Treat
+  provider order as eligibility, not retry. Prefer only the operator-mapped
+  GitHub App installation, permit an account-pinned GitHub CLI provider only in
+  trusted-local profiles when no mapping applies, and fail closed after every
+  selected-App failure. Keep App private keys in the central minter. Make the
+  lease controller derive provider/repository/route state from the current
+  durable command, use one single-use grant, and reject replay, substitution,
+  stale fences, or controller/minter configuration-digest disagreement. Use a
+  fresh `refresh: true` token per cache-miss acquisition, bound its lifetime to
+  the acquisition deadline plus skew, and reject unsafe ceilings at readiness.
+  Authenticated lifecycle webhooks plus reconciliation advance entitlement
+  generations so stale/unknown App state cannot authorize cache reuse. Keep
+  tokens out of arguments, Git configuration, durable records, logs, evidence,
+  and later phases; public failures remain coarse and identities operator-only.
 - **Telemetry disclosure:** Apply KTD10's pre-export guard before every structured log/span processor and reject content or secret-bearing attributes rather than relying on exporter policy. Canary-secret and cross-owner-fragment tests cover agent, model, tool, stale-event, and error paths; telemetry operators receive only bounded metadata and opaque owner correlation under separate access and retention.
 - **Resource exhaustion:** Reserve per-owner/global gateway quota only for new claims, enforce store watermarks and stream limits, and require one-execution deployment CPU/memory/PID/network/filesystem controls before accepting a profile.
 - **Artifact race or disclosure:** Stop all invocation processes first; accept only stable regular files under the repository subdirectory; reject links, special files, mount crossings, unstable metadata, and unsafe sparse files; stage bounded bytes privately, hash once, and verify size/digest at gateway publication.
@@ -721,7 +956,7 @@ docs/src/content/docs/
   structured-result Artifacts, private worker protocol including monotonic
   command state, original idempotency bindings, typed failures, and conformance
   fixtures before either service endpoint.
-- **Requirements:** R2-R3, R6-R7, R10-R22; AE2-AE3, AE6-AE12, AE14; KTD2, KTD5-KTD12.
+- **Requirements:** R2-R3, R6-R7, R10-R22; AE2-AE3, AE6-AE12, AE14; KTD2, KTD5-KTD12, KTD16.
 - **Dependencies:** None.
 - **Files:** `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `packages/execution-service/src/execution/contract.ts`, `packages/execution-service/src/execution/extension-v1.ts`, `packages/execution-service/src/execution/result-schema-v1.ts`, `packages/execution-service/src/execution/worker-protocol-v1.ts`, `packages/execution-service/src/execution/errors.ts`, `packages/execution-service/src/execution/profiles.ts`, `packages/execution-service/tests/unit/execution/contracts.test.ts`, `packages/execution-service/tests/fixtures/execution/*.json`, `scripts/generate-execution-schemas.ts`, `package.json`, `bun.lock`.
 - **Approach:** Create the private Node 22 workspace package. Define strict Zod request/result/profile schemas and freeze `https://allagents.dev/a2a/extensions/coding-execution/v1`: required Agent Card advertisement, `A2A-Extensions` negotiation, `Message.extensions`, request data only at `Message.metadata[uri]`, and terminal integrity data only in the single Part of the fixed-name `allagents.execution-integrity` Artifact whose `extensions` contains the URI. Explicitly forbid `Task.extensions`. Define the portable result-schema subset, canonical caller/schema/profile digests, four result states, separate fixed `allagents.structured-result` Artifact, and shared validator. Define original claim bindings independently from mutable current policy. Add worker identity, attempt/fence/lease identity, monotonic command revision, unseen-attempt cancel tombstone, conditional effect revision, event sequence, terminal acknowledgement, and integrity rules. Generate checked-in schemas and fixtures from one source.
@@ -735,6 +970,28 @@ docs/src/content/docs/
   versioned, domain-separated canonical preimages for materializer definitions,
   inputs, manifests, profiles, and caller requests; no public field can carry
   acquisition code, image references, commands, credentials, or policy.
+  Define normalized source-host/API mappings and ordered source-credential
+  provider policy as trusted profile/configuration fields. Public schemas cannot
+  select a provider. Effective-profile canonicalization includes provider IDs,
+  order, host/API mappings, mapping/configuration digest, pinned CLI account,
+  non-secret entitlement policy, and current App entitlement generation while
+  excluding App private keys, resolved tokens, local account tokens, and
+  per-attempt provider state. Define cache metadata that preserves original
+  acquisition-provider metadata and cache-hit provenance that separately names
+  `cache_hit` and current policy selection.
+  Define the private source-credential protocol separately from the durable
+  worker command record. A worker request contains only active attempt and
+  fence under its authenticated route. The controller response carries its
+  authoritative derivation of effective-profile digest, selected provider,
+  host/API-mapping digest, installation ID, repository, operation, worker
+  route/identity, lease epoch, command revision, and expiry, plus a single-use
+  non-durable grant/response state. The lease/channel binds all derived fields
+  and cannot outlive the token; the token schema expresses only repository,
+  read-only contents permission, and GitHub expiry. Define deterministic
+  source-auth code/reason/retryability enums and operator-only identity detail.
+  Token payloads are secret transport data: they are never part of public
+  schemas, canonical digests, Task storage, command records, events, logs,
+  errors, evidence, or provenance.
 - **Execution note:** Start with fixture-driven schema, framing, and digest
   tests. Observe failures for unknown versions, credential-bearing sources,
   mutable revisions or image tags, duplicate/unsafe destinations, unknown or
@@ -761,9 +1018,34 @@ docs/src/content/docs/
     definition digest while secret-value rotation does not.
   - Rotating a resolved secret value, changing attempt/lease/trace identity, or
     changing a per-run path leaves the profile digest unchanged; changing a
-    policy field, environment-variable name, authorization scope, or revocation
-    epoch changes it, and the digest serializer cannot accept secret-bearing
-    runtime state.
+    provider policy field, pinned CLI account, host/API mapping or mapping
+    digest, environment-variable name, authorization scope, revocation epoch,
+    or App entitlement generation changes it, and the digest serializer cannot
+    accept secret-bearing runtime state.
+  - Provider policy fixtures accept GitHub App followed by account-pinned
+    trusted-local GitHub CLI, reject CLI on remote or multi-tenant routes,
+    require explicit GitHub Enterprise Server host/API mappings, and reject
+    every public credential-provider field. Fixtures encode
+    `gh auth token --hostname <host> --user <account>` and removal of all four
+    ambient GitHub token variables. Provider order, ID, host/API mapping,
+    pinned account, entitlement, or non-secret configuration digest changes
+    the effective-profile digest; private-key or token rotation does not.
+  - Private credential-request fixtures accept only active attempt and fence.
+    Controller-response fixtures carry worker identity/route, attempt, lease
+    epoch, command revision, fence, effective-profile/provider/mapping/
+    installation/repository/operation bindings, and expiry; reject replay,
+    substitution, stale state, duplicate grant consumption, expiry after token
+    expiry, or controller/minter configuration-digest disagreement; and cannot
+    round-trip through durable command/Task serializers. Token fixtures contain
+    only repository/read-only/expiry scope. Remote App profile fixtures require
+    the complete central minter/controller capability, safe lifetime policy,
+    entitlement-generation authority, and no worker-side private-key handle.
+  - Cache metadata fixtures distinguish original acquisition-provider metadata,
+    `cache_hit`, and current policy selection/entitlement. Unknown or stale App
+    generations reject cache authorization.
+  - Exact source-auth fixtures cover every safe code/reason/retryability tuple
+    from the error table and prove provider, installation, and account
+    identifiers are absent from public detail but available to operators.
   - Unsupported keywords, remote references, non-object roots, object schemas that omit `additionalProperties: false`, undeclared optional properties, format-dependent validation, or schemas over byte/depth/property/enum limits are rejected before Task creation; every accepted schema validates identically in admission, worker, Codex forwarding, and Pi tool generation.
   - Public Task fixtures accept only A2A states; cancellation, cleanup, evidence, and tombstone phases exist only in private records.
   - Worker fixtures reject missing/mismatched worker identities, attempt IDs, lease epochs, profile digests, command revisions, conditional-effect revisions, event sequences, bounds, and terminal acknowledgements. Cancel for an unseen attempt persists a tombstone; tombstoned or lower-revision dispatch is invalid before workspace creation.
@@ -824,27 +1106,68 @@ docs/src/content/docs/
 - **Goal:** Implement the supervised single-execution worker with authenticated
   transport, a minimal monotonic command record, a closed workspace
   materializer registry for hardened multi-repository Git, digest-pinned OCI,
-  and operator-registered images, standard manifest validation, OS-enforced
-  credential separation, leases, isolated roots, resource controls,
-  race-resistant evidence, failed-quiescence recycling, and cleanup independent
-  of any provider.
-- **Requirements:** R10-R22; F1, F3-F4; AE5-AE6, AE8-AE10, AE12, AE14; KTD2, KTD5-KTD7, KTD9-KTD10, KTD12-KTD14.
+  and operator-registered images, trusted source-credential resolution,
+  standard manifest validation, OS-enforced credential separation, leases,
+  isolated roots, resource controls, race-resistant evidence,
+  failed-quiescence recycling, and cleanup independent of any provider.
+- **Requirements:** R10-R22; F1, F3-F4; AE5-AE6, AE8-AE10, AE12, AE14; KTD2, KTD5-KTD7, KTD9-KTD10, KTD12-KTD14, KTD16.
 - **Dependencies:** U1.
-- **Files:** `packages/execution-service/src/worker/config.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/worker/server.ts`, `packages/execution-service/src/worker/lease.ts`, `packages/execution-service/src/worker/workspace.ts`, `packages/execution-service/src/worker/materializers/types.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/worker/materializers/git.ts`, `packages/execution-service/src/worker/materializers/oci.ts`, `packages/execution-service/src/worker/materializers/external.ts`, `packages/execution-service/src/worker/evidence.ts`, `packages/execution-service/src/worker/adapters/types.ts`, `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/tests/unit/worker/supervisor.test.ts`, `packages/execution-service/tests/unit/worker/reaper.test.ts`, `packages/execution-service/tests/unit/worker/server.test.ts`, `packages/execution-service/tests/unit/worker/lease.test.ts`, `packages/execution-service/tests/unit/worker/workspace.test.ts`, `packages/execution-service/tests/unit/worker/materializers.test.ts`, `packages/execution-service/tests/unit/worker/evidence.test.ts`, `packages/execution-service/tests/fixtures/execution/fake-backend.ts`, `packages/execution-service/tests/fixtures/execution/fake-materializer.ts`.
+- **Files:** `packages/execution-service/src/source-credentials/contract.ts`, `packages/execution-service/src/source-credentials/registry.ts`, `packages/execution-service/src/source-credentials/github.ts`, `packages/execution-service/src/source-credentials/github-app-minter.ts`, `packages/execution-service/src/source-credentials/github-app-client.ts`, `packages/execution-service/src/source-credentials/github-cli.ts`, `packages/execution-service/src/source-credentials/lease-controller.ts`, `packages/execution-service/src/source-credentials/github-app-entitlements.ts`, `packages/execution-service/src/worker/config.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/worker/server.ts`, `packages/execution-service/src/worker/lease.ts`, `packages/execution-service/src/worker/workspace.ts`, `packages/execution-service/src/worker/materializers/types.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/worker/materializers/git.ts`, `packages/execution-service/src/worker/materializers/oci.ts`, `packages/execution-service/src/worker/materializers/external.ts`, `packages/execution-service/src/worker/evidence.ts`, `packages/execution-service/src/worker/adapters/types.ts`, `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/tests/unit/source-credentials/registry.test.ts`, `packages/execution-service/tests/unit/source-credentials/github-app-minter.test.ts`, `packages/execution-service/tests/unit/source-credentials/github-app-client.test.ts`, `packages/execution-service/tests/unit/source-credentials/github-cli.test.ts`, `packages/execution-service/tests/unit/source-credentials/lease-controller.test.ts`, `packages/execution-service/tests/unit/source-credentials/github-app-entitlements.test.ts`, `packages/execution-service/tests/unit/worker/supervisor.test.ts`, `packages/execution-service/tests/unit/worker/reaper.test.ts`, `packages/execution-service/tests/unit/worker/server.test.ts`, `packages/execution-service/tests/unit/worker/lease.test.ts`, `packages/execution-service/tests/unit/worker/workspace.test.ts`, `packages/execution-service/tests/unit/worker/materializers.test.ts`, `packages/execution-service/tests/unit/worker/evidence.test.ts`, `packages/execution-service/tests/fixtures/execution/fake-backend.ts`, `packages/execution-service/tests/fixtures/execution/fake-materializer.ts`.
 - **Approach:** Authenticate the configured worker identity and fence every
   private command. Persist one minimal monotonic command record scoped to worker
   identity/lease before workspace creation: unseen-attempt cancel writes a
   tombstone, stale/lower-revision dispatch is rejected, and each dispatch/cancel
   effect conditionally rechecks the stored revision immediately before
   mutation. Reserve one execution only after that check. Validate the fully
-  canonicalized source against profile resource policy before cache lookup;
-  bind cache entries to owner or authorization-scope digest, revocation epoch,
-  canonical source, definition digest, and expected/actual manifest digests.
+  canonicalized source against profile resource policy before cache lookup.
+  Bind cache entries to owner or authorization-scope digest, revocation epoch,
+  current GitHub App entitlement generation when applicable, canonical source,
+  definition digest, expected/actual manifest digests, and original
+  acquisition-provider metadata. Authenticated App lifecycle webhooks plus a
+  bounded reconciler advance entitlement generation on uninstall, suspension,
+  and repository-selection changes; unknown or stale state fails cache
+  authorization. A hit revalidates current authorization and records
+  `cache_hit`, original acquisition provider, and current policy selection/
+  entitlement separately. A hit never mints a token.
   Validate deployment, worker-computed materializer definition digest, and
   acquisition plus provider/tool credential-boundary capabilities, then emit
   sequenced NDJSON. Keep transition selection pure. Run inside a dedicated
   container process namespace under init/reaper or an equivalent systemd/cgroup
   boundary. Resolve only the closed KTD13 materializer registry.
+
+  Resolve direct-Git credentials through the closed source-credential registry
+  only after source authorization and a cache miss. Normalize the host, select
+  the configured backend, and evaluate providers in policy order. For GitHub,
+  trusted operator configuration resolves the installation ID; auth-app never
+  discovers it. The authenticated worker asks the gateway/control-plane
+  credential-lease controller only for its active attempt and fence. The
+  controller rechecks durable command revision, lease epoch, tombstone, and
+  fence; derives effective-profile digest, selected provider, host/API-mapping
+  digest, installation ID, canonical repository, operation, worker route/
+  identity, and expiry; and issues a single-use non-durable grant/response.
+  A separate minter atomically consumes that grant and rejects a mismatched
+  configuration digest. Replay, field or provider substitution, and stale
+  state fail before minting.
+
+  The control-plane minter uses focused `@octokit/auth-app` with
+  `refresh: true` for every acquisition. Accept only a fresh token scoped to the
+  authorized repository, read-only contents permission, and GitHub expiry,
+  with remaining lifetime strictly greater than the acquisition deadline plus
+  clock-skew margin; expire the lease no later than the token. The delivery
+  lease/channel—not the bearer token—binds worker identity, attempt, lease
+  epoch, command revision, fence, repository, operation, and expiry. The remote
+  worker never receives the App private key.
+
+  Invoke `gh auth token --hostname <host> --user <account>` only through the
+  account-pinned trusted-local provider when no App installation mapping
+  applies, after removing `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+  and `GITHUB_ENTERPRISE_TOKEN`; fail if the configured account cannot be
+  resolved. Once App selection begins, every configuration, minting, access,
+  rate-limit, or service failure is terminal and never retries as the user.
+  Deliver the selected token through an ephemeral helper channel to the
+  one-shot Git acquisition process, never a URL, argument, repository config,
+  durable Task or command record, or later-phase environment. Tear down the
+  helper and release token references before publishing the workspace.
 
   Launch an external materializer through the configured OCI runner or sandbox
   as a supervisor-owned resource labeled by worker, attempt, lease, and fence,
@@ -880,9 +1203,37 @@ docs/src/content/docs/
     `Submitted -> Working -> Failed` public trace.
   - Repositories with LFS configuration/pointers, submodules, hooks, filters,
     alternates, proxy/helper config, or non-HTTPS secondary protocols cause no
-    secondary connection or helper execution.
+    secondary connection or execution of repository, user, or system helpers;
+    only the KTD16-selected one-shot credential channel can run.
   - Source credentials leave no repository config, process argument, child
     phase environment, log, error, evidence, or retained workspace trace.
+  - GitHub credential resolution uses only the trusted operator
+    repository-to-installation mapping and never auth-app discovery. A remote
+    worker request contains only active attempt/fence; the fake controller
+    derives profile/provider/mapping/installation/repository/operation/route,
+    rechecks command revision, lease epoch, tombstone, and fence, and returns
+    one authenticated single-use non-durable lease response. Wrong worker,
+    replay, duplicate consumption, substituted repository/provider/operation,
+    stale command state, or controller/minter configuration-digest disagreement
+    fails before token delivery. The token carries only repository,
+    read-only-contents, and GitHub-expiry scope; the lease carries worker,
+    attempt, lease epoch, command revision, fence, operation, and delivery
+    expiry. The worker never receives the App private key.
+  - Auth-app is called with `refresh: true` for each acquisition. A cached
+    near-expiry token is bypassed, remaining lifetime must exceed acquisition
+    deadline plus clock-skew margin, lease expiry is capped by token expiry, and
+    an acquisition ceiling that can exceed a fresh token's safe lifetime fails
+    readiness. Every boundary failure remains terminal without invoking `gh`.
+  - A trusted-local profile invokes its fake CLI only when no installation
+    mapping applies, pins `--hostname <host> --user <account>`, removes all four
+    ambient GitHub token variables, and fails on account mismatch. Remote
+    profiles cannot select it. GitHub Enterprise Server works only through an
+    explicit host/API mapping. Provider ID, host, installation/account, and
+    selection reason appear only in operator provenance, never public detail.
+  - Table-driven failures assert the exact public safe code, reason, and
+    retryability for no provider, installation/repository denial, App
+    configuration/authentication/mint failure, rate limit, service outage, and
+    trusted-local CLI failure. No selected-App case invokes the CLI.
   - OCI tags, foreign/external URLs, cross-origin credential forwarding,
     disallowed registry/auth/blob host/address/port, redirects, DNS rebinding,
     manifest/layer mismatches, unsafe layers, missing workspace manifests, and
@@ -899,11 +1250,16 @@ docs/src/content/docs/
     canaries in output or retained logs fail publication. This verifies phase
     teardown, not safety from a malicious operator-registered image that
     intentionally transforms a credential. Provenance labels its unverified
-    source assertions as materializer-attested. A cache hit occurs only after
-    current authorization and revalidates content plus the same owner or
-    authorization scope, revocation epoch, canonical source,
-    materializer-definition, expected-output, and actual output-manifest
-    digests inside the same trust domain.
+    source assertions as materializer-attested.
+  - A cache hit occurs only after current authorization and revalidates content
+    plus the same owner or authorization scope, revocation epoch, canonical
+    source, materializer-definition, expected-output, actual output-manifest,
+    trust domain, and current App entitlement generation. Authenticated webhook
+    events and bounded reconciliation for uninstall, suspension, and repository
+    selection advance the generation; unknown, stale, or mismatched state
+    rejects reuse. Hit provenance records `cache_hit`, original acquisition
+    provider metadata, and current policy selection/entitlement separately,
+    including a hit after provider-policy change, and performs no mint.
   - Setup changes establish the baseline; setup and checks receive no provider/control secrets. Credentialed provider runtimes and model tools run across the declared OS UID/process/mount boundary or broker, with disjoint config/data roots and ambient selectors removed.
   - Covers AE6. Cancel, deadline in every phase, lease expiry, worker shutdown, and adapter failure terminate/clean once; late adapter completion cannot change the result.
   - Block dispatch after effect selection, complete a newer cancel for the unseen attempt, then release dispatch: the command tombstone/revision check rejects it before workspace or provider creation. Duplicate commands remain idempotent and all effects stay fence-bound.
@@ -921,13 +1277,19 @@ docs/src/content/docs/
   - Cross-filesystem staging/publication configuration fails readiness. Faults
     around the final rename expose either no final workspace or the complete
     validated tree, never a copy fallback or partial publication.
-- **Verification:** A built supervised worker materializes equivalent
-  workspaces through disposable exact-SHA repositories, a local digest-pinned
-  OCI snapshot, and a fake registered materializer; validates one standard
-  manifest; mutates each through the fake adapter; and proves authenticated
-  revisioned dispatch, unseen-cancel tombstones, acquisition hardening and
-  credential teardown, budgets, result preservation, quiescence or
-  poisoned-boundary exit, evidence integrity, worker-crash containment,
+- **Verification:** A built supervised worker, authoritative fake lease
+  controller, and fake central minter materialize equivalent workspaces through
+  disposable exact-SHA repositories, a local digest-pinned OCI snapshot, and a
+  fake registered materializer; validate one standard manifest; mutate each
+  through the fake adapter; and prove authenticated revisioned dispatch,
+  unseen-cancel tombstones, deterministic App-before-account-pinned-CLI
+  eligibility, remote App private-key exclusion, controller-derived single-use
+  lease delivery, repository/read/expiry-only token scope, replay/substitution/
+  stale-state/config-digest rejection, fresh-token lifetime boundaries,
+  entitlement-generation cache revocation and truthful hit provenance, exact
+  source-auth mappings, no fallback after selected-App failure, acquisition
+  hardening and credential teardown, budgets, result preservation, quiescence
+  or poisoned-boundary exit, evidence integrity, worker-crash containment,
   orphan-root handling, and cleanup.
 
 ### U5. Codex backend adapter
@@ -970,24 +1332,37 @@ docs/src/content/docs/
 ### U7. Production registry, service packaging, and observability
 
 - **Goal:** Compose exactly two production adapters and package independently runnable gateway and supervised worker services with trusted transports, peer identity, credential-boundary and supervisor readiness, safe startup/shutdown, tracing, and reproducible containers.
-- **Requirements:** R1, R5, R7-R22; AE7-AE8, AE12, AE14; KTD4-KTD8, KTD10-KTD15.
+- **Requirements:** R1, R5, R7-R22; AE7-AE8, AE12, AE14; KTD4-KTD8, KTD10-KTD16.
 - **Dependencies:** U3-U6.
-- **Files:** `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/gateway/index.ts`, `packages/execution-service/src/worker/index.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/execution/telemetry.ts`, `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `package.json`, `bun.lock`, `containers/gateway.Dockerfile`, `containers/worker.Dockerfile`, `.dockerignore`, `.github/workflows/ci.yml`, `.github/workflows/publish.yml`, `packages/execution-service/tests/unit/worker/adapters/registry.test.ts`, `packages/execution-service/tests/unit/worker/materializers/registry.test.ts`, `packages/execution-service/tests/e2e/service-lifecycle.test.ts`.
+- **Files:** `packages/execution-service/src/worker/adapters/registry.ts`, `packages/execution-service/src/worker/materializers/registry.ts`, `packages/execution-service/src/gateway/index.ts`, `packages/execution-service/src/gateway/github-app-webhook.ts`, `packages/execution-service/src/gateway/github-app-reconciler.ts`, `packages/execution-service/src/worker/index.ts`, `packages/execution-service/src/worker/supervisor.ts`, `packages/execution-service/src/worker/reaper.ts`, `packages/execution-service/src/execution/telemetry.ts`, `packages/execution-service/package.json`, `packages/execution-service/tsconfig.json`, `package.json`, `bun.lock`, `containers/gateway.Dockerfile`, `containers/worker.Dockerfile`, `.dockerignore`, `.github/workflows/ci.yml`, `.github/workflows/publish.yml`, `packages/execution-service/tests/unit/gateway/github-app-webhook.test.ts`, `packages/execution-service/tests/unit/gateway/github-app-reconciler.test.ts`, `packages/execution-service/tests/unit/worker/adapters/registry.test.ts`, `packages/execution-service/tests/unit/worker/materializers/registry.test.ts`, `packages/execution-service/tests/e2e/service-lifecycle.test.ts`.
 - **Approach:** Register only Codex and Pi as backend adapters and register the
   built-in Git/OCI materializers plus configured external materializers through
   a separate closed registry. Add gateway and supervised worker entrypoints
-  inside the private Node 22 workspace. Before readiness, validate named public
-  TLS termination, every remote worker's mTLS/equivalent transport and pinned
-  identity/capabilities, Unix-socket locality, store, runtimes, matching
-  gateway/worker materializer definition digests, image digests, schemas,
-  credential names, egress, limits, and OCI runner/sandbox isolation, monotonic
-  command storage, acquisition and provider/tool credential-boundary
-  capabilities,
-  supervisor boundary, orphan roots, trust, quotas, and resource controls.
-  Propagate `traceparent`, then apply KTD10's small shared metadata allowlist and
-  bounded filtering/redaction before any structured log/span processor or OTLP
-  exporter; neither OpenInference nor backend-native attributes bypass it.
-  Build a minimal gateway image with no provider or materializer runtime and a
+  inside the private Node 22 workspace. Register source credentials separately:
+  an authoritative gateway/control-plane lease controller, a trusted GitHub App
+  minter using focused `@octokit/auth-app`, its authenticated single-use
+  non-durable worker client, and an account-pinned GitHub CLI provider only on
+  trusted-local acquisition hosts. Wire authenticated GitHub App lifecycle
+  webhooks and bounded reconciliation to the durable entitlement-generation
+  store. Reject duplicate or ambiguous provider IDs, implicit enterprise host
+  detection, unpinned CLI accounts, ambient GitHub token variables, remote CLI
+  fallback, worker-side App private-key handles, fallback-on-error policy, and
+  provider/mapping configuration-digest disagreement.
+  Before readiness, validate named public TLS termination, every remote
+  worker's mTLS/equivalent transport and pinned identity/capabilities, the
+  complete central lease-controller/minter path for every remote App profile,
+  single-use grant consumption, fresh-token lifetime versus acquisition ceiling
+  and clock skew, current entitlement-generation authority, Unix-socket
+  locality, store, runtimes, matching gateway/worker materializer definition
+  digests, image digests, schemas, credential names, egress, limits, OCI
+  runner/sandbox isolation, monotonic command storage, acquisition and
+  provider/tool credential-boundary capabilities, supervisor boundary, orphan
+  roots, trust, quotas, and resource controls. Propagate `traceparent`, then
+  apply KTD10's small shared metadata allowlist and bounded filtering/redaction
+  before any structured log/span processor or OTLP exporter; neither
+  OpenInference nor backend-native attributes bypass it. Build a minimal
+  gateway/control-plane image with the lease controller and App minter but no
+  provider runtime, writable repository, or baked-in private key, and a
   one-execution worker image whose init kills the complete boundary when the
   worker server exits, including poisoned failed-quiescence exit.
 - **Execution note:** Treat this as integration and packaging work; prove it with built-process and container smoke tests rather than source-shape assertions.
@@ -998,6 +1373,26 @@ docs/src/content/docs/
     external IDs, resolves every external image to the configured digest,
     rejects duplicates/tags/unknown IDs, and cannot be influenced by request
     image, command, credential, or policy fields.
+  - Source-credential registry maps `github.com` and explicit enterprise
+    host/API pairs, selects only an operator-mapped App installation, and
+    permits GitHub CLI only for an account-pinned trusted-local no-mapping case.
+    The CLI invocation includes `--user` and no ambient GitHub token variables.
+    No request field can alter provider selection. Public output contains only
+    safe code/reason/retryability; operator provenance contains the non-secret
+    provider and installation/account identity.
+  - Remote App profiles fail readiness without the central minter and
+    authoritative lease controller, entitlement-generation webhook/
+    reconciliation authority, safe fresh-token lifetime policy, single-use
+    grant support, matching provider/mapping configuration digest, or with an
+    App private-key handle in worker configuration. Runtime requests by active
+    attempt/fence derive every provider/repository/route field from current
+    durable state and reject replay, substitution, stale state, and duplicate
+    consumption. The same-host trusted case and a separately deployed minter
+    pass the same contract; neither uses snapshot delivery.
+  - Readiness rejects an acquisition ceiling that can exceed a fresh token's
+    safe lifetime. Near-expiry auth-app cache output is bypassed with
+    `refresh: true`, lease expiry is capped by token expiry, and failure never
+    falls through to the CLI.
   - Gateway and supervised worker start from built outputs, become ready only after trusted transport/identity, credential and supervisor boundaries, dependencies, and orphan recovery pass, and stop gracefully on SIGTERM.
   - Gateway readiness fails for malformed auth, missing/mismatched named TLS termination, plaintext production public ingress, invalid aggregate store, unavailable required worker, quota/free-space failure, or non-loopback unauthenticated bind.
   - Worker-route readiness fails for plaintext remote URL, wrong/untrusted certificate, worker identity/capability mismatch, or replayed capability; mTLS/equivalent authenticated encryption and same-host Unix sockets pass.
@@ -1010,10 +1405,26 @@ docs/src/content/docs/
     egress and resource enforcement cannot be provided.
   - Killing or poisoning the worker server while an adapter child and invocation root exist makes the supervisor destroy the boundary; replacement readiness waits for root deletion/quarantine and never reuses it.
   - Trace context crosses the authenticated private call and correlates result identities using only opaque owner correlation. Exporter probes for agent, model, tool, stale-event, and error spans contain allowlisted bounded metadata but no canary secret, prompt/output, tool argument/result, file body/source fragment, raw caller identity, or cross-owner fragment; exporter failure cannot change Task status.
-  - Gateway image contains no Codex, Pi, Git workspace, provider credential material, or worker trust private keys.
-  - Worker image pins both runtimes, enforces provider/tool UID/process/mount separation or the credential broker, confines one workspace/config root, disables repository Pi extensions and unrestricted built-ins, enforces deployment limits, and completes fake-provider security probes.
+  - Gateway/control-plane images contain no Codex, Pi, Git workspace, coding
+    provider credentials, or baked-in GitHub App private key; the App key enters
+    only through its configured secret handle. Worker images and configuration
+    contain neither App issuer material nor user credential stores, pin both
+    coding runtimes, enforce provider/tool UID/process/mount separation or the
+    credential broker, confine one workspace/config root, disable repository Pi
+    extensions and unrestricted built-ins, enforce deployment limits, and
+    complete fake-provider security probes.
   - Installing the root npm package on Node 18 does not load service dependencies; the private service workspace and containers enforce Node 22.19+.
-- **Verification:** The registry dispatches both adapters through the same worker contract; built services and images pass lifecycle/security smoke tests; exporter-capture tests prove pre-processor metadata allowlisting, bounded redaction, opaque owner correlation, and canary/cross-owner exclusion across agent, model, tool, stale-event, and error spans; CI and publication bind immutable image tags to the release commit.
+- **Verification:** The registries dispatch both adapters and
+  source-credential providers through their respective contracts; built
+  services and images prove controller-authorized fresh App minting without
+  worker issuer material, single-use lease replay/staleness/config-digest
+  rejection, entitlement-generation webhook/reconciliation behavior,
+  account-pinned sanitized CLI eligibility, deterministic public failure
+  mapping with operator-only identities, and lifecycle/security behavior;
+  exporter-capture tests prove pre-processor metadata allowlisting, bounded
+  redaction, opaque owner correlation, and canary/cross-owner exclusion across
+  agent, model, tool, stale-event, and error spans; CI and publication bind
+  immutable image tags to the release commit.
 
 ### U8. Cross-backend conformance, documentation, and release evidence
 
@@ -1030,6 +1441,16 @@ docs/src/content/docs/
   publication, supervisor-owned runner cleanup, acquisition credential
   teardown, authorization-scoped cache reuse/revocation, source-mode
   capabilities, and the prohibition on caller-supplied acquisition code.
+  Document normalized host/API mapping, operator-owned
+  repository-to-installation mapping, GitHub App precedence and
+  repository/read/expiry token scope, account-pinned sanitized trusted-local
+  CLI eligibility, fail-closed selected-App behavior, focused
+  `@octokit/auth-app` ownership and `refresh: true`, central App private-key
+  custody, controller-derived single-use remote lease bindings, token/lease
+  lifetime rules, entitlement-generation webhooks/reconciliation and
+  cache-hit provenance, deterministic public source-auth mapping with
+  operator-only identities, remote readiness requirements, the one initial
+  token-minter path, and deferred versioned snapshot delivery.
 - **Execution note:** Use a disposable local Git HTTP server, temporary gateway store, temporary worker root, and loopback ports. Never read the developer's real home, sessions, or credentials in deterministic tests.
 - **Patterns to follow:** Existing `tests/e2e/*` built-process style, `tests/helpers/env.ts` home isolation, Starlight guide/reference organization under `docs/src/content/docs/`, and Buzz's required-critical-action coverage rule without importing its TLA+ model or production implementation.
 - **Test scenarios:**
@@ -1043,7 +1464,24 @@ docs/src/content/docs/
     disclosure, and setup failure after worker acceptance produce the selected
     `Submitted -> Working -> Failed` trace; provider invocation never begins,
     and durable snapshots, streams, and conformance records agree. A policy
-    revocation before lookup cannot consume a previously populated cache entry.
+    revocation, webhook-advanced entitlement generation, reconciliation result,
+    or unknown/stale App state before lookup cannot consume a previously
+    populated cache entry. A valid hit after provider-policy change records
+    `cache_hit`, original acquisition provider, and current selection separately
+    without minting.
+  - GitHub source cases prove operator-mapped App selection, account-pinned
+    sanitized trusted-local CLI selection only when no mapping applies, no CLI
+    invocation after any selected-App failure, explicit enterprise host/API
+    mapping, repository/read-only/expiry-only token narrowing, and an
+    authenticated controller-derived single-use lease carrying worker identity,
+    attempt, lease epoch, command revision, fence, repository, operation, and
+    expiry without worker issuer material. They reject replay, substitution,
+    stale state, duplicate grant consumption, and controller/minter
+    configuration-digest disagreement; bypass near-expiry auth-app cache output
+    with `refresh: true`; cap lease expiry by token expiry; fail readiness for an
+    unsafe acquisition ceiling; assert every safe source-auth
+    code/reason/retryability tuple and operator-only identity detail; and
+    publish a credential-free workspace.
   - Pause dispatch after selection, complete unseen-attempt cancel, then release dispatch; the stale command creates no workspace/process. The small independent checker enforces each fixture's attempt/fence correlation, happens-before edges, maximum counts, and forbidden post-terminal effects. Deliberately bad traces that still contain every required action name fail for wrong order, wrong fence, duplicate-over-maximum effects, and an extra stale dispatch after terminalization.
   - Concurrent callers cannot observe each other's Tasks, streams, cancellations, page tokens, quotas, or Artifacts; one worker serializes admitted work.
   - Gateway restart, reconnect, ambiguous dispatch, duplicate/out-of-order
@@ -1074,7 +1512,11 @@ docs/src/content/docs/
     names. Docs state the three source modes and exact discriminator, standard
     workspace manifest and provenance labels, materializer registry/profile
     boundary, worker-derived definition digest, resource authorization and
-    cache-revocation boundary, prohibition on caller-supplied acquisition code,
+    entitlement-generation cache-revocation boundary, cache-hit/original/current
+    provider provenance, prohibition on caller-supplied acquisition code,
+    one selected remote token-minter/lease path with deferred snapshot delivery,
+    account-pinned sanitized CLI invocation, token versus lease scope, fresh
+    token and readiness lifetime rules, deterministic source-auth mapping,
     same-filesystem publication, supervisor-owned runner cleanup, acquisition
     credential teardown, two transport boundaries, one gateway replica, one
     execution per worker, reviewed trust domain, narrow credential isolation
@@ -1090,16 +1532,16 @@ docs/src/content/docs/
 
 | Gate | Applies to | Required evidence |
 |---|---|---|
-| Contract generation | U1 | Exact extension URI/carriers, closed workspace source discriminator and manifest, algorithm-qualified materializer/profile/input/output digest preimages and vectors, verification-method vocabulary, authorization-scope/revocation fields, both fixed Artifact schemas, original replay bindings, command revisions/tombstones, result-state preservation, and positive/negative fixtures report no drift. |
-| Focused unit tests | U1-U7 | Active-unit tests pass with replay ordering, fault injection, state races, unseen cancel, limits, result preservation, failed-quiescence exit, credential probes, source authorization/cache revocation, and cleanup. |
-| Gateway/worker integration | U3-U4, U7-U8 | Built processes agree on authenticated revisioned dispatch, worker identity, command tombstones, leases, direct Git/OCI/registered materialization, worker-derived registry digests, acquisition credential teardown, supervisor-owned materializer runners, same-filesystem atomic publication, workspace-manifest provenance labels, Task/Artifact persistence, poisoned exit, orphan recovery, and cleanup. |
+| Contract generation | U1 | Exact extension URI/carriers, closed workspace source discriminator and manifest, algorithm-qualified materializer/profile/input/output digest preimages and vectors, verification-method vocabulary, authorization-scope/revocation/App-entitlement fields, cache-hit/original/current-provider provenance, worker request limited to active attempt/fence, controller-derived single-use non-durable lease fields and token-versus-lease scope, exact source-auth code/reason/retryability tuples, both fixed Artifact schemas, original replay bindings, command revisions/tombstones, result-state preservation, and positive/negative fixtures report no drift. |
+| Focused unit tests | U1-U7 | Active-unit tests pass with replay ordering, fault injection, state races, unseen cancel, limits, result preservation, failed-quiescence exit, credential probes, account-pinned sanitized CLI execution, fresh-token lifetime boundaries, entitlement-generation authorization/cache revocation, provenance states, exact source-auth failures, and cleanup. |
+| Gateway/worker integration | U3-U4, U7-U8 | Built processes agree on authenticated revisioned dispatch, worker identity, command tombstones, leases, direct Git/OCI/registered materialization, deterministic operator-mapped-App-before-account-pinned-CLI eligibility, central fresh App minting without worker issuer material, controller-derived single-use non-durable lease delivery, repository/read/expiry-only token scope, replay/substitution/stale/config-digest rejection, entitlement-generation cache revocation and hit provenance, exact failure mapping, fail-closed selected-App behavior, worker-derived registry digests, acquisition credential teardown, supervisor-owned materializer runners, same-filesystem atomic publication, workspace-manifest provenance labels, Task/Artifact persistence, poisoned exit, orphan recovery, and cleanup. |
 | Backend conformance | U5-U8 | One shared suite passes against Codex and Pi, including the versioned schema subset, four result states, valid/invalid preservation across later failure, integrity Artifact carrier, and structured-result Artifact rule. |
-| Credentialed provider smoke | U4-U6, U8 | An available operator-trusted registered materializer and each available provider mutate a disposable immutable workspace while adversarial later-phase probes cannot directly access acquisition/provider credential environments, mounts, processes, roots, or runner control planes and literal canaries remain absent; missing credentials/runtime/boundary capability are recorded as skipped prerequisites. |
+| Credentialed provider smoke | U4-U6, U8 | An available centrally held GitHub App, account-pinned trusted-local `gh` login, operator-trusted registered materializer, and each available coding provider mutate disposable immutable workspaces while provider selection follows policy. App acquisition proves `refresh: true`, minimum remaining lifetime, lease-at-or-before-token expiry, repository/read-only/expiry token scope, and no worker issuer material; local CLI smoke proves `--user` and sanitized ambient token variables. Adversarial later-phase probes cannot directly access acquisition/provider credential environments, mounts, processes, roots, or runner control planes and literal canaries remain absent; missing credentials/runtime/boundary capability are recorded as skipped prerequisites. |
 | A2A interoperability | U3, U8 | Official `@a2a-js/sdk` client passes required-extension negotiation and legal carriers, immediate/waiting send, stream, reconnect, get, list/filter/page, subscribe, retained replay, cancel races, expiry, and owner isolation without `Task.extensions`. |
-| Security and abuse | U2-U4, U7-U8 | Fixtures prove trusted public/private transport and peer identity, auth-before-lookup, retained-claim-first replay, opaque owners, exact source-resource authorization, per-connection Git/OCI SSRF and credential-origin controls, authorization-scoped cache revocation, digest-pinned registered materializers, schema/manifest validation, truthful provenance labels, acquisition and provider/tool credential separation, quotas, monotonic cancel/dispatch, failed-quiescence recycling, race-resistant capture, and trust-topology rejection. |
+| Security and abuse | U2-U4, U7-U8 | Fixtures prove trusted public/private transport and peer identity, auth-before-lookup, retained-claim-first replay, opaque owners, exact source-resource authorization, per-connection Git/OCI SSRF and credential-origin controls, operator-mapped GitHub provider eligibility without identity escalation, central issuer-key custody, worker request limited to active attempt/fence, authoritative current-state derivation, single-use lease replay/substitution/staleness/config-digest rejection, repository/read/expiry-only token scope, fresh-token lifetime safety, fail-closed selected-App errors, account-pinned sanitized CLI use, exact public failure mappings with operator-only identities, webhook/reconciliation-driven entitlement cache revocation, truthful cache-hit provenance, digest-pinned registered materializers, schema/manifest validation, acquisition and provider/tool credential separation, quotas, monotonic cancel/dispatch, failed-quiescence recycling, race-resistant capture, and trust-topology rejection. |
 | Lifecycle trace conformance | U8 | The small test-side checker, independently of production selectors, validates attempt/fence correlation, required happens-before edges, maximum occurrence counts, and forbidden post-terminal effects against durable records plus observed worker/process outcomes; all-name-present bad traces fail for wrong order/fence/multiplicity and stale post-terminal dispatch. |
 | Telemetry safety | U7-U8 | Exporter capture across agent, model, tool, stale-event, and error spans proves the pre-processor allowlist and bounded redaction exclude prompt/output/tool/source/file content, canary secrets, raw identities, and cross-owner fragments while retaining only bounded operational metadata and opaque owner correlation. |
-| Service packaging | U7-U8 | Root Node 18 install, private Node 22 build, gateway/supervised-worker smoke, backend and materializer registry readiness, transport and credential readiness, poisoned/crashed worker containment, orphan recovery, and both service container builds pass. |
+| Service packaging | U7-U8 | Root Node 18 install, private Node 22 build with focused `@octokit/auth-app` and no full Octokit client, gateway/control-plane lease controller and minter plus supervised-worker smoke, entitlement webhook/reconciler, worker issuer-key exclusion, backend/materializer/source-credential registry readiness, transport and credential readiness, poisoned/crashed worker containment, orphan recovery, and both service container builds pass. |
 | Repository quality | All | `bun run schema:check`, `bun run typecheck`, `bun run lint`, and `bun test` pass. |
 | Documentation | U8 | `bun run docs:build` passes and examples validate against current schemas. |
 
@@ -1119,16 +1561,27 @@ The authoritative behavioral proof is the built-process E2E path with the offici
 - Production public ingress uses its named TLS boundary, remote worker routes authenticate and encrypt peers with worker identity/capability binding, and same-host Unix sockets are the only non-network alternative; unprotected remote endpoints fail readiness.
 - Cancellation/deadlines use monotonic worker command tombstones and one native abort. Stale dispatch cannot create work, and failed quiescence poisons and exits the worker so supervisor destruction and replacement orphan recovery precede new admission.
 - Workspace source validation and exact resource authorization,
-  per-connection direct Git/OCI controls, worker-derived registered-materializer
-  digests, the standard workspace manifest and truthful provenance labels,
-  authorization-scoped cache revocation, same-filesystem atomic publication,
+  per-connection direct Git/OCI controls, trusted-policy GitHub provider
+  resolution with operator-mapped App precedence, account-pinned sanitized
+  local-only CLI eligibility, no selected-App failure fallback, central App
+  private-key custody, controller-derived single-use authenticated lease
+  delivery, repository/read-only/expiry-only token scope, current-command
+  recheck and replay/substitution/stale/config-digest rejection, fresh-token and
+  readiness lifetime bounds, deterministic public source-auth mapping with
+  operator-only identities, authenticated webhook/reconciliation-driven App
+  entitlement generations, fail-closed unknown/stale cache authorization, and
+  separate cache-hit/original-acquisition/current-selection provenance are
+  enforced end to end. The initial remote path is central token minting and
+  non-durable lease delivery; versioned snapshot delivery remains deferred.
+  Worker-derived registered-materializer digests, the standard workspace
+  manifest and truthful provenance labels, same-filesystem atomic publication,
   supervisor-owned runner cleanup, acquisition credential teardown,
   OS-enforced provider/tool credential boundary, phase-scoped secrets, disabled
   repository Pi extensions/unrestricted built-ins, one-execution
   reviewed-domain policy, resource limits, Artifact race defenses,
-  completeness, provenance, and authenticated expiry are enforced end to end
-  without accepting caller acquisition code or claiming hostile-source or
-  cross-tenant isolation.
+  completeness, provenance, and authenticated expiry are enforced without
+  accepting caller acquisition code or claiming hostile-source or cross-tenant
+  isolation.
 - Metadata-only telemetry is filtered through the fixed allowlist and bounded redaction before processing/export; canary secrets, content, raw caller identities, and cross-owner fragments never reach exporters, and only opaque owner correlation crosses the separately governed operator boundary.
 - Required source/setup and race traces satisfy attempt/fence, happens-before, maximum-count, and forbidden-post-terminal constraints in the independent test-side checker; all-name-present malformed traces fail without introducing a parallel lifecycle implementation.
 - Focused tests, full repository gates, built-process smoke, container builds, docs build, and applicable credentialed backend smoke tests have recorded outcomes.
@@ -1139,27 +1592,44 @@ The authoritative behavioral proof is the built-process E2E path with the offici
 
 - U1: Standard extension carriers, closed workspace source/manifest contracts,
   algorithm-qualified materializer/profile/input/output digest preimages,
-  verification and authorization vocabulary, integrity/structured-result
-  Artifact schemas, four result states, original claim digests, command
-  revisions/tombstones, fence rules, typed failures, and fixtures are generated
-  and stable.
+  verification and authorization vocabulary, App entitlement generation and
+  cache provenance states, active-attempt/fence-only credential requests,
+  controller-derived single-use non-durable lease bindings, token-versus-lease
+  scope, exact source-auth code/reason/retryability tuples,
+  integrity/structured-result Artifact schemas, four result states, original
+  claim digests, command revisions/tombstones, fence rules, typed failures, and
+  fixtures are generated and stable.
 - U2: Trusted ingress, auth, opaque owner isolation, retained-claim-first replay, original bindings, atomic new admission, CAS settlement, pagination, startup recovery, quotas, Artifact access, tombstones, and cleanup pass fault injection.
 - U3: Every advertised A2A operation agrees across stream and lookup while extension negotiation, replay ordering, authenticated worker routes, fencing, monotonic cancellation, and races preserve one Task.
 - U4: Worker command state, exact source authorization, direct
-  Git/OCI/registered materialization, workspace-manifest validation and
-  provenance classification, authorization-scoped cache revocation,
+  Git/OCI/registered materialization, operator-mapped GitHub
+  App-before-account-pinned-CLI eligibility with sanitized invocation and
+  fail-closed selected-App errors, central fresh App minting without worker
+  issuer material, authoritative single-use lease delivery with
+  replay/substitution/stale/config-digest rejection,
+  repository/read-only/expiry-only token scope and safe lifetime boundaries,
+  deterministic public failure mapping with operator-only identities,
+  webhook/reconciliation-driven entitlement cache revocation and truthful hit
+  provenance, workspace-manifest validation and provenance classification,
   same-filesystem atomic publication, acquisition and provider credential
   separation, supervisor-owned runner cleanup, poisoned-exit/orphan recovery,
   and dispatch/materialization/setup/action/check/quiescence/evidence/cleanup
   pass malicious, crashed, and faulted scenarios.
 - U5: Codex direct-SDK streaming, schema/signal forwarding, validated output, result preservation, OS credential separation, native evidence, fresh threads, cancellation, and failure mapping pass adapter and applicable smoke verification.
 - U6: Pi strict RPC/framing, terminating result, exact policy tools, disabled repository extensions/built-ins, OS-isolated credential store/provider runtime, result preservation, settlement, stats, abort, and process cleanup pass verification.
-- U7: Closed backend and materializer registries, trusted
-  transport/identity/readiness, acquisition/provider credential and supervisor
-  capability gating, poisoned-worker recycling, metadata-only pre-export
-  telemetry controls, Node-version separation, tracing, shutdown, containers,
-  and release artifacts work from built outputs.
-- U8: Cross-backend E2E, all three workspace source modes, standard manifest
+- U7: Closed backend, materializer, and source-credential registries, focused
+  `@octokit/auth-app` packaging without a full Octokit or root-CLI dependency,
+  authoritative lease controller, central App private-key custody and fresh
+  minter readiness, entitlement webhook/reconciler, account-pinned sanitized
+  local CLI, trusted transport/identity/readiness, acquisition/provider
+  credential and supervisor capability gating, poisoned-worker recycling,
+  metadata-only pre-export telemetry controls, Node-version separation,
+  tracing, shutdown, containers, and release artifacts work from built outputs.
+- U8: Cross-backend E2E, all three workspace source modes, central GitHub App
+  and account-pinned trusted-local CLI credential-selection cases, remote
+  issuer-key exclusion, controller-derived single-use lease delivery,
+  fresh-token lifetime, token-versus-lease scope, exact failure mappings,
+  entitlement-driven cache invalidation and hit provenance, standard manifest
   provenance, acquisition credential teardown, standard A2A carriers, retained
   replay, selected materialization/setup transitions, independent race-trace
   constraints, telemetry canary/cross-owner probes, transport and credential

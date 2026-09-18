@@ -207,12 +207,23 @@ will not be adopted.
 
 Gateway calls propagate
 [W3C Trace Context](https://www.w3.org/TR/trace-context/) across HTTP and process
-boundaries. AllAgents uses OpenTelemetry and OTLP for operational telemetry.
+boundaries. AllAgents uses OpenTelemetry and OTLP for metadata-only operational
+telemetry by default. An explicit allowlist limits structured logs and spans to
+non-content operational metadata. Prompts and model outputs, tool arguments and
+results, file bodies and source fragments, and secret-bearing attributes are
+prohibited before export. A bounded filtering and redaction step must run before
+any structured log or span processor so disallowed content cannot enter the
+telemetry pipeline.
+
 AllAgents-managed agent, model, and tool spans use
 [OpenInference](https://arize-ai.github.io/openinference/) semantic conventions
-where corresponding attributes exist; useful backend-native attributes may be
-retained alongside them. Consumer-owned evaluator spans may join the propagated
-trace without becoming gateway-owned.
+only for attributes that pass this allowlist. Backend-native attributes must
+pass the same allowlist. Owner correlation is limited to an opaque identifier
+appropriate for the telemetry operators' access; it does not expose caller
+identity or grant access to a Task or Artifact. Telemetry access and retention
+are governed separately from Task and Artifact access and retention.
+Consumer-owned evaluator spans may join the propagated trace without becoming
+gateway-owned.
 
 These standards are complementary:
 

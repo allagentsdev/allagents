@@ -50,15 +50,15 @@ or durable evaluation Run ledger. It does not own a consumer's result store.
 
 ### Keep the gateway separate from execution backends
 
-The initial design supports three peer execution backends:
+The initial design supports two execution backends, delivered in this order:
 
-- Codex;
-- OpenCode; and
-- Pi.
+1. Codex; and
+2. Pi.
 
 Each backend implements the same conformance contract. Provider-specific
-process, session, permission, cancellation, and evidence behavior remains
-behind its adapter.
+process, session, structured-output, cancellation, and evidence behavior
+remains behind its adapter. OpenCode and other coding agents remain possible
+follow-up adapters rather than part of the first delivery.
 
 Execution backends own repository materialization, environment setup, agent
 invocation, evidence collection, process termination, and cleanup. The gateway
@@ -74,6 +74,63 @@ topology.
 A separate gateway Pod is a service and failure boundary, not per-invocation
 security isolation. Deployments requiring hostile-code or tenant isolation
 must create or select a stronger execution boundary behind the gateway.
+
+### Persist Task truth, not live provider execution
+
+The gateway durably stores Task identity, idempotency claims, terminal status,
+Artifact metadata, and retained evidence. A provider execution itself is
+ephemeral. The initial service does not checkpoint, reattach, resume, or
+automatically replay an interrupted provider session.
+
+Gateway restart invalidates the active attempt fence and settles each
+nonterminal Task failed once. A live worker that loses its lease aborts the
+provider and cleans its invocation. If the worker process crashes, an external
+supervisor terminates the complete execution boundary and the replacement
+worker reaps or quarantines orphaned invocation roots before readiness.
+Termination and filesystem cleanup are recorded separately and become complete
+only when the responsible boundary proves them; otherwise the terminal record
+says unknown. Durable execution and provider-session restoration require a
+later decision backed by public provider guarantees.
+
+### Integrate providers directly
+
+The Codex adapter depends directly on `@openai/codex-sdk`; AllAgents does not
+vendor or depend on Promptfoo's provider. Promptfoo's
+[Codex provider](https://github.com/promptfoo/promptfoo/blob/main/src/providers/openai/codex-sdk.ts)
+and
+[tests](https://github.com/promptfoo/promptfoo/blob/main/test/providers/openai-codex-sdk.test.ts)
+are characterization references for strict option mapping, minimal child
+environment, working-directory validation, `AbortSignal`, structured output,
+event normalization, and cleanup edge cases.
+
+AllAgents keeps only the gateway-owned subset: one fresh provider session per
+Task, server-owned profile settings, bounded native evidence, typed failures,
+and worker-proven process cleanup. It does not inherit Promptfoo configuration
+layering, caching, pricing, eval retries, thread pools, or `ProviderResponse`.
+
+The extension defines `allagents.result-schema/v1` as a closed, bounded JSON
+Schema Draft 2020-12 subset shared by admission, Codex, Pi, and terminal
+validation. It requires an object root, requires every object schema to set
+`additionalProperties: false`, lists every declared property in `required`, and
+uses `null` unions for optional values. It allows only `type`, `properties`,
+`required`, `additionalProperties` with the value `false`, `items`, `enum`,
+`const`, `anyOf`, `$defs`, local `$ref`, `title`, and `description`, and rejects
+remote references, format-dependent validation, and unknown keywords. The
+extension version fixes byte, nesting, property, and enum limits. One shared
+validator checks both the schema and the returned value, and the accepted schema
+digest enters idempotency and provenance. Adapters cannot widen or narrow this
+contract.
+
+Codex receives that schema through the SDK's per-turn `outputSchema`; Pi
+implements the same terminal contract with an invocation-scoped terminating
+tool. A successful structured request publishes exactly one Artifact named
+`allagents.structured-result` with one A2A `Part` whose `data` field contains
+the validated result object and whose `mediaType` is `application/json`.
+Artifact metadata contains the result-schema version and digest. The Artifact
+exists only for a valid result. The integrity
+kernel always records `not_requested`, `not_produced`, `valid`, or `invalid`;
+an earlier source, setup, provider, cancellation, or deadline outcome remains
+the primary Task classification when no result could be produced.
 
 ### Profile A2A 1.0 instead of inventing an invocation API
 
@@ -201,7 +258,7 @@ The gateway and selected backend are collectively responsible for:
 
 1. resolving and verifying immutable source identity;
 2. acquiring or restoring source through the selected transport;
-3. creating a clean or explicitly reusable working location;
+3. creating a fresh working location for one execution attempt;
 4. running setup before the evaluated agent action;
 5. applying permissions and execution isolation;
 6. invoking the agent and propagating cancellation and deadlines;
@@ -218,7 +275,9 @@ contract does not require source code to be baked into the runtime image.
 Credentials remain deployment policy. Requests must not embed deployment
 credentials. The gateway authenticates callers, and the selected backend scopes
 source and model credentials to the execution boundary without returning
-secret-bearing paths or values.
+secret-bearing paths or values. Provider and worker-control credentials must
+also be absent from model-initiated command environments, tool output, retained
+evidence, and repository-visible configuration.
 
 Retries must not multiply non-idempotent agent execution. Every request carries
 a caller-scoped stable invocation key through the AllAgents extension. The
@@ -241,8 +300,14 @@ but their product and ownership model requires a separate decision.
   narrow coding-execution responsibility.
 - Consumers depend on A2A 1.0 plus a versioned AllAgents extension, not
   AllAgents TypeScript modules, CLI behavior, or workspace internals.
-- Codex, OpenCode, and Pi are peer execution backends behind one conformance
-  suite.
+- Codex and Pi are the initial execution backends behind one conformance suite;
+  Codex lands first and OpenCode is deferred.
+- Durable Task and evidence records do not imply durable provider execution;
+  interrupted attempts fail rather than resume or replay.
+- The result-schema subset, structured-result Artifact, and non-success result
+  states are public compatibility surface rather than adapter conventions.
+- Reliable worker-crash cleanup requires an external execution supervisor and a
+  pre-readiness orphan-root reaper in addition to leases.
 - Gateway and execution workers scale and fail independently.
 - The gateway can remain lightweight; physical isolation and resource policy
   belong to the selected execution backend.
@@ -292,6 +357,21 @@ Rejected because AHP explicitly targets synchronization of independent clients
 around host-owned sessions, not agent-to-agent Task execution. Its reconnect
 and changeset models do not supply caller-scoped idempotency, immutable source
 handling, cleanup, complete terminal evidence, or bounded Task retention.
+
+### Vendor Promptfoo's Codex provider
+
+Rejected because that provider includes Promptfoo-specific configuration
+layering, caching, pricing, tracing, retry metadata, thread pooling, and result
+mapping. AllAgents needs a smaller worker adapter against the Codex SDK and can
+reuse Promptfoo's observable behavior as characterization evidence without
+copying its implementation.
+
+### Treat provider session persistence as durable execution
+
+Rejected because a resumable provider thread does not prove workspace,
+process, cancellation, evidence, or cleanup continuity across gateway or worker
+failure. The initial service durably records failure and cleanup truth but does
+not resume interrupted work.
 
 ## Reconsider when
 

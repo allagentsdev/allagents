@@ -15,12 +15,14 @@ execution: code
 
 - **Objective:** A developer can run one trusted-network A2A endpoint for one
   AllAgents workspace and invoke built-in or explicitly exposed profile targets
-  against either declared Git repositories or a digest-pinned OCI workspace
-  snapshot.
+  against either the complete configured Git repository set, with optional
+  named revision overrides, or a digest-pinned OCI workspace snapshot. AI Evals
+  can configure either source mode in Promptfoo YAML through a custom provider
+  without sending origins.
 - **Means:** Add `allagents gateway serve`, a private execution-service package,
   a bounded durable Task store, direct Codex and Pi adapters, GitHub App and
-  GitHub CLI acquisition providers, OCI snapshot acquisition, and one supervised
-  invocation lifecycle.
+  GitHub CLI acquisition providers, OCI snapshot acquisition, one supervised
+  invocation lifecycle, and a documented Promptfoo provider contract.
 - **Authority:** [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md)
   owns the public and trust boundaries. Project and user `workspace.yaml` files
   own source and profile declarations. A2A 1.0 owns core wire semantics.
@@ -48,7 +50,10 @@ evaluation framework or multi-tenant platform. Callers use A2A Tasks and one
 required AllAgents extension. Network reachability is authorization. The
 service resolves configured targets and sources from existing workspace files,
 acquires a fresh invocation workspace, invokes Codex or Pi through a typed
-adapter, and retains bounded terminal evidence.
+adapter, and retains bounded terminal evidence. AI Evals consumes that boundary
+through its own Promptfoo custom provider: evaluation YAML supplies named
+revision overrides for the configured repository set, or one snapshot handle
+and immutable digests, while AllAgents retains origin and credential authority.
 
 ### Problem Frame
 
@@ -65,7 +70,8 @@ registry, or another profile configuration file for the initial use case.
 ### Actors
 
 - A1. **Trusted-network caller:** Any process able to reach the endpoint. All
-  callers have the same authority and Task visibility.
+  callers have the same authority and Task visibility. The first caller is an
+  AI Evals-owned Promptfoo custom provider that maps one `callApi` to one Task.
 - A2. **Execution gateway:** The A2A server and invocation supervisor. It owns
   deployment-wide Task identity, acquisition, routing, status, cancellation,
   evidence, retention, and cleanup.
@@ -103,6 +109,10 @@ registry, or another profile configuration file for the initial use case.
   Governs R5, R13-R16.
 - **Keep evaluation outside AllAgents.** Consumers own datasets, repetitions,
   scoring, assertions, and evaluation Runs. Governs R17.
+- **Bridge Promptfoo at the consumer boundary.** AI Evals owns a custom provider
+  that maps Promptfoo YAML and test variables to the closed A2A source modes and
+  maps terminal Tasks back to `ProviderResponse`. AllAgents owns no Promptfoo
+  runtime behavior. Governs R19.
 
 ### Requirements
 
@@ -183,11 +193,14 @@ registry, or another profile configuration file for the initial use case.
     `{ kind: "workspaceSnapshot", snapshot: ConfigName, digest: Digest,
     workspaceManifestDigest: Digest, repositories }`.
     `repositories` contains 1-64 unique strict entries
-    `{ name: ConfigName, canonicalUrl: string, requestedRevision?:
-    RevisionText, resolvedCommit: string, verification:
-    "independentlyVerified" | "snapshotAttested" }`; `canonicalUrl` is a
-    canonical HTTPS URL of at most 2048 bytes, and `resolvedCommit` matches
-    `^[0-9a-f]{40}$`.
+    `{ name: ConfigName, requestedRevision?: RevisionText,
+    resolvedCommit: string, verification:
+    "independentlyVerified" | "snapshotAttested" }`; `resolvedCommit` matches
+    `^[0-9a-f]{40}$`. Gateway-generated source identity, workspace-manifest
+    fields, evidence metadata, and provider-added metadata never contain Git
+    URLs, OCI repository origins, or destination paths. This guarantee does not
+    inspect or sanitize opaque caller prompts, provider terminal output, or
+    produced-Artifact payloads.
   - optional `workspaceManifestDigest` is `Digest`.
   - `terminalOutput` is `{ text, truncated }`, where `text` is valid UTF-8 of at
     most 1 MiB and `truncated` is boolean.
@@ -382,6 +395,28 @@ registry, or another profile configuration file for the initial use case.
   for listener, workspace, state/retention, GitHub, OCI, and Codex/Pi auth-file
   handles. Secret values never enter workspace files, requests, logs, Tasks,
   Artifacts, retained workspaces, or model-invoked tool environments.
+- R19. Document AI Evals consumption through a Promptfoo custom
+  JavaScript/TypeScript provider implementing Promptfoo's `ApiProvider`.
+  `constructor(options: ProviderOptions)` retains `options.id`, validates
+  `options.config`, and `id()` returns the retained ID. Static config contains
+  the gateway endpoint, target ID, and exactly one closed source mode:
+  repository mode materializes the complete configured repository set and
+  carries only an optional revision map keyed by declared repository name;
+  snapshot mode carries one declared snapshot name with OCI and workspace-
+  manifest digests. `callApi(prompt, context, options)` may apply the exact
+  `context.vars.allagentsSource` leaf overrides defined below. Dynamic
+  repository revisions must be full lowercase 40-hex commit IDs; dynamic
+  snapshot values must be full lowercase `sha256:` digests. Source kind,
+  snapshot name, and repository origins never vary per test. Unknown members,
+  revision names absent from static config, URLs, destinations, tags,
+  credentials, commands, and permission policy fail before submission.
+  `options?.abortSignal` and the provider's bounded deadline both invoke A2A
+  `CancelTask` after acceptance. One `callApi` creates one A2A Task and maps
+  terminal output, usage, Task/Artifact IDs, structured result, and logical
+  provenance into `ProviderResponse`; admission or terminal failure maps to
+  `error`. AI Evals owns the provider implementation. AllAgents publishes the
+  protocol and YAML examples without importing Promptfoo provider code or adding
+  Promptfoo as a runtime dependency.
 
 ### Key Flows
 
@@ -436,6 +471,24 @@ registry, or another profile configuration file for the initial use case.
      unmanaged mode remains alive, not ready, and continues reaping while
      printing the platform recovery command. Managed mode may exit only after
      its validated external manager accepts containment ownership.
+
+- F6. **Invoke from Promptfoo**
+  1. Promptfoo constructs the AI Evals-owned TypeScript provider with
+     `ProviderOptions`; the provider retains the ID and validates
+     `options.config` containing the private-network endpoint, target, and one
+     closed source-mode object.
+  2. `callApi(prompt, context, options)` applies only valid
+     `context.vars.allagentsSource` leaf overrides, creates one invocation key,
+     and sends one A2A Message with the prompt and required extension.
+  3. The provider waits or streams until terminal. Its deadline or
+     `options?.abortSignal` sends `CancelTask` once after acceptance and waits
+     for the same terminal cleanup path.
+  4. It returns terminal text or validated structured output in
+     `ProviderResponse.output`; maps `inputTokens -> prompt`,
+     `outputTokens -> completion`, `cachedInputTokens -> cached`, and
+     `totalTokens -> total`; and puts other usage plus Task, Artifact, logical
+     source, termination, and cleanup facts in `metadata`. Admission or terminal
+     execution failure returns `error`.
 
 ### Acceptance Examples
 
@@ -497,6 +550,17 @@ registry, or another profile configuration file for the initial use case.
 - AE20. Unrelated Message metadata survives request processing. Every profiled
   A2A operation requires activation, and a terminal Task may contain the single
   integrity Artifact plus referenced produced Artifacts.
+- AE21. The AI Evals Promptfoo provider loads one repository-mode and one
+  snapshot-mode YAML instance. Repository mode materializes the complete
+  configured set and sends only optional revision overrides keyed by declared
+  name; snapshot mode sends one declared name and immutable digests. Neither
+  request source metadata nor response source-identity metadata contains a Git
+  URL, OCI repository, or destination.
+  Both calls return scorable `ProviderResponse.output`, the exact normalized
+  token mapping, and Task/Artifact/logical-provenance metadata. Per-test
+  repository overrides accept only full commits. An unknown variable member,
+  mutable revision, origin, destination, or undeclared name fails before
+  submission.
 
 ### Success Criteria
 
@@ -505,6 +569,9 @@ registry, or another profile configuration file for the initial use case.
 - The official A2A client exercises required-extension negotiation, send,
   stream, get, list, subscribe, replay, cancel, terminal cancel errors, Artifact
   retrieval, and expiry.
+- An AI Evals-style Promptfoo custom-provider fixture consumes representative
+  YAML for both source modes and maps a terminal Task to `ProviderResponse`
+  without adding Promptfoo to the AllAgents runtime.
 - Built-in Codex/Pi and exposed profile targets pass one conformance suite,
   including reserved-ID collisions.
 - Direct Git and OCI snapshot fixtures produce equivalent validated workspace
@@ -721,6 +788,87 @@ profiles:
 The nested object is strict and initially contains only `expose: true`. Absence
 means not exposed. Exposure requires a launcher, an initial supported backend,
 and a healthy installed profile with matching declaration digest.
+
+**Promptfoo custom-provider consumption**
+
+AI Evals implements Promptfoo's
+[`ApiProvider`](https://www.promptfoo.dev/docs/providers/custom-api/) in
+TypeScript. Its `constructor(options: ProviderOptions)` stores
+`options.id ?? "allagents-a2a"` and validates `options.config`; `id()` returns
+that stored value. Its
+`callApi(prompt, context, options)` uses `context.vars` for test data and
+`options?.abortSignal` for request cancellation.
+
+Static YAML defines the source mode and every logical name:
+
+```yaml
+providers:
+  - id: file://./providers/allagents-a2a.ts
+    label: codex-direct
+    config:
+      endpoint: http://allagents-gateway.tailnet:4732
+      target: codex
+      source:
+        kind: repositories
+        revisions:
+          allagents: 0123456789abcdef0123456789abcdef01234567
+
+  - id: file://./providers/allagents-a2a.ts
+    label: codex-evaluation-snapshot
+    config:
+      endpoint: http://allagents-gateway.tailnet:4732
+      target: codex
+      source:
+        kind: workspaceSnapshot
+        snapshot: evaluation
+        digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        workspaceManifestDigest: sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+
+tests:
+  - description: direct repositories at an exact commit
+    providers: [codex-direct]
+    vars:
+      allagentsSource:
+        revisions:
+          allagents: fedcba9876543210fedcba9876543210fedcba98
+
+  - description: immutable prebuilt workspace
+    providers: [codex-evaluation-snapshot]
+    vars:
+      allagentsSource:
+        digest: sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+        workspaceManifestDigest: sha256:6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345
+```
+
+`allagents` is a declared repository name used only as a revision-override key;
+repository mode still materializes the complete configured set. `evaluation` is
+the logical snapshot handle. The provider sends the source mode, optional named
+revisions, and immutable digests, not
+`https://github.com/EntityProcess/allagents.git` or
+`ghcr.io/entityprocess/allagents-workspaces`. The gateway resolves origins and
+credentials server-side and omits them from A2A source-identity responses.
+
+`context.vars.allagentsSource` is the only per-test override. In repository mode
+it may contain exactly `revisions`, whose keys must already exist in static
+`config.source.revisions` and whose values are full lowercase 40-hex commits.
+In snapshot mode it may contain exactly `digest` and/or
+`workspaceManifestDigest`, both full lowercase `sha256:` digests. Present leaves
+replace static leaves; absent leaves retain static values. Source kind,
+repository-name allowlist, and snapshot name remain static. Unknown members,
+mutable revisions, origins, destinations, credentials, and commands fail before
+A2A submission.
+
+Each `callApi` creates one invocation key and A2A Task. The provider sends
+`CancelTask` when its bounded deadline or `options?.abortSignal` fires after
+acceptance. It returns terminal text or the validated structured result as
+`ProviderResponse.output`. It maps gateway usage exactly as
+`inputTokens -> tokenUsage.prompt`, `outputTokens -> tokenUsage.completion`,
+`cachedInputTokens -> tokenUsage.cached`, and
+`totalTokens -> tokenUsage.total`; provider-specific counters stay in
+`metadata`. Task ID, Artifact references, logical source identity, termination,
+and cleanup evidence also remain in `metadata`, without origins or destination
+paths. Admission and terminal failures use `ProviderResponse.error`. This
+provider is AI Evals code; AllAgents has no Promptfoo runtime dependency.
 
 ### Error and Status Mapping
 
@@ -988,22 +1136,29 @@ messages never enter either carrier.
 ### U7. End-to-end delivery and documentation
 
 - **Goal:** Prove the built CLI and document the trusted-network operating model,
-  workspace configuration, credentials, sources, and risks.
-- **Requirements:** R1-R18; F1-F5; AE1-AE20.
+  workspace configuration, credentials, sources, Promptfoo consumption, and
+  risks.
+- **Requirements:** R1-R19; F1-F6; AE1-AE21.
 - **Files:** gateway guide/reference, configuration reference, README, CHANGELOG,
-  real example project/user workspaces, E2E fixtures, release evidence.
+  real example project/user workspaces, AI Evals-style Promptfoo YAML and custom-
+  provider contract fixture, E2E fixtures, release evidence.
 - **Approach:** After the final implementation review is resolved, build the CLI;
   create project and user workspaces under `/tmp/`; expose Codex/Pi fixture
   targets; serve on loopback and `0.0.0.0`; acquire from local Git and OCI
   fixtures; run the official A2A client through negotiation, success, replay,
-  cancellation, deadline, shutdown, restart, and expiry. Document that network
-  reachability grants full authority and App/OCI secrets are process inputs, not
-  YAML.
+  cancellation, deadline, shutdown, restart, and expiry. Run a minimal custom-
+  provider fixture through one configured-repository-set invocation and one
+  named-snapshot invocation, proving Promptfoo configuration carries only
+  source mode, named revision overrides, snapshot handle, and digests while the
+  gateway resolves origins. Document that network reachability grants full
+  authority and App/OCI secrets are process inputs, not YAML.
 - **Execution note:** The green smoke test must exercise the same built command
   and `/tmp/` workspace shape as the recorded red E2E, not a test-only server.
+  The consumer fixture models AI Evals but remains test/documentation code; the
+  AllAgents runtime does not import Promptfoo.
 - **Verification:** `bun run build`, focused and full tests, typecheck, lint, docs
-  build, schema drift check, and exact red/green E2E commands/results recorded in
-  the PR description.
+  build, schema drift check, custom-provider contract fixture, and exact
+  red/green E2E commands/results recorded in the PR description.
 
 ---
 
@@ -1024,12 +1179,13 @@ messages never enter either carrier.
 | Structured result | U1, U4-U6 | Exact subset and envelope, valid/invalid/not-produced states, Artifact cardinality, no false publication |
 | Repository quality | All | Build, focused/full tests, typecheck, lint, schema check, docs build |
 | Built CLI E2E | U7 | Recorded red then green built command under `/tmp/`, both sources, auth isolation, replay/cancel/deadline/shutdown/restart |
+| Promptfoo consumption | U7 | AI Evals-style YAML for both source modes; request source metadata and gateway-generated response provenance omit origins; terminal Task maps to `ProviderResponse` |
 
 ## Definition of Done
 
 ### Global
 
-- Every R1-R18 requirement is implemented or explicitly demonstrated by a
+- Every R1-R19 requirement is implemented or explicitly demonstrated by a
   passing acceptance scenario.
 - The gateway starts with no `gateway.yaml` or `worker.yaml`, defaults to
   loopback, and accepts explicit `0.0.0.0`.
@@ -1042,6 +1198,11 @@ messages never enter either carrier.
   request and result-schema grammar, exact error mapping, integrity/produced
   Artifacts, canonicalization, retention capacity, and cancellation semantics
   pass official-client contract fixtures.
+- AI Evals-style Promptfoo YAML selects repository mode with optional named
+  revision overrides, or snapshot mode with one logical handle and immutable
+  digests. The custom-provider fixture maps one `callApi` to one Task, propagates
+  cancellation, normalizes usage, and returns output, Artifacts, and logical
+  provenance without sending origins or adding a Promptfoo runtime dependency.
 - Repository and OCI modes produce one validated workspace-manifest contract,
   never fall back across source modes, and retain truthful provenance.
 - GitHub App eligibility/unknown state, acquisition sub-budget, no-installation
@@ -1071,5 +1232,6 @@ messages never enter either carrier.
 - U5: Codex passes shared conformance and optional credentialed smoke evidence is
   recorded when credentials exist.
 - U6: Pi passes the same conformance and malformed RPC cannot produce success.
-- U7: Final review is resolved; built CLI red/green E2E under `/tmp/`, complete
-  repository gates, schemas, docs, and reproducible PR instructions are complete.
+- U7: Final review is resolved; built CLI red/green E2E under `/tmp/`, Promptfoo
+  custom-provider contract fixture, complete repository gates, schemas, docs,
+  and reproducible PR instructions are complete.

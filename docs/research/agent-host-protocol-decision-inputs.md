@@ -7,9 +7,9 @@ northbound contract. Treat the Agent Host Protocol (AHP) as an optional future
 protocol behind the gateway for a compatible backend or beside it for a
 collaborative session client.
 
-AHP does not replace ADR 0002's Task identity, caller-scoped idempotency,
-authorization, immutable source handling, cleanup, terminal evidence, or
-bounded result retention.
+AHP does not replace ADR 0002's deployment-wide Task identity and idempotency,
+network trust boundary, immutable source handling, cleanup, terminal evidence,
+or bounded result retention.
 
 The initial backend set is Codex and Pi; OpenCode is deferred. They are peer
 execution adapters behind one conformance contract; provider-specific process,
@@ -27,14 +27,14 @@ source inspection, and full protocol comparison live in the AI Research Wiki:
 
 | Concern | AllAgents A2A gateway | AHP host/session layer |
 |---|---|---|
-| Northbound consumer | AI Evals and future remote execution clients | IDE, browser, CLI, or collaborative operator client |
+| Northbound consumer | AI Evals and future trusted-network execution clients | IDE, browser, CLI, or collaborative operator client |
 | Primary lifecycle | One addressable Task per accepted execution | Long-running session/chat with shared clients |
 | Public identity | Agent Card, Message, Task, Artifact, invocation key | Host, client, channel, session, chat, turn, tool call |
-| State | Task status, messages, artifacts, retention | Snapshots, ordered actions, reducers, reconnect |
-| Authorization | Authenticate/authorize service caller | Endpoint/resource auth and tool confirmation |
+| State | Deployment-wide Task status, messages, artifacts, retention | Snapshots, ordered actions, reducers, reconnect |
+| Authorization | Network reachability; no application caller identity | Endpoint/resource auth and tool confirmation |
 | Cancellation | Cancel Task, abort backend, terminate, clean up, report terminal outcome | Cancel interactive turn and call provider-native abort |
 | Evidence | Source, output, usage/cost, traces, file changes, artifacts, failures, cleanup, completeness, provenance | Live changesets and provider/session state |
-| Isolation | Selected worker/backend boundary | Not supplied by the shared host process |
+| Isolation | Single-process supervisor with invocation-owned child containment | Not supplied by the shared host process |
 
 The identities must be correlated rather than reused. At minimum retain the A2A
 Task ID, AllAgents invocation key, backend execution/session ID,
@@ -45,16 +45,17 @@ provider-native thread/chat ID, and trace ID.
 1. Define one narrow backend adapter contract for create/invoke, progress,
    permission decisions, cancellation, terminalization, evidence collection,
    shutdown, native evidence passthrough, and explicit capabilities.
-2. Keep gateway responsibilities separate from worker/backend responsibilities.
-   The gateway owns caller authorization, Task/idempotency identity, backend
-   selection, normalized results, cancellation propagation, and retention.
-   Workers own source materialization, provider processes, mutable workspaces,
-   evidence capture, process termination, and cleanup.
+2. Keep A2A and backend responsibilities separate inside one gateway service.
+   The A2A layer owns deployment-wide Task/idempotency identity, backend
+   selection, normalized results, cancellation propagation, and retention. The
+   invocation supervisor owns source acquisition, provider child processes,
+   mutable workspaces, evidence capture, process termination, and cleanup.
 3. Propagate `CancelTask` and deadlines through the adapter to the
    provider-native abort primitive, then persist terminal status and cleanup
    outcome. Transport closure is not cancellation.
-4. Separate caller authorization, execution permission policy, and
-   provider/resource credentials.
+4. Separate network authorization, execution permission policy, and
+   provider/resource credentials. The initial gateway has no application caller
+   identity.
 5. Combine normalized file operations with bounded provider-native
    diffs/checkpoints/trajectories. Declare attribution limits and
    incompleteness rather than treating the final working-tree diff as exact
@@ -76,6 +77,8 @@ provider-native thread/chat ID, and trace ID.
 - Active-session reconnection beyond A2A Task lookup, subscription, and
   terminal result retrieval.
 - AHP local endpoint discovery, SSH host selection, and tunnel multiplexing.
+- Remote worker ownership, routing, and session transport until the initial
+  single-process gateway needs a separate execution host.
 - Generic changeset review/operation state.
 - Long-lived session/chat catalogs and provider-native session adoption.
 

@@ -15,15 +15,15 @@ Choose one runner at the start of the task and use it for discovery, execution, 
 2. Otherwise, if `npx` is available, use `npx --yes allagents`.
 3. If neither is available, stop and ask the user to install AllAgents or Node.js with npm.
 
-Examples below use `allagents`; substitute the complete `npx --yes allagents` prefix when that is the selected runner. Do not mix runners within one operation.
+Examples and returned `help_command` values use the canonical `allagents` token. When `npx --yes allagents` is the selected runner, replace only that leading token before executing every discovery, execution, and verification command. Do not mix runners within one operation.
 
 ## Load the current contract
 
 1. Confirm the selected runner with `allagents --version`.
-2. Discover the current top-level surface with `allagents --help --json`.
-3. Select a command group from that response and load it with `allagents <group> --help --json`.
-4. Before execution, load the selected leaf with `allagents <command> --help --json`.
-5. Follow the returned `when_to_use`, positionals, options, examples, interaction requirement, output schema, and JSON field allowlist.
+2. Discover the concise top-level index with `allagents --help --json`.
+3. Choose an entry, rewrite its leading runner token when required, and execute its `help_command`; group responses reveal only their immediate children.
+4. Continue through nested groups until a leaf command returns its full contract.
+5. Follow the leaf's `when_to_use`, positionals, options, examples, interaction requirement, expected output, output schema, and JSON field allowlist.
 
 The structured response is authoritative. Do not rely on remembered flags, copied examples, aliases, destination behavior, or mutation semantics. If the installed CLI does not advertise an operation, do not invent it.
 

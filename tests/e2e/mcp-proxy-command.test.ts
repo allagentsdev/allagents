@@ -36,14 +36,41 @@ describe('mcp public command help', () => {
     expect(result.stdout).not.toContain('Expose a remote HTTP MCP server locally over stdio');
   });
 
-  test('exposes add and reauth through structured JSON help', () => {
+  test('exposes complete leaf context for add and reauth', () => {
     const addResult = runCli(['mcp', 'add', '--help', '--json']);
     const reauthResult = runCli(['--json', 'mcp', 'reauth', '-h']);
 
     expect(addResult.exitCode).toBe(0);
-    expect(JSON.parse(addResult.stdout).command).toBe('mcp add');
+    expect(JSON.parse(addResult.stdout)).toMatchObject({
+      command: 'mcp add',
+      description: expect.any(String),
+      when_to_use: expect.any(String),
+      expected_output: expect.stringContaining('reconciles installed clients'),
+      interaction: 'conditional',
+      positionals: expect.arrayContaining([
+        expect.objectContaining({ name: 'name', required: true }),
+        expect.objectContaining({ name: 'commandOrUrl', required: true }),
+      ]),
+      options: expect.arrayContaining([
+        expect.objectContaining({ flag: '--scope' }),
+        expect.objectContaining({ flag: '--profile' }),
+      ]),
+      examples: expect.arrayContaining([
+        expect.stringContaining('allagents mcp add'),
+      ]),
+      output_schema: expect.objectContaining({
+        destination: expect.any(Object),
+        name: 'string',
+      }),
+      json_fields: ['destination', 'name', 'config', 'mcpResults', 'sync'],
+    });
     expect(reauthResult.exitCode).toBe(0);
-    expect(JSON.parse(reauthResult.stdout).command).toBe('mcp reauth');
+    expect(JSON.parse(reauthResult.stdout)).toMatchObject({
+      command: 'mcp reauth',
+      interaction: 'required',
+      expected_output: expect.stringContaining('Clears cached OAuth credentials'),
+      json_fields: [],
+    });
   });
 
   test('keeps exact bare command help human-readable', () => {
@@ -89,8 +116,14 @@ describe('mcp public command help', () => {
     expect(result.stdout.trim()).toBe('"allagents"');
   });
 
-  test('covers workspace aliases and workspace-only command metadata', () => {
+  test('progressively discloses workspace commands and nested repo commands', () => {
     const groupResult = runCli(['workspace', '--help', '--json']);
+    const repoGroupResult = runCli([
+      'workspace',
+      'repo',
+      '--help',
+      '--json',
+    ]);
     const repoResult = runCli([
       'workspace',
       'repo',
@@ -102,23 +135,50 @@ describe('mcp public command help', () => {
 
     expect(groupResult.exitCode).toBe(0);
     const group = JSON.parse(groupResult.stdout) as {
-      commands: Array<{ command: string }>;
+      commands: Array<{
+        command: string;
+        kind: 'command' | 'group';
+        help_command: string;
+      }>;
     };
-    expect(group.commands.map(({ command }) => command)).toEqual([
-      'workspace init',
-      'workspace setup',
-      'workspace sync',
-      'workspace status',
-      'workspace prune',
+    expect(group.commands).toEqual([
+      expect.objectContaining({ command: 'workspace init', kind: 'command' }),
+      expect.objectContaining({ command: 'workspace setup', kind: 'command' }),
+      expect.objectContaining({ command: 'workspace sync', kind: 'command' }),
+      expect.objectContaining({ command: 'workspace status', kind: 'command' }),
+      expect.objectContaining({ command: 'workspace prune', kind: 'command' }),
+      expect.objectContaining({
+        command: 'workspace repo',
+        kind: 'group',
+        help_command: 'allagents workspace repo --help --json',
+      }),
+    ]);
+    for (const command of group.commands) {
+      expect(command.help_command).toBe(
+        `allagents ${command.command} --help --json`,
+      );
+    }
+    expect(repoGroupResult.exitCode).toBe(0);
+    const repoGroup = JSON.parse(repoGroupResult.stdout) as {
+      commands: Array<{ command: string; help_command: string }>;
+    };
+    expect(repoGroup.commands.map(({ command }) => command)).toEqual([
       'workspace repo add',
       'workspace repo remove',
       'workspace repo list',
     ]);
+    for (const command of repoGroup.commands) {
+      expect(command.help_command).toBe(
+        `allagents ${command.command} --help --json`,
+      );
+    }
     expect(repoResult.exitCode).toBe(0);
     expect(JSON.parse(repoResult.stdout)).toMatchObject({
       command: 'workspace repo add',
       positionals: [{ name: 'path', required: true }],
       output_schema: { repo: 'string | null' },
+      expected_output: expect.any(String),
+      interaction: 'none',
     });
   });
 
@@ -171,23 +231,46 @@ describe('mcp public command help', () => {
     expect(result.stdout).not.toContain('"when_to_use"');
   });
 
-  test('exposes the full command tree through structured JSON help', () => {
+  test('exposes a concise root index before group and leaf details', () => {
     const result = runCli(['--help', '--json']);
 
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout) as {
       name: string;
-      commands: Array<{ command: string }>;
+      commands: Array<{
+        command: string;
+        kind: 'command' | 'group';
+        help_command: string;
+        options?: unknown;
+        output_schema?: unknown;
+      }>;
     };
     expect(parsed.name).toBe('allagents');
-    expect(
-      parsed.commands.some((command) => command.command === 'mcp add'),
-    ).toBe(true);
-    expect(
-      parsed.commands.some(
-        (command) => command.command === 'plugin skills list',
-      ),
-    ).toBe(true);
+    expect(parsed.commands.map(({ command }) => command)).toEqual([
+      'init',
+      'update',
+      'status',
+      'workspace',
+      'mcp',
+      'plugin',
+      'skill',
+      'self',
+      'profile',
+    ]);
+    expect(parsed.commands).toContainEqual(
+      expect.objectContaining({
+        command: 'mcp',
+        kind: 'group',
+        help_command: 'allagents mcp --help --json',
+      }),
+    );
+    for (const command of parsed.commands) {
+      expect(command.help_command).toBe(
+        `allagents ${command.command} --help --json`,
+      );
+      expect(command.options).toBeUndefined();
+      expect(command.output_schema).toBeUndefined();
+    }
   });
 
   test('rejects field selection for structured JSON help', () => {

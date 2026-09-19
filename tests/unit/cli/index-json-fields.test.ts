@@ -25,4 +25,27 @@ describe('CLI JSON field validation', () => {
     expect(proc.stderr.toString()).toContain('Available fields:');
     expect(proc.stdout.toString()).toBe('');
   });
+
+  test('derives JSON fields from the command output schema', () => {
+    const proc = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        cliEntry,
+        '--json=definitely-invalid',
+        'mcp',
+        'list',
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(proc.exitCode).toBe(2);
+    expect(proc.stderr.toString()).toContain(
+      'Unknown JSON field: "definitely-invalid"',
+    );
+    expect(proc.stderr.toString()).toContain('  destination');
+    expect(proc.stderr.toString()).toContain('  servers');
+    expect(proc.stderr.toString()).toContain('  total');
+    expect(proc.stdout.toString()).toBe('');
+  });
 });

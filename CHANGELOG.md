@@ -31,9 +31,12 @@
 
 ### Added
 
-- Added a first-party AllAgents skill that discovers current command contracts
-  through `--help --json` and guides workspace, plugin, skill, profile, and MCP
-  operations without relying on memorized flags.
+- Added a thin first-party AllAgents skill that treats the installed CLI as
+  authoritative and follows its progressive `--help --json` indexes and leaf
+  contracts instead of relying on memorized commands.
+- Added progressive machine-readable CLI help: concise root and group indexes
+  lead to leaf contracts with usage guidance, interaction requirements,
+  expected output, options, examples, and output schemas.
 
 - Added the official TradingView MCP plugin with OAuth-backed access to market
   data, analytics, watchlists, alerts, news, and screeners.

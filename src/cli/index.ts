@@ -13,7 +13,7 @@ import {
   syncCmd,
   workspaceCmd,
 } from './commands/workspace.js';
-import { conciseSubcommands } from './help.js';
+import { type AgentCommandMeta, conciseSubcommands } from './help.js';
 import {
   extractJqFlag,
   extractJsonFlag,
@@ -46,6 +46,33 @@ const app = conciseSubcommands({
   },
 });
 
+function hasHelpFlag(
+  args: readonly string[],
+  meta: AgentCommandMeta | undefined,
+): boolean {
+  const valueOptions = new Set(
+    (meta?.options ?? [])
+      .filter((option) => option.type === 'string')
+      .flatMap((option) => [option.flag, option.short].filter(Boolean)),
+  );
+  let consumesNext = false;
+
+  for (const arg of args) {
+    if (consumesNext) {
+      consumesNext = false;
+      continue;
+    }
+    if (arg === '--') break;
+    if (valueOptions.has(arg)) {
+      consumesNext = true;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') return true;
+  }
+
+  return false;
+}
+
 const rawArgs = process.argv.slice(2);
 const { args: argsNoJson, json, jsonFields } = extractJsonFlag(rawArgs);
 const { args: argsNoJq, jqExpr } = extractJqFlag(argsNoJson);
@@ -59,11 +86,18 @@ if (jqExpr && !json) {
   process.exit(2);
 }
 
-// Validate `--json=<fields>` against the meta allowlist for the invoked command.
+// Help owns its field-selection error so the structured formatter can explain
+// that help output is not filterable. Option values and positionals that happen
+// to equal a help token remain ordinary command input.
+const requestsHelp = hasHelpFlag(finalArgs, commandMeta);
 let validatedFields: string[] | undefined;
 if (jsonFields) {
-  const result = validateJsonFields(jsonFields, commandMeta);
-  validatedFields = result ? [...result] : undefined;
+  if (requestsHelp) {
+    validatedFields = [...jsonFields];
+  } else {
+    const result = validateJsonFields(jsonFields, commandMeta);
+    validatedFields = result ? [...result] : undefined;
+  }
 }
 
 setJsonMode(json, {

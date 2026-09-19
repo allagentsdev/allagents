@@ -166,6 +166,15 @@ export function extractJqFlag(args: string[]): {
   return { args: next, jqExpr: expr };
 }
 
+export function jsonFieldAllowlist(
+  meta: AgentCommandMeta | undefined,
+): readonly string[] {
+  if (meta?.jsonFields && meta.jsonFields.length > 0) {
+    return meta.jsonFields;
+  }
+  return Object.keys(meta?.outputSchema ?? {});
+}
+
 /**
  * Validate requested `--json=<fields>` against a meta's allowlist. Exits with
  * a sorted "Available fields" message on any unknown field.
@@ -177,9 +186,8 @@ export function validateJsonFields(
   meta: AgentCommandMeta | undefined,
 ): readonly string[] | undefined {
   if (!fields || fields.length === 0) return undefined;
-  const allow = meta?.jsonFields;
-  if (!allow || allow.length === 0) {
-    // No allowlist declared → accept any field (no validation).
+  const allow = jsonFieldAllowlist(meta);
+  if (allow.length === 0) {
     return fields;
   }
   const unknown = fields.find((f) => !allow.includes(f));

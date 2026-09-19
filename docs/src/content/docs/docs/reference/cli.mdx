@@ -14,9 +14,18 @@ allagents mcp --help --json
 allagents mcp add --help --json
 ```
 
-Structured help includes usage guidance, options, examples, output schemas, and
-interaction requirements when available. `--help --json` and
-`--json --help` are equivalent when they follow the command path.
+Structured help is progressively disclosed:
+
+1. Root help returns a concise index of top-level commands and groups.
+2. Group help returns only its immediate commands and nested groups.
+3. Each index entry provides a `help_command` for the next level.
+4. Leaf help returns the complete contract: when to use the command,
+   positionals, options, examples, interaction requirements, expected output,
+   output schema, and JSON field allowlist.
+
+This keeps command discovery small while making side effects, automation
+requirements, and output expectations available before execution. `--help
+--json` and `--json --help` are equivalent when they follow the command path.
 Field selection with `--json=<fields>` is not supported for help output.
 
 ## Top-Level Commands

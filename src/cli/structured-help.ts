@@ -1,6 +1,10 @@
 import type { HelpFormatter } from 'cmd-ts';
 import type { AgentCommandMeta } from './help.js';
-import { formatJsonValue, getJsonFields } from './json-output.js';
+import {
+  formatJsonValue,
+  getJsonFields,
+  jsonFieldAllowlist,
+} from './json-output.js';
 import {
   mcpAddMeta,
   mcpGetMeta,
@@ -103,6 +107,19 @@ const registeredCommands: RegisteredCommand[] = [
   { command: 'profile remove', meta: profileRemoveMeta },
 ];
 
+const groupDescriptions: Readonly<Record<string, string>> = {
+  workspace: 'Manage workspace lifecycle, synchronization, and repositories',
+  'workspace repo': 'Manage repositories declared in the current workspace',
+  mcp: 'Manage MCP servers in project, user, and profile destinations',
+  plugin: 'Manage plugins, marketplaces, and plugin-scoped skills',
+  'plugin marketplace': 'Manage plugin marketplace registrations and contents',
+  'plugin skills':
+    'Manage skills through the plugin compatibility command path',
+  skill: 'Discover, install, configure, and update skills',
+  self: 'Manage the installed AllAgents CLI',
+  profile: 'Manage declared and installed global agent profiles',
+};
+
 function formatStructuredHelp(
   meta: AgentCommandMeta,
   command = meta.command,
@@ -111,6 +128,8 @@ function formatStructuredHelp(
     command,
     description: meta.description,
     when_to_use: meta.whenToUse,
+    expected_output: meta.expectedOutput,
+    interaction: meta.interaction ?? 'none',
   };
   if (meta.positionals && meta.positionals.length > 0) {
     result.positionals = meta.positionals;
@@ -122,12 +141,52 @@ function formatStructuredHelp(
   if (meta.outputSchema) {
     result.output_schema = meta.outputSchema;
   }
-  if (meta.interaction) {
-    result.interaction = meta.interaction;
+  result.json_fields = [...jsonFieldAllowlist(meta)];
+  return result;
+}
+
+function helpCommand(command: string): string {
+  return `allagents ${command} --help --json`;
+}
+
+function formatIndexEntry(command: string): Record<string, unknown> {
+  const exact = registeredCommands.find((entry) => entry.command === command);
+  if (exact) {
+    return {
+      command,
+      kind: 'command',
+      description: exact.meta.description,
+      when_to_use: exact.meta.whenToUse,
+      help_command: helpCommand(command),
+    };
   }
-  if (meta.jsonFields && meta.jsonFields.length > 0) {
-    result.json_fields = [...meta.jsonFields];
+
+  return {
+    command,
+    kind: 'group',
+    description:
+      groupDescriptions[command] ?? `Commands grouped under ${command}`,
+    help_command: helpCommand(command),
+  };
+}
+
+function immediateCommandIndex(commandPath: string): Record<string, unknown>[] {
+  const prefix = commandPath ? `${commandPath} ` : '';
+  const seen = new Set<string>();
+  const result: Record<string, unknown>[] = [];
+
+  for (const registered of registeredCommands) {
+    if (!registered.command.startsWith(prefix)) continue;
+    const remainder = registered.command.slice(prefix.length);
+    const next = remainder.split(' ')[0];
+    if (!next) continue;
+
+    const command = commandPath ? `${commandPath} ${next}` : next;
+    if (seen.has(command)) continue;
+    seen.add(command);
+    result.push(formatIndexEntry(command));
   }
+
   return result;
 }
 
@@ -174,9 +233,8 @@ function buildStructuredHelp(
       version,
       description:
         'CLI tool for managing multi-repo AI agent workspaces with plugin synchronization',
-      commands: registeredCommands.map(({ command, meta }) =>
-        formatStructuredHelp(meta, command),
-      ),
+      next: 'Choose a command or group and run its help_command for the next level.',
+      commands: immediateCommandIndex(''),
     };
   }
 
@@ -187,15 +245,15 @@ function buildStructuredHelp(
     return formatStructuredHelp(match.meta, match.command);
   }
 
-  const matches = registeredCommands.filter((command) =>
-    command.command.startsWith(`${commandPath} `),
-  );
-  if (matches.length > 0) {
+  const commands = immediateCommandIndex(commandPath);
+  if (commands.length > 0) {
     return {
       name: commandPath,
-      commands: matches.map(({ command, meta }) =>
-        formatStructuredHelp(meta, command),
-      ),
+      description:
+        groupDescriptions[commandPath] ??
+        `Commands grouped under ${commandPath}`,
+      next: 'Choose a command or group and run its help_command for the next level.',
+      commands,
     };
   }
 

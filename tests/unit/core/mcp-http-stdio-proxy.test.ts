@@ -8,6 +8,11 @@ import {
   validateOAuthCallbackUrl,
   resolveMcpHeaderReferences,
 } from '../../../src/core/mcp-http-stdio-proxy.js';
+import {
+  connectMcpHttpClient,
+  createOriginSafeMcpFetch,
+} from '../../../src/core/mcp-http-client.js';
+
 
 describe('resolveMcpHeaderReferences', () => {
   test('resolves exact environment references and preserves literal values', () => {
@@ -32,6 +37,86 @@ describe('resolveMcpHeaderReferences', () => {
         {},
       ),
     ).toThrow("missing environment variable 'TRADINGVIEW_TOKEN'");
+  });
+});
+
+describe('createOriginSafeMcpFetch', () => {
+  test('lets transport headers override configured headers at the MCP origin', async () => {
+    const calls: Array<{ url: string; headers: Headers; redirect?: RequestRedirect }> =
+      [];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {
+        Authorization: 'configured-secret',
+        'Content-Length': '999',
+        'X-Configured': 'same-origin-only',
+      },
+      async (input, init) => {
+        calls.push({
+          url: input.toString(),
+          headers: new Headers(init?.headers),
+          redirect: init?.redirect,
+        });
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    await mcpFetch(new URL('https://mcp.example/rpc'), {
+      headers: {
+        Authorization: 'Bearer sdk-token',
+        Accept: 'application/json',
+      },
+    });
+
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer sdk-token');
+    expect(calls[0]?.headers.get('accept')).toBe('application/json');
+    expect(calls[0]?.headers.get('content-length')).toBeNull();
+    expect(calls[0]?.headers.get('x-configured')).toBe('same-origin-only');
+    expect(calls[0]?.redirect).toBe('error');
+  });
+
+  test('never forwards configured headers to another origin', async () => {
+    const calls: Headers[] = [];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      { Authorization: 'configured-secret', 'X-Configured': 'private' },
+      async (_input, init) => {
+        calls.push(new Headers(init?.headers));
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    await mcpFetch(new URL('https://identity.example/token'), {
+      headers: { Accept: 'application/json' },
+    });
+
+    expect(calls[0]?.get('authorization')).toBeNull();
+    expect(calls[0]?.get('x-configured')).toBeNull();
+    expect(calls[0]?.get('accept')).toBe('application/json');
+  });
+});
+
+describe('connectMcpHttpClient', () => {
+  test('closes a created transport when initialization fails', async () => {
+    let transportSignal: AbortSignal | undefined;
+
+    await expect(
+      connectMcpHttpClient('https://mcp.example/rpc', {
+        allowAuthorization: false,
+        fetch: async (_input, init) => {
+          transportSignal = init?.signal ?? undefined;
+          if (init?.method === 'GET') {
+            return new Response(null, { status: 405 });
+          }
+          return new Response('initialization failed', {
+            status: 500,
+            statusText: 'Internal Server Error',
+          });
+        },
+      }),
+    ).rejects.toThrow('Streamable HTTP error');
+
+    expect(transportSignal?.aborted).toBe(true);
   });
 });
 

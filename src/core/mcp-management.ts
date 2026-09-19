@@ -7,7 +7,7 @@ import { parseUserWorkspaceConfig } from '../utils/workspace-parser.js';
 import {
   connectHttpMcpServer,
   type OAuthCallbackUrlReader,
-} from './mcp-http-stdio-proxy.js';
+} from './mcp-http-client.js';
 import {
   addMcpServer,
   getMcpServer,

@@ -1,0 +1,10 @@
+{
+  "name": "tradingview",
+  "description": "Official TradingView market data and analytics for quotes, technicals, fundamentals, news, watchlists, alerts, and screeners.",
+  "author": {
+    "name": "AllAgents"
+  },
+  "version": "1.0.0",
+  "category": "finance",
+  "homepage": "https://github.com/allagentsdev/allagents/tree/main/plugins/tradingview"
+}

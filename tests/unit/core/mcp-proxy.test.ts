@@ -7,6 +7,9 @@ import {
   applyMcpProxy,
 } from '../../../src/core/mcp-proxy.js';
 import type { McpProxyConfig } from '../../../src/models/workspace-config.js';
+import packageJson from '../../../package.json';
+
+const packageRef = `allagents@${packageJson.version}`;
 
 function makeTempDir(): string {
   const dir = join(tmpdir(), `allagents-mcp-proxy-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -34,6 +37,15 @@ describe('shouldProxy', () => {
     expect(shouldProxy('my-api', 'codex', config)).toBe(true);
   });
 
+  test('returns true for every client when a server uses the wildcard', () => {
+    const config: McpProxyConfig = {
+      clients: [],
+      servers: { 'my-api': { proxy: ['*'] } },
+    };
+    expect(shouldProxy('my-api', 'claude', config)).toBe(true);
+    expect(shouldProxy('my-api', 'future-client', config)).toBe(true);
+  });
+
   test('returns true when client is in both default and per-server', () => {
     const config: McpProxyConfig = {
       clients: ['claude'],
@@ -59,8 +71,51 @@ describe('applyMcpProxy', () => {
     const config: McpProxyConfig = { clients: ['claude'] };
     const result = applyMcpProxy(servers, 'claude', config);
     expect(result.get('deepwiki')).toEqual({
-      command: 'allagents',
-      args: ['mcp', 'proxy', 'https://mcp.deepwiki.com/mcp'],
+      command: 'npx',
+      args: [
+        '-y',
+        packageRef,
+        'mcp',
+        'proxy',
+        'https://mcp.deepwiki.com/mcp',
+      ],
+    });
+  });
+
+  test('includes the profile selector only for profile-owned bridges', () => {
+    const servers = new Map<string, unknown>([
+      ['tradingview', { url: 'https://mcp.tradingview.com/mcp' }],
+    ]);
+    const config: McpProxyConfig = {
+      clients: [],
+      servers: { tradingview: { proxy: ['codex'] } },
+    };
+
+    expect(
+      applyMcpProxy(servers, 'codex', config, { profile: 'markets' }).get(
+        'tradingview',
+      ),
+    ).toEqual({
+      command: 'npx',
+      args: [
+        '-y',
+        packageRef,
+        'mcp',
+        'proxy',
+        'https://mcp.tradingview.com/mcp',
+        '--profile',
+        'markets',
+      ],
+    });
+    expect(applyMcpProxy(servers, 'codex', config).get('tradingview')).toEqual({
+      command: 'npx',
+      args: [
+        '-y',
+        packageRef,
+        'mcp',
+        'proxy',
+        'https://mcp.tradingview.com/mcp',
+      ],
     });
   });
 
@@ -89,7 +144,7 @@ describe('applyMcpProxy', () => {
     ]);
     const config: McpProxyConfig = { clients: ['copilot'] };
     const result = applyMcpProxy(servers, 'copilot', config);
-    expect((result.get('http-server') as Record<string, unknown>).command).toBe('allagents');
+    expect((result.get('http-server') as Record<string, unknown>).command).toBe('npx');
     expect((result.get('stdio-server') as Record<string, unknown>).command).toBe('npx');
     expect((result.get('stdio-server') as Record<string, unknown>).args).toEqual(['some-mcp']);
   });
@@ -104,7 +159,7 @@ describe('applyMcpProxy', () => {
       servers: { 'my-api': { proxy: ['codex'] } },
     };
     const result = applyMcpProxy(servers, 'codex', config);
-    expect((result.get('my-api') as Record<string, unknown>).command).toBe('allagents');
+    expect((result.get('my-api') as Record<string, unknown>).command).toBe('npx');
     expect(result.get('other-api')).toEqual({ url: 'https://other.example.com/mcp' });
   });
 
@@ -121,8 +176,10 @@ describe('applyMcpProxy', () => {
     const config: McpProxyConfig = { clients: ['claude'] };
     const result = applyMcpProxy(servers, 'claude', config);
     expect(result.get('secure-api')).toEqual({
-      command: 'allagents',
+      command: 'npx',
       args: [
+        '-y',
+        packageRef,
         'mcp',
         'proxy',
         'https://api.example.com/mcp',
@@ -131,6 +188,42 @@ describe('applyMcpProxy', () => {
         '--header',
         'X-Test=1',
       ],
+    });
+  });
+
+  test('keeps profile secrets as environment bindings in generated bridge args', () => {
+    const servers = new Map<string, unknown>([
+      [
+        'secure-api',
+        {
+          url: 'https://api.example.com/mcp',
+          headers: { Authorization: '${TRADINGVIEW_TOKEN}' },
+        },
+      ],
+    ]);
+    const config: McpProxyConfig = {
+      clients: [],
+      servers: { 'secure-api': { proxy: ['codex'] } },
+    };
+
+    expect(
+      applyMcpProxy(servers, 'codex', config, { profile: 'markets' }).get(
+        'secure-api',
+      ),
+    ).toEqual({
+      command: 'npx',
+      args: [
+        '-y',
+        packageRef,
+        'mcp',
+        'proxy',
+        'https://api.example.com/mcp',
+        '--profile',
+        'markets',
+        '--header-env',
+        'Authorization=TRADINGVIEW_TOKEN',
+      ],
+      env: { TRADINGVIEW_TOKEN: '${TRADINGVIEW_TOKEN}' },
     });
   });
 });

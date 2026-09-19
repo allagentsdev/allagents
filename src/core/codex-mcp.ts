@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { executeCommand } from './native/types.js';
 import type { NativeCommandResult } from './native/types.js';
+import { executeCommand } from './native/types.js';
 import type { ValidatedPlugin } from './sync.js';
-import { collectMcpServers } from './vscode-mcp.js';
 import type { McpMergeResult } from './vscode-mcp.js';
+import { collectMcpServers } from './vscode-mcp.js';
 
 type ExecuteFn = (
   binary: string,
@@ -89,6 +89,7 @@ export async function syncCodexMcpServers(
     overwrittenServers: [],
     removedServers: [],
     trackedServers: [],
+    authoritative: true,
   };
 
   // Skip calling codex CLI entirely when there are no MCP servers to sync and nothing to remove
@@ -102,6 +103,8 @@ export async function syncCodexMcpServers(
     result.warnings.push(
       `Codex CLI not available or 'codex mcp list' failed: ${listResult.error ?? 'unknown error'}`,
     );
+    result.authoritative = false;
+    result.trackedServers = [...previouslyTracked];
     return result;
   }
 
@@ -111,6 +114,8 @@ export async function syncCodexMcpServers(
     existingNames = new Set(parsed.map((s) => s.name));
   } catch {
     result.warnings.push('Failed to parse codex mcp list output');
+    result.authoritative = false;
+    result.trackedServers = [...previouslyTracked];
     return result;
   }
 
@@ -135,6 +140,8 @@ export async function syncCodexMcpServers(
         result.warnings.push(
           `Unsupported MCP server config for '${name}', skipping`,
         );
+        result.authoritative = false;
+        if (previouslyTracked.has(name)) result.trackedServers.push(name);
         continue;
       }
 
@@ -144,6 +151,8 @@ export async function syncCodexMcpServers(
           result.warnings.push(
             `Failed to add MCP server '${name}': ${addResult.error ?? 'unknown error'}`,
           );
+          result.authoritative = false;
+          if (previouslyTracked.has(name)) result.trackedServers.push(name);
           continue;
         }
       }
@@ -172,6 +181,8 @@ export async function syncCodexMcpServers(
             result.warnings.push(
               `Failed to remove MCP server '${trackedName}': ${removeResult.error ?? 'unknown error'}`,
             );
+            result.authoritative = false;
+            result.trackedServers.push(trackedName);
             continue;
           }
         }
@@ -192,8 +203,10 @@ export async function syncCodexMcpServers(
  * Convert a TOML value to its string representation.
  */
 function toTomlValue(value: unknown): string {
-  if (typeof value === 'string') return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string')
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return String(value);
   if (Array.isArray(value)) return `[${value.map(toTomlValue).join(', ')}]`;
   return `"${String(value)}"`;
 }
@@ -201,7 +214,10 @@ function toTomlValue(value: unknown): string {
 /**
  * Generate TOML for a single MCP server entry.
  */
-export function serverToToml(name: string, config: Record<string, unknown>): string {
+export function serverToToml(
+  name: string,
+  config: Record<string, unknown>,
+): string {
   const lines: string[] = [`[mcp_servers.${name}]`];
   const envEntries: [string, unknown][] = [];
 
@@ -244,12 +260,18 @@ export function parseCodexConfigToml(content: string): {
 
   for (const line of lines) {
     // Match [mcp_servers.<name>] or [mcp_servers.<name>.env]
-    const sectionMatch = line.match(/^\[mcp_servers\.([^\].]+?)(?:\.[^\]]+)?\]$/);
+    const sectionMatch = line.match(
+      /^\[mcp_servers\.([^\].]+?)(?:\.[^\]]+)?\]$/,
+    );
     if (sectionMatch) {
       // Save previous server if any
       if (currentServer) {
-        serverSections.set(currentServer, (serverSections.get(currentServer) ?? '') +
-          (serverSections.has(currentServer) ? '\n' : '') + currentLines.join('\n'));
+        serverSections.set(
+          currentServer,
+          (serverSections.get(currentServer) ?? '') +
+            (serverSections.has(currentServer) ? '\n' : '') +
+            currentLines.join('\n'),
+        );
       }
       currentServer = sectionMatch[1] ?? null;
       if (currentServer) serverNames.add(currentServer);
@@ -262,8 +284,12 @@ export function parseCodexConfigToml(content: string): {
     if (otherSectionMatch) {
       // Save previous server if any
       if (currentServer) {
-        serverSections.set(currentServer, (serverSections.get(currentServer) ?? '') +
-          (serverSections.has(currentServer) ? '\n' : '') + currentLines.join('\n'));
+        serverSections.set(
+          currentServer,
+          (serverSections.get(currentServer) ?? '') +
+            (serverSections.has(currentServer) ? '\n' : '') +
+            currentLines.join('\n'),
+        );
         currentServer = null;
         currentLines = [];
       }
@@ -280,13 +306,20 @@ export function parseCodexConfigToml(content: string): {
 
   // Save last server if any
   if (currentServer) {
-    serverSections.set(currentServer, (serverSections.get(currentServer) ?? '') +
-      (serverSections.has(currentServer) ? '\n' : '') + currentLines.join('\n'));
+    serverSections.set(
+      currentServer,
+      (serverSections.get(currentServer) ?? '') +
+        (serverSections.has(currentServer) ? '\n' : '') +
+        currentLines.join('\n'),
+    );
   }
 
   return {
     serverNames,
-    nonMcpContent: nonMcpLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+    nonMcpContent: nonMcpLines
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
     serverSections,
   };
 }
@@ -342,12 +375,17 @@ export function syncCodexProjectMcpConfig(
     try {
       existingContent = readFileSync(configPath, 'utf-8');
     } catch {
-      result.warnings.push(`Could not read existing ${configPath}, starting fresh`);
+      result.warnings.push(
+        `Could not read existing ${configPath}, starting fresh`,
+      );
     }
   }
 
-  const { serverNames: existingNames, nonMcpContent, serverSections } =
-    parseCodexConfigToml(existingContent);
+  const {
+    serverNames: existingNames,
+    nonMcpContent,
+    serverSections,
+  } = parseCodexConfigToml(existingContent);
 
   // Track which servers to keep in the final output
   const finalServers = new Map<string, string>(serverSections);
@@ -357,12 +395,18 @@ export function syncCodexProjectMcpConfig(
     if (existingNames.has(name)) {
       if (hasTracking && previouslyTracked.has(name)) {
         // We own it — overwrite with new config
-        finalServers.set(name, serverToToml(name, config as Record<string, unknown>));
+        finalServers.set(
+          name,
+          serverToToml(name, config as Record<string, unknown>),
+        );
         result.overwritten++;
         result.overwrittenServers.push(name);
         result.trackedServers.push(name);
       } else if (force) {
-        finalServers.set(name, serverToToml(name, config as Record<string, unknown>));
+        finalServers.set(
+          name,
+          serverToToml(name, config as Record<string, unknown>),
+        );
         result.overwritten++;
         result.overwrittenServers.push(name);
         result.trackedServers.push(name);
@@ -372,7 +416,10 @@ export function syncCodexProjectMcpConfig(
         result.skippedServers.push(name);
       }
     } else {
-      finalServers.set(name, serverToToml(name, config as Record<string, unknown>));
+      finalServers.set(
+        name,
+        serverToToml(name, config as Record<string, unknown>),
+      );
       result.added++;
       result.addedServers.push(name);
       result.trackedServers.push(name);
@@ -383,7 +430,10 @@ export function syncCodexProjectMcpConfig(
   if (hasTracking) {
     const currentServerNames = new Set(pluginServers.keys());
     for (const trackedName of previouslyTracked) {
-      if (!currentServerNames.has(trackedName) && finalServers.has(trackedName)) {
+      if (
+        !currentServerNames.has(trackedName) &&
+        finalServers.has(trackedName)
+      ) {
         finalServers.delete(trackedName);
         result.removed++;
         result.removedServers.push(trackedName);
@@ -392,7 +442,8 @@ export function syncCodexProjectMcpConfig(
   }
 
   // Write back if changes occurred
-  const hasChanges = result.added > 0 || result.overwritten > 0 || result.removed > 0;
+  const hasChanges =
+    result.added > 0 || result.overwritten > 0 || result.removed > 0;
   if (hasChanges && !dryRun) {
     const parts: string[] = [];
     if (nonMcpContent) {

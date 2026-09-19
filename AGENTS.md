@@ -184,7 +184,4 @@ bun run build
 
 ## Interactive Testing
 
-### agent-tui
-- Use `agent-tui` when you need to exercise interactive terminal behavior manually.
-- Prefer testing the built CLI inside a temporary workspace so the interaction matches real user conditions.
-- When documenting manual verification, record the exact command, the temp workspace setup, and what terminal behavior you confirmed.
+- TUI navigation, prompt, copy, status, or recovery changes: use the installed `agent-tui` skill for terminal automation, then apply the AllAgents-specific acceptance criteria in [`docs/agent-guides/tui-dogfooding.md`](docs/agent-guides/tui-dogfooding.md) before implementation and final verification.

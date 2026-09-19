@@ -1,0 +1,10 @@
+{
+  "name": "allagents",
+  "description": "End-user guidance for managing workspaces, plugins, skills, profiles, clients, and MCP servers with the AllAgents CLI.",
+  "author": {
+    "name": "AllAgents"
+  },
+  "version": "1.0.0",
+  "category": "development",
+  "homepage": "https://github.com/allagentsdev/allagents/tree/main/plugins/allagents"
+}

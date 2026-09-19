@@ -1,10 +1,11 @@
 import {
-  ProfileMcpServerConfigSchema,
   type ClientType,
+  type McpServerConfig,
+  ProfileMcpServerConfigSchema,
+  ProfileMcpServerNameSchema,
 } from '../../../models/workspace-config.js';
 import type { ProfileSerializationInput } from '../types.js';
 
-const MCP_NAME_PATTERN = /^[a-zA-Z0-9_.-]{1,100}$/;
 const SENSITIVE_QUERY_KEY =
   /(?:^|[-_.])(auth|credential|key|password|secret|signature|token)(?:$|[-_.])/i;
 const SECRET_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
@@ -13,14 +14,17 @@ const SECRET_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 export function serializeProfileMcpServers(
   input: ProfileSerializationInput,
   client: ClientType,
-): Record<string, unknown> | null {
+): Record<string, McpServerConfig> | null {
   if (input.mcpServers === undefined) return null;
-  const selected: Record<string, unknown> = {};
+  const selected: Record<string, McpServerConfig> = {};
   for (const name of Object.keys(input.mcpServers).sort()) {
-    if (!MCP_NAME_PATTERN.test(name)) {
+    const nameValidation = ProfileMcpServerNameSchema.safeParse(name);
+    if (!nameValidation.success) {
       throw new Error(`Invalid profile MCP server name '${name}'`);
     }
-    const parsed = ProfileMcpServerConfigSchema.safeParse(input.mcpServers[name]);
+    const parsed = ProfileMcpServerConfigSchema.safeParse(
+      input.mcpServers[name],
+    );
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
       throw new Error(
@@ -37,10 +41,15 @@ export function serializeProfileMcpServers(
         throw new Error(`Invalid profile MCP server '${name}': URL is invalid`);
       }
       if (url.username || url.password) {
-        throw new Error(`Invalid profile MCP server '${name}': URL contains credentials`);
+        throw new Error(
+          `Invalid profile MCP server '${name}': URL contains credentials`,
+        );
       }
       for (const [key, value] of url.searchParams) {
-        if (SENSITIVE_QUERY_KEY.test(key) && !SECRET_REFERENCE_PATTERN.test(value)) {
+        if (
+          SENSITIVE_QUERY_KEY.test(key) &&
+          !SECRET_REFERENCE_PATTERN.test(value)
+        ) {
           throw new Error(
             `Invalid profile MCP server '${name}': secret query values must be exact \${ENV_VAR} references`,
           );

@@ -169,13 +169,37 @@ describe('syncCodexMcpServers', () => {
     };
 
     const result = await syncCodexMcpServers([makePlugin(pluginDir)], {
+      trackedServers: ['owned-server'],
       _mockExecute: mockExecute,
     });
 
     expect(result.added).toBe(0);
     expect(result.removed).toBe(0);
+    expect(result.authoritative).toBe(false);
+    expect(result.trackedServers).toEqual(['owned-server']);
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(result.warnings.some((w) => w.toLowerCase().includes('codex'))).toBe(true);
+  });
+
+  test('retains ownership when removing an orphan fails', async () => {
+    const mockExecute = (_binary: string, args: string[]): NativeCommandResult => {
+      if (args.includes('list')) {
+        return {
+          success: true,
+          output: JSON.stringify([{ name: 'old-server' }]),
+        };
+      }
+      return { success: false, output: '', error: 'temporary failure' };
+    };
+
+    const result = await syncCodexMcpServers([], {
+      trackedServers: ['old-server'],
+      _mockExecute: mockExecute,
+    });
+
+    expect(result.authoritative).toBe(false);
+    expect(result.trackedServers).toEqual(['old-server']);
+    expect(result.removed).toBe(0);
   });
 
   test('skips codex CLI call when no plugins have MCP servers and nothing previously tracked', async () => {

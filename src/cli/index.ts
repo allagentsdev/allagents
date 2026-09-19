@@ -1,33 +1,37 @@
 #!/usr/bin/env node
 
-import { run } from 'cmd-ts';
-import { conciseSubcommands } from './help.js';
-import { workspaceCmd, syncCmd, initCmd, statusCmd } from './commands/workspace.js';
-import { pluginCmd } from './commands/plugin.js';
+import { run, setDefaultHelpFormatter } from 'cmd-ts';
+import packageJson from '../../package.json';
 import { mcpCmd } from './commands/mcp.js';
-import { selfCmd } from './commands/self.js';
+import { pluginCmd } from './commands/plugin.js';
 import { skillsCmd } from './commands/plugin-skills.js';
 import { profileCmd } from './commands/profile.js';
+import { selfCmd } from './commands/self.js';
 import {
-  extractJsonFlag,
+  initCmd,
+  statusCmd,
+  syncCmd,
+  workspaceCmd,
+} from './commands/workspace.js';
+import { type AgentCommandMeta, conciseSubcommands } from './help.js';
+import {
   extractJqFlag,
+  extractJsonFlag,
   setJsonMode,
   validateJsonFields,
 } from './json-output.js';
+import { normalizeSkillArgs } from './skill-arg-normalizer.js';
 import {
-  extractAgentHelpFlag,
+  createStructuredHelpFormatter,
   findMetaByCommand,
-  printAgentHelp,
-} from './agent-help.js';
+} from './structured-help.js';
 import { getUpdateNotice } from './update-check.js';
-import { normalizeSkillArgs, normalizeSkillHelpArgs } from './skill-arg-normalizer.js';
-import packageJson from '../../package.json';
 
 const app = conciseSubcommands({
   name: 'allagents',
   description:
     'CLI tool for managing multi-repo AI agent workspaces with plugin synchronization\n\n' +
-    'For AI agents: use --agent-help for machine-readable help, or --json for structured output',
+    'Use --help --json for machine-readable command metadata, or --json for structured command output',
   version: packageJson.version,
   cmds: {
     init: initCmd,
@@ -42,11 +46,37 @@ const app = conciseSubcommands({
   },
 });
 
+function hasHelpFlag(
+  args: readonly string[],
+  meta: AgentCommandMeta | undefined,
+): boolean {
+  const valueOptions = new Set(
+    (meta?.options ?? [])
+      .filter((option) => option.type === 'string')
+      .flatMap((option) => [option.flag, option.short].filter(Boolean)),
+  );
+  let consumesNext = false;
+
+  for (const arg of args) {
+    if (consumesNext) {
+      consumesNext = false;
+      continue;
+    }
+    if (arg === '--') break;
+    if (valueOptions.has(arg)) {
+      consumesNext = true;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') return true;
+  }
+
+  return false;
+}
+
 const rawArgs = process.argv.slice(2);
 const { args: argsNoJson, json, jsonFields } = extractJsonFlag(rawArgs);
 const { args: argsNoJq, jqExpr } = extractJqFlag(argsNoJson);
-const { args: argsAfterAgentHelp, agentHelp } = extractAgentHelpFlag(argsNoJq);
-const finalArgs = normalizeSkillArgs(argsAfterAgentHelp);
+const finalArgs = normalizeSkillArgs(argsNoJq);
 const commandPath = finalArgs.filter((arg) => !arg.startsWith('-')).join(' ');
 const commandMeta = findMetaByCommand(commandPath);
 
@@ -56,11 +86,18 @@ if (jqExpr && !json) {
   process.exit(2);
 }
 
-// Validate `--json=<fields>` against the meta allowlist for the invoked command.
+// Help owns its field-selection error so the structured formatter can explain
+// that help output is not filterable. Option values and positionals that happen
+// to equal a help token remain ordinary command input.
+const requestsHelp = hasHelpFlag(finalArgs, commandMeta);
 let validatedFields: string[] | undefined;
 if (jsonFields) {
-  const result = validateJsonFields(jsonFields, commandMeta);
-  validatedFields = result ? [...result] : undefined;
+  if (requestsHelp) {
+    validatedFields = [...jsonFields];
+  } else {
+    const result = validateJsonFields(jsonFields, commandMeta);
+    validatedFields = result ? [...result] : undefined;
+  }
 }
 
 setJsonMode(json, {
@@ -68,17 +105,19 @@ setJsonMode(json, {
   ...(jqExpr && { jqExpr }),
 });
 
+if (json) {
+  setDefaultHelpFormatter(createStructuredHelpFormatter(packageJson.version));
+}
+
 // Kick off the update check for ordinary non-JSON invocations unless the
 // resolved command metadata marks the command as strictly read-only.
 const isWizard = finalArgs.length === 0 && process.stdout.isTTY && !json;
-if (!agentHelp && !json && !isWizard && !commandMeta?.skipUpdateCheck) {
+if (!json && !isWizard && !commandMeta?.skipUpdateCheck) {
   const notice = await getUpdateNotice(packageJson.version);
   if (notice) process.stderr.write(`${notice}\n\n`);
 }
 
-if (agentHelp) {
-  printAgentHelp(normalizeSkillHelpArgs(argsAfterAgentHelp), packageJson.version);
-} else if (isWizard) {
+if (isWizard) {
   // Interactive wizard when no args and running in a terminal
   const { runWizard } = await import('./tui/wizard.js');
   await runWizard();

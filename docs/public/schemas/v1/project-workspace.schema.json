@@ -315,7 +315,8 @@
               "type": "array",
               "items": {
                 "type": "string"
-              }
+              },
+              "default": []
             },
             "servers": {
               "type": "object",
@@ -336,9 +337,6 @@
               }
             }
           },
-          "required": [
-            "clients"
-          ],
           "additionalProperties": true
         },
         "mcpServers": {

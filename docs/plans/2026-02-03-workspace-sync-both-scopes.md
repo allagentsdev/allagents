@@ -446,7 +446,7 @@ In `src/cli/metadata/workspace.ts`, remove the `--scope` example and option:
 
 **Step 2: Run help text tests**
 
-Run: `bun test tests/e2e/cli-help.test.ts tests/e2e/cli-enriched-help.test.ts tests/e2e/cli-agent-help.test.ts`
+Run: `bun test tests/e2e/cli-help.test.ts tests/e2e/cli-enriched-help.test.ts tests/unit/cli/structured-help.test.ts`
 Expected: PASS (help tests should not hardcode --scope for sync)
 
 **Step 3: Commit**

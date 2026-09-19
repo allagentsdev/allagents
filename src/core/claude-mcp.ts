@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import JSON5 from 'json5';
-import { executeCommand } from './native/types.js';
 import type { NativeCommandResult } from './native/types.js';
-import { collectMcpServers } from './vscode-mcp.js';
-import type { McpMergeResult } from './vscode-mcp.js';
+import { executeCommand } from './native/types.js';
 import type { ValidatedPlugin } from './sync.js';
+import type { McpMergeResult } from './vscode-mcp.js';
+import { collectMcpServers } from './vscode-mcp.js';
 
 type ExecuteFn = (
   binary: string,
@@ -46,7 +46,16 @@ export function buildClaudeMcpAddArgs(
 ): string[] | null {
   // HTTP-based
   if (typeof config.url === 'string') {
-    return ['mcp', 'add', '--transport', 'http', '--scope', scope, name, config.url];
+    return [
+      'mcp',
+      'add',
+      '--transport',
+      'http',
+      '--scope',
+      scope,
+      name,
+      config.url,
+    ];
   }
 
   // stdio-based (command + args)
@@ -131,12 +140,15 @@ export function syncClaudeMcpConfig(
       const content = readFileSync(configPath, 'utf-8');
       existingConfig = JSON5.parse(content);
     } catch {
-      result.warnings.push(`Could not parse existing ${configPath}, starting fresh`);
+      result.warnings.push(
+        `Could not parse existing ${configPath}, starting fresh`,
+      );
       existingConfig = {};
     }
   }
 
-  const existingServers = (existingConfig.mcpServers as Record<string, unknown>) ?? {};
+  const existingServers =
+    (existingConfig.mcpServers as Record<string, unknown>) ?? {};
 
   // Process plugin servers: add new, update tracked, skip user-managed conflicts
   for (const [name, config] of pluginServers) {
@@ -171,7 +183,10 @@ export function syncClaudeMcpConfig(
   if (hasTracking) {
     const currentServerNames = new Set(pluginServers.keys());
     for (const trackedName of previouslyTracked) {
-      if (!currentServerNames.has(trackedName) && trackedName in existingServers) {
+      if (
+        !currentServerNames.has(trackedName) &&
+        trackedName in existingServers
+      ) {
         delete existingServers[trackedName];
         result.removed++;
         result.removedServers.push(trackedName);
@@ -180,14 +195,19 @@ export function syncClaudeMcpConfig(
   }
 
   // Write back if there were changes and not dry-run
-  const hasChanges = result.added > 0 || result.overwritten > 0 || result.removed > 0;
+  const hasChanges =
+    result.added > 0 || result.overwritten > 0 || result.removed > 0;
   if (hasChanges && !dryRun) {
     existingConfig.mcpServers = existingServers;
     const dir = dirname(configPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(configPath, `${JSON.stringify(existingConfig, null, 2)}\n`, 'utf-8');
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(existingConfig, null, 2)}\n`,
+      'utf-8',
+    );
     result.configPath = configPath;
   }
 
@@ -206,7 +226,11 @@ export function syncClaudeMcpConfig(
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(configPath, `${JSON.stringify(existingConfig, null, 2)}\n`, 'utf-8');
+      writeFileSync(
+        configPath,
+        `${JSON.stringify(existingConfig, null, 2)}\n`,
+        'utf-8',
+      );
       result.configPath = configPath;
     }
   }
@@ -252,6 +276,7 @@ export async function syncClaudeMcpServersViaCli(
     overwrittenServers: [],
     removedServers: [],
     trackedServers: [],
+    authoritative: true,
   };
 
   // Skip entirely when there are no MCP servers to sync and nothing to remove
@@ -265,7 +290,20 @@ export async function syncClaudeMcpServersViaCli(
     result.warnings.push(
       `Claude CLI not available: ${versionResult.error ?? 'unknown error'}`,
     );
+    result.authoritative = false;
+    result.trackedServers = [...previouslyTracked];
     return result;
+  }
+
+  function isMissingClaudeMcpServer(
+    result: NativeCommandResult,
+    name: string,
+  ): boolean {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+      `^(?:Error:\\s*)?No MCP server found with name:\\s*${escapedName}\\.?$`,
+      'i',
+    ).test(`${result.output}\n${result.error ?? ''}`.trim());
   }
 
   // Process plugin servers: add new, skip existing user-managed
@@ -294,6 +332,8 @@ export async function syncClaudeMcpServersViaCli(
         result.warnings.push(
           `Unsupported MCP server config for '${name}', skipping`,
         );
+        result.authoritative = false;
+        if (previouslyTracked.has(name)) result.trackedServers.push(name);
         continue;
       }
 
@@ -303,6 +343,8 @@ export async function syncClaudeMcpServersViaCli(
           result.warnings.push(
             `Failed to add MCP server '${name}': ${addResult.error ?? 'unknown error'}`,
           );
+          result.authoritative = false;
+          if (previouslyTracked.has(name)) result.trackedServers.push(name);
           continue;
         }
       }
@@ -320,15 +362,32 @@ export async function syncClaudeMcpServersViaCli(
       if (!currentServerNames.has(trackedName)) {
         // Check if it still exists before trying to remove
         const getResult = await exec('claude', ['mcp', 'get', trackedName]);
+        if (
+          !getResult.success &&
+          !isMissingClaudeMcpServer(getResult, trackedName)
+        ) {
+          result.warnings.push(
+            `Failed to inspect MCP server '${trackedName}': ${getResult.error ?? 'unknown error'}`,
+          );
+          result.authoritative = false;
+          result.trackedServers.push(trackedName);
+          continue;
+        }
         if (getResult.success) {
           if (!dryRun) {
             const removeResult = await exec('claude', [
-              'mcp', 'remove', trackedName, '--scope', 'user',
+              'mcp',
+              'remove',
+              trackedName,
+              '--scope',
+              'user',
             ]);
             if (!removeResult.success) {
               result.warnings.push(
                 `Failed to remove MCP server '${trackedName}': ${removeResult.error ?? 'unknown error'}`,
               );
+              result.authoritative = false;
+              result.trackedServers.push(trackedName);
               continue;
             }
           }

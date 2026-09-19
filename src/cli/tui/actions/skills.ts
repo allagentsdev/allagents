@@ -252,14 +252,14 @@ async function runToggleSkills(
   }
 
   // Auto-sync affected scopes
-  s.message('Syncing...');
+  s.message('Updating...');
   if (changedProject && context.workspacePath) {
     await syncWorkspace(context.workspacePath);
   }
   if (changedUser) {
     await syncUserWorkspace();
   }
-  s.stop('Skills updated and synced');
+  s.stop('Skills updated');
   cache?.invalidate();
 
   const changes: string[] = [];

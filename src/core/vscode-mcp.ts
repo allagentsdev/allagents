@@ -1,10 +1,12 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import JSON5 from 'json5';
 import { getHomeDir } from '../constants.js';
+import type {
+  ClientType,
+  McpServerConfig,
+} from '../models/workspace-config.js';
 import type { ValidatedPlugin } from './sync.js';
-import type { ClientType } from '../models/workspace-config.js';
-import type { McpServerConfig } from '../models/workspace-config.js';
 
 /**
  * Deep equality check for MCP server configs.
@@ -44,6 +46,8 @@ export interface McpMergeResult {
   removedServers: string[];
   /** All servers that are now tracked (for saving to sync state) */
   trackedServers: string[];
+  /** False when the adapter could not determine or apply authoritative state. */
+  authoritative?: boolean;
   /** Path to the config file that was modified (set when changes are written) */
   configPath?: string;
 }
@@ -62,7 +66,14 @@ export function getVscodeMcpConfigPath(): string {
   }
   const home = getHomeDir();
   if (platform === 'darwin') {
-    return join(home, 'Library', 'Application Support', 'Code', 'User', 'mcp.json');
+    return join(
+      home,
+      'Library',
+      'Application Support',
+      'Code',
+      'User',
+      'mcp.json',
+    );
   }
   // Linux
   return join(home, '.config', 'Code', 'User', 'mcp.json');
@@ -72,7 +83,9 @@ export function getVscodeMcpConfigPath(): string {
  * Read .mcp.json from a plugin root directory.
  * Returns the mcpServers object or null if absent/invalid.
  */
-export function readPluginMcpConfig(pluginPath: string): Record<string, unknown> | null {
+export function readPluginMcpConfig(
+  pluginPath: string,
+): Record<string, unknown> | null {
   const mcpPath = join(pluginPath, '.mcp.json');
   if (!existsSync(mcpPath)) {
     return null;
@@ -80,7 +93,12 @@ export function readPluginMcpConfig(pluginPath: string): Record<string, unknown>
   try {
     const content = readFileSync(mcpPath, 'utf-8');
     const parsed = JSON5.parse(content);
-    if (parsed && typeof parsed === 'object' && parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      parsed.mcpServers &&
+      typeof parsed.mcpServers === 'object'
+    ) {
       return parsed.mcpServers as Record<string, unknown>;
     }
     return null;
@@ -94,7 +112,9 @@ export function readPluginMcpConfig(pluginPath: string): Record<string, unknown>
  * before it is passed to a client sync function. Currently removes `clients`
  * (a sync filter that should never be written into client MCP configs).
  */
-function stripWorkspaceMcpMeta(config: McpServerConfig): Record<string, unknown> {
+function stripWorkspaceMcpMeta(
+  config: McpServerConfig,
+): Record<string, unknown> {
   const { clients: _clients, ...rest } = config as McpServerConfig & {
     clients?: ClientType[];
   };
@@ -126,7 +146,9 @@ export function collectMcpServers(
 
     for (const [name, config] of Object.entries(mcpServers)) {
       if (servers.has(name)) {
-        warnings.push(`MCP server '${name}' from ${plugin.plugin} conflicts with earlier plugin (skipped)`);
+        warnings.push(
+          `MCP server '${name}' from ${plugin.plugin} conflicts with earlier plugin (skipped)`,
+        );
       } else {
         servers.set(name, config);
       }
@@ -135,7 +157,11 @@ export function collectMcpServers(
 
   if (workspaceServers) {
     for (const [name, config] of Object.entries(workspaceServers)) {
-      if (targetClient && config.clients && !config.clients.includes(targetClient)) {
+      if (
+        targetClient &&
+        config.clients &&
+        !config.clients.includes(targetClient)
+      ) {
         continue;
       }
       if (servers.has(name)) {
@@ -205,13 +231,16 @@ export function syncVscodeMcpConfig(
       existingConfig = JSON5.parse(content);
     } catch {
       // If invalid, start fresh but warn
-      result.warnings.push(`Could not parse existing ${configPath}, starting fresh`);
+      result.warnings.push(
+        `Could not parse existing ${configPath}, starting fresh`,
+      );
       existingConfig = {};
     }
   }
 
   // Get or create the servers object (VS Code uses "servers" key)
-  const existingServers = (existingConfig.servers as Record<string, unknown>) ?? {};
+  const existingServers =
+    (existingConfig.servers as Record<string, unknown>) ?? {};
 
   // Process plugin servers: add new, update tracked, skip user-managed conflicts
   for (const [name, config] of pluginServers) {
@@ -253,7 +282,10 @@ export function syncVscodeMcpConfig(
   if (hasTracking) {
     const currentServerNames = new Set(pluginServers.keys());
     for (const trackedName of previouslyTracked) {
-      if (!currentServerNames.has(trackedName) && trackedName in existingServers) {
+      if (
+        !currentServerNames.has(trackedName) &&
+        trackedName in existingServers
+      ) {
         delete existingServers[trackedName];
         result.removed++;
         result.removedServers.push(trackedName);
@@ -262,14 +294,19 @@ export function syncVscodeMcpConfig(
   }
 
   // Write back if there were changes and not dry-run
-  const hasChanges = result.added > 0 || result.overwritten > 0 || result.removed > 0;
+  const hasChanges =
+    result.added > 0 || result.overwritten > 0 || result.removed > 0;
   if (hasChanges && !dryRun) {
     existingConfig.servers = existingServers;
     const dir = dirname(configPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(configPath, `${JSON.stringify(existingConfig, null, 2)}\n`, 'utf-8');
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(existingConfig, null, 2)}\n`,
+      'utf-8',
+    );
     result.configPath = configPath;
   }
 
@@ -289,7 +326,11 @@ export function syncVscodeMcpConfig(
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(configPath, `${JSON.stringify(existingConfig, null, 2)}\n`, 'utf-8');
+      writeFileSync(
+        configPath,
+        `${JSON.stringify(existingConfig, null, 2)}\n`,
+        'utf-8',
+      );
       result.configPath = configPath;
     }
   }

@@ -8,9 +8,19 @@
   },
   "plugins": [
     {
+      "name": "allagents",
+      "description": "End-user guidance for managing AllAgents through its CLI",
+      "source": "./plugins/allagents"
+    },
+    {
       "name": "deepwiki",
       "description": "AI-generated documentation for GitHub repositories",
       "source": "./plugins/deepwiki"
+    },
+    {
+      "name": "tradingview",
+      "description": "Official TradingView market data and analytics",
+      "source": "./plugins/tradingview"
     }
   ]
 }

@@ -340,7 +340,7 @@ export const McpProxyServerSchema = z.object({
  * built-in AllAgents HTTP proxy helper
  */
 export const McpProxyConfigSchema = z.object({
-  clients: z.array(z.string()),
+  clients: z.array(z.string()).default([]),
   servers: z.record(McpProxyServerSchema).optional(),
 });
 
@@ -383,8 +383,7 @@ export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
  * Portable secret references are preserved verbatim until the selected client
  * resolves them at runtime. Profile declarations never accept resolved values.
  */
-const PROFILE_SECRET_REFERENCE_PATTERN =
-  /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+const PROFILE_SECRET_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 
 export const ProfileSecretReferenceSchema = z
   .string()
@@ -405,6 +404,13 @@ export const ProfileNameSchema = z
   );
 
 export type ProfileName = z.infer<typeof ProfileNameSchema>;
+
+export const ProfileMcpServerNameSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9_.-]{1,100}$/,
+    'Expected 1-100 ASCII letters, numbers, dots, underscores, or hyphens',
+  );
 
 /**
  * Normalize a declared launcher to the command identity which can exist on
@@ -428,9 +434,7 @@ export const ClaudeProfileSettingsSchema = z
   })
   .strict();
 
-export type ClaudeProfileSettings = z.infer<
-  typeof ClaudeProfileSettingsSchema
->;
+export type ClaudeProfileSettings = z.infer<typeof ClaudeProfileSettingsSchema>;
 
 export const OpenCodeProfileSettingsSchema = z
   .object({
@@ -510,9 +514,7 @@ export const CodexProfileSettingsSchema = z
   })
   .strict();
 
-export type CodexProfileSettings = z.infer<
-  typeof CodexProfileSettingsSchema
->;
+export type CodexProfileSettings = z.infer<typeof CodexProfileSettingsSchema>;
 
 /**
  * Profile clients deliberately use object form only. Each adapter owns a
@@ -625,13 +627,12 @@ const PROFILE_SENSITIVE_MCP_FIELD_PATTERN =
   /(?:^|[-_.])(?:api[-_]?key|auth|authorization|credential|key|password|secret|signature|token)(?:$|[-_.])/i;
 
 function isProfileSecretReference(value: string | undefined): boolean {
-  return (
-    value !== undefined && PROFILE_SECRET_REFERENCE_PATTERN.test(value)
-  );
+  return value !== undefined && PROFILE_SECRET_REFERENCE_PATTERN.test(value);
 }
 
-const ProfileMcpArgumentsSchema = z.array(z.string()).superRefine(
-  (arguments_, ctx) => {
+const ProfileMcpArgumentsSchema = z
+  .array(z.string())
+  .superRefine((arguments_, ctx) => {
     const invalidIndexes = new Set<number>();
     const reject = (index: number) => {
       if (invalidIndexes.has(index)) return;
@@ -644,6 +645,12 @@ const ProfileMcpArgumentsSchema = z.array(z.string()).superRefine(
     };
 
     for (const [index, argument] of arguments_.entries()) {
+      if (arguments_[index - 1] === '--header-env') {
+        if (!/^[^=:\s]+=[A-Za-z_][A-Za-z0-9_]*$/.test(argument)) {
+          reject(index);
+        }
+        continue;
+      }
       const separateOption = argument.match(/^(?:--?|\/)([^=:\s]+)$/);
       const separateOptionName = separateOption?.[1];
       if (
@@ -652,9 +659,7 @@ const ProfileMcpArgumentsSchema = z.array(z.string()).superRefine(
       ) {
         const credentialIndex = index + 1;
         if (!isProfileSecretReference(arguments_[credentialIndex])) {
-          reject(
-            credentialIndex < arguments_.length ? credentialIndex : index,
-          );
+          reject(credentialIndex < arguments_.length ? credentialIndex : index);
         }
         continue;
       }
@@ -662,16 +667,12 @@ const ProfileMcpArgumentsSchema = z.array(z.string()).superRefine(
       if (/^bearer$/i.test(argument)) {
         const credentialIndex = index + 1;
         if (!isProfileSecretReference(arguments_[credentialIndex])) {
-          reject(
-            credentialIndex < arguments_.length ? credentialIndex : index,
-          );
+          reject(credentialIndex < arguments_.length ? credentialIndex : index);
         }
         continue;
       }
 
-      const assignment = argument.match(
-        /^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/,
-      );
+      const assignment = argument.match(/^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/);
       const assignmentName = assignment?.[1];
       const inlineCredential =
         assignmentName &&
@@ -706,8 +707,7 @@ const ProfileMcpArgumentsSchema = z.array(z.string()).superRefine(
         reject(index);
       }
     }
-  },
-);
+  });
 
 export const ProfileMcpServerConfigSchema = z.union([
   z
@@ -737,7 +737,10 @@ export const ProfileDeclarationSchema = z
   .object({
     clients: z.array(ProfileClientSchema).min(1),
     plugins: z.array(ProfilePluginEntrySchema).default([]),
-    mcpServers: z.record(ProfileMcpServerConfigSchema).optional(),
+    mcpServers: z
+      .record(ProfileMcpServerNameSchema, ProfileMcpServerConfigSchema)
+      .optional(),
+    mcpProxy: McpProxyConfigSchema.optional(),
   })
   .strict()
   .superRefine((profile, ctx) => {
@@ -755,11 +758,12 @@ export const ProfileDeclarationSchema = z
     });
 
     const validateSelector = (
-      clients: ClientType[] | undefined,
+      clients: readonly string[] | undefined,
       path: (string | number)[],
+      allowWildcard = false,
     ): void => {
       if (!clients) return;
-      const selected = new Set<ClientType>();
+      const selected = new Set<string>();
       clients.forEach((client, index) => {
         if (selected.has(client)) {
           ctx.addIssue({
@@ -767,7 +771,10 @@ export const ProfileDeclarationSchema = z
             path: [...path, index],
             message: `Client selector '${client}' is duplicated`,
           });
-        } else if (!declaredClients.has(client)) {
+        } else if (
+          !(allowWildcard && client === '*') &&
+          !declaredClients.has(client as ClientType)
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [...path, index],
@@ -786,11 +793,22 @@ export const ProfileDeclarationSchema = z
 
     if (profile.mcpServers) {
       for (const [serverName, server] of Object.entries(profile.mcpServers)) {
-        validateSelector(server.clients, [
-          'mcpServers',
-          serverName,
-          'clients',
-        ]);
+        validateSelector(server.clients, ['mcpServers', serverName, 'clients']);
+      }
+    }
+
+    if (profile.mcpProxy) {
+      validateSelector(profile.mcpProxy.clients, ['mcpProxy', 'clients']);
+      if (profile.mcpProxy.servers) {
+        for (const [serverName, server] of Object.entries(
+          profile.mcpProxy.servers,
+        )) {
+          validateSelector(
+            server.proxy,
+            ['mcpProxy', 'servers', serverName, 'proxy'],
+            true,
+          );
+        }
       }
     }
   });

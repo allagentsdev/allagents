@@ -310,7 +310,83 @@ describe('syncClaudeMcpServersViaCli (user-scoped via CLI)', () => {
     expect(removeCall!.args).toContain('user');
   });
 
-  test('warns when claude CLI is not available', async () => {
+  test('retains ownership when removing an orphan fails', async () => {
+    const { fn } = mockExec({
+      'claude --version': { success: true, output: '1.0.0' },
+      'claude mcp get old-server': {
+        success: true,
+        output: 'old-server: ...',
+      },
+      'claude mcp remove': {
+        success: false,
+        output: '',
+        error: 'temporary failure',
+      },
+    });
+
+    const result = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['old-server'],
+      _mockExecute: fn,
+    });
+
+    expect(result.authoritative).toBe(false);
+    expect(result.trackedServers).toEqual(['old-server']);
+    expect(result.removed).toBe(0);
+  });
+
+
+  test('retains ownership when orphan inspection fails transiently', async () => {
+    const { fn } = mockExec({
+      'claude --version': { success: true, output: '1.0.0' },
+      'claude mcp get old-server': {
+        success: false,
+        output: '',
+        error: 'permission denied',
+      },
+    });
+
+    const result = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['old-server'],
+      _mockExecute: fn,
+    });
+
+    expect(result.authoritative).toBe(false);
+    expect(result.trackedServers).toEqual(['old-server']);
+    expect(result.warnings[0]).toContain('Failed to inspect');
+  });
+
+  test('only treats the exact Claude server-missing response as absence', async () => {
+    const misleading = mockExec({
+      'claude --version': { success: true, output: '1.0.0' },
+      'claude mcp get old-server': {
+        success: false,
+        output: '',
+        error: 'config file not found',
+      },
+    });
+    const incomplete = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['old-server'],
+      _mockExecute: misleading.fn,
+    });
+    expect(incomplete.authoritative).toBe(false);
+    expect(incomplete.trackedServers).toEqual(['old-server']);
+
+    const missing = mockExec({
+      'claude --version': { success: true, output: '1.0.0' },
+      'claude mcp get old-server': {
+        success: false,
+        output: '',
+        error: 'No MCP server found with name: old-server',
+      },
+    });
+    const authoritative = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['old-server'],
+      _mockExecute: missing.fn,
+    });
+    expect(authoritative.authoritative).toBe(true);
+    expect(authoritative.trackedServers).toEqual([]);
+  });
+  test('retains ownership when the claude CLI is not available', async () => {
     writeFileSync(
       join(pluginDir, '.mcp.json'),
       JSON.stringify({ mcpServers: { deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' } } }),
@@ -321,10 +397,13 @@ describe('syncClaudeMcpServersViaCli (user-scoped via CLI)', () => {
     });
 
     const result = await syncClaudeMcpServersViaCli([makePlugin(pluginDir)], {
+      trackedServers: ['owned-server'],
       _mockExecute: fn,
     });
 
     expect(result.added).toBe(0);
+    expect(result.authoritative).toBe(false);
+    expect(result.trackedServers).toEqual(['owned-server']);
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(result.warnings[0]).toContain('Claude CLI not available');
   });

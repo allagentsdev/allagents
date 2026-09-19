@@ -3,10 +3,35 @@ title: CLI Commands
 description: Complete reference for AllAgents CLI commands.
 ---
 
+## Structured Help
+
+Add `--json` to any help invocation to return machine-readable command
+metadata instead of terminal-formatted help:
+
+```bash
+allagents --help --json
+allagents mcp --help --json
+allagents mcp add --help --json
+```
+
+Structured help is progressively disclosed:
+
+1. Root help returns a concise index of top-level commands and groups.
+2. Group help returns only its immediate commands and nested groups.
+3. Each index entry provides a `help_command` for the next level.
+4. Leaf help returns the complete contract: when to use the command,
+   positionals, options, examples, interaction requirements, expected output,
+   output schema, and JSON field allowlist.
+
+This keeps command discovery small while making side effects, automation
+requirements, and output expectations available before execution. `--help
+--json` and `--json --help` are equivalent when they follow the command path.
+Field selection with `--json=<fields>` is not supported for help output.
+
 ## Top-Level Commands
 
 ```bash
-allagents update [--offline] [--dry-run] [--client <client>] [--scope <scope>] [--profile <name>...]
+allagents update [--offline] [--dry-run] [--client <client>] [--profile <name>...]
 allagents status
 ```
 
@@ -19,10 +44,9 @@ Updates plugins in the workspace using non-destructive sync. By default, remote 
 | `--offline` | Use cached plugins without fetching latest from remote |
 | `--dry-run` | Preview changes without applying them |
 | `-c, --client <client>` | Sync only the specified client (e.g., `opencode`, `claude`) |
-| `-s, --scope <scope>` | Sync scope: `project` (default) or `user` |
 | `--profile <name>` | Reconcile only this installed global profile; repeatable |
 
-When `--scope user` is used, sync targets the user-level workspace at `~/.allagents/workspace.yaml` and installs plugins to user directories (`~/.claude/`, `~/.codex/`, etc.) instead of the project.
+Ordinary user, installed profile, and current project reconciliation are selected automatically; `allagents update` does not take a scope flag.
 
 Without `--profile`, update independently attempts the user workspace, every
 installed profile that still has a declaration, and the current project
@@ -31,8 +55,7 @@ the command exits nonzero after all applicable work completes.
 
 Using one or more `--profile` filters validates the entire selected set before
 mutation, updates only those installed and still-declared profiles, and skips
-ordinary user and project sync. `--profile` cannot be combined with `--scope`
-or `--client`.
+ordinary user and project sync. `--profile` cannot be combined with `--client`.
 
 **Non-destructive behavior:**
 - First sync overlays files without deleting existing user files
@@ -435,96 +458,165 @@ Local plugin sources are listed separately in `data.skippedLocalSources`. The JS
 ## MCP Commands
 
 ```bash
-allagents mcp add <name> <commandOrUrl> [options]
-allagents mcp proxy <serverUrl> [--header KEY=VALUE...]
-allagents mcp remove <name>
-allagents mcp list
-allagents mcp get <name>
-allagents mcp update [--offline]
+allagents mcp add <name> <commandOrUrl> [options] [--scope project|user | --profile <name>]
+allagents mcp reauth <name> [--scope project|user | --profile <name>]
+allagents mcp remove <name> [--scope project|user | --profile <name>]
+allagents mcp list [--scope project|user | --profile <name>]
+allagents mcp get <name> [--scope project|user | --profile <name>]
+allagents mcp update [--offline] [--scope project|user | --profile <name>]
 ```
 
-Manage MCP servers at the workspace level. Servers are persisted in a top-level `mcpServers:` field in `workspace.yaml` (parallel to `mcpProxy:`) and synced to all configured clients that support project-scoped MCP (`claude`, `codex`, `vscode`, `copilot`).
+Every MCP command selects one declaration destination. With no selector,
+AllAgents uses the current project's `.allagents/workspace.yaml`. From the home
+directory that path aliases the ordinary user config, so an unflagged command
+resolves to user scope and explicit `--scope project` is rejected. Use
+`--scope user` to select top-level MCP fields in `~/.allagents/workspace.yaml`;
+`--profile <name>` selects `profiles.<name>` in that same file.
+`--scope` and `--profile` are mutually exclusive.
+
+Run `allagents` without arguments and choose **MCP Servers** to manage the same
+project, user, and named-profile destinations interactively. Each destination
+lists its servers directly, with add, inspect, reauthenticate, and remove
+actions. Client configuration updates automatically after mutations; if an
+update fails after the declaration changes, the TUI offers a contextual retry.
+Credential values remain hidden from summaries and selection screens.
+
+Codex and Copilot materialize the selected destination at these exact paths:
+
+| Destination | Codex | Copilot CLI |
+|-------------|-------|-------------|
+| Project | `.codex/config.toml` | `.github/mcp.json` |
+| User | `~/.codex/config.toml` | `~/.copilot/mcp-config.json` |
+| Profile | `~/.allagents/profiles/<name>/clients/codex/home/<name>.config.toml` | `~/.allagents/profiles/<name>/clients/copilot/home/mcp-config.json` |
 
 ### mcp add
 
-Add a new MCP server to `workspace.yaml` and immediately sync it to all configured clients.
+Add a new MCP server to the selected destination and immediately update its
+client configuration.
+For HTTP servers, AllAgents connects first, completes OAuth when required, and
+routes selected clients through its built-in MCP client.
 
 | Flag | Description |
 |------|-------------|
 | `--transport <type>` | Transport type: `http` or `stdio` (auto-detected from URL by default) |
 | `--arg <value>` | Argument for the stdio command (repeatable) |
 | `-e, --env <KEY=VALUE>` | Environment variable for stdio transport (repeatable) |
-| `--header <KEY=VALUE>` | HTTP header for http transport (repeatable) |
-| `--client <csv>` | Comma-separated list of clients that should receive this server (default: all project-scoped clients) |
+| `--header <KEY=VALUE>` | HTTP header for HTTP transport (repeatable) |
+| `--client <client[,client...]>` | Client selector; repeatable and comma-compatible. Values are deduplicated in first-seen order. Defaults to every eligible client in the selected destination. |
+| `--scope <scope>` | Destination scope: `project` (default) or `user` |
+| `--profile <name>` | Named profile destination; cannot be combined with `--scope` |
 | `-f, --force` | Replace an existing server with the same name |
 
-**Transport auto-detection:** if `<commandOrUrl>` starts with `http://` or `https://`, http transport is selected; otherwise stdio is selected. Passing `--transport stdio` with a URL, or `--transport http` with a non-URL command, is rejected.
+**Transport auto-detection:** if `<commandOrUrl>` starts with `http://` or
+`https://`, HTTP transport is selected; otherwise stdio is selected. Passing
+`--transport stdio` with a URL, or `--transport http` with a non-URL command,
+is rejected.
+
+Non-interactive HTTP adds perform the same connection check without starting a
+browser. They can use cached credentials, but fail before mutation when fresh
+OAuth consent is required.
+
+Profile header values must be exact environment references such as
+`'Authorization=${TRADINGVIEW_TOKEN}'`. Generated bridge configs retain only
+the header-to-variable binding; the value is resolved when the bridge connects.
+Missing variables fail before a request is sent.
 
 ```bash
-# HTTP server
+# Project HTTP server
 allagents mcp add deepwiki https://mcp.deepwiki.com/mcp
 
-# HTTP server with headers and client filter
-allagents mcp add internal https://mcp.internal.corp --header Authorization=Bearer-token --client claude,copilot
+# Repeatable and comma-compatible client filters
+allagents mcp add internal https://mcp.internal.corp \
+  --header Authorization=Bearer-token \
+  --client claude --client codex,copilot
+
+# User destination
+allagents mcp add deepwiki https://mcp.deepwiki.com/mcp --scope user
+
+# Profile destination
+allagents mcp add tradingview https://mcp.tradingview.com/mcp --profile markets
 
 # stdio server with args and env vars
 allagents mcp add gh-server npx --arg=-y --arg=@modelcontextprotocol/server-github -e GH_TOKEN=ghp_xxx
 
-# Replace an existing server (update workflow)
+# Replace an existing server
 allagents mcp add deepwiki https://new.example.com --force
 ```
 
-### mcp proxy
+### mcp reauth
 
-Expose a remote HTTP MCP server locally over stdio. This is the helper command AllAgents writes into proxied client configs when `mcpProxy` rewrites an HTTP server for clients that only support stdio transport.
-
-| Flag | Description |
-|------|-------------|
-| `--header <KEY=VALUE>` | HTTP header forwarded to the upstream MCP server (repeatable) |
+Force a fresh OAuth login for an HTTP MCP server in the selected destination:
 
 ```bash
-allagents mcp proxy https://mcp.deepwiki.com/mcp
-allagents mcp proxy https://mcp.internal.corp --header Authorization=Bearer-token
+allagents mcp reauth tradingview
+allagents mcp reauth tradingview --scope user
+allagents mcp reauth tradingview --profile markets
 ```
 
-`proxy` is the only supported public command shown in help and generated configs.
+AllAgents clears only the selected credential cache, opens a browser, and
+verifies a new connection. Project and ordinary user declarations share the
+ordinary URL-keyed cache. Each named profile has an isolated cache. Removing a
+local cache does not revoke the grant at the remote authorization provider. If
+the browser is on another device, paste the complete loopback callback URL into
+the waiting terminal prompt.
+
+The HTTP-to-stdio bridge written into generated client configs is an internal
+implementation detail; users do not need to run it directly.
 
 ### mcp remove
 
-Remove a server from `workspace.yaml` and unsync it from all clients. Only servers AllAgents added are removed; pre-existing user-managed servers in client MCP configs are preserved.
+Remove a server from the selected declaration destination and reconcile its
+client configs. Only entries tracked by AllAgents are removed; pre-existing
+user-managed servers in client MCP configs are preserved.
 
 ```bash
 allagents mcp remove deepwiki
+allagents mcp remove deepwiki --scope user
+allagents mcp remove tradingview --profile markets
 ```
 
 ### mcp list
 
-List all MCP servers defined in `workspace.yaml`.
+List inline MCP declarations from exactly one selected destination. Header,
+environment, URL credential, and sensitive query values are redacted in both
+human and JSON output.
 
 ```bash
 allagents mcp list
+allagents mcp list --profile markets
 ```
 
 ### mcp get
 
-Print the `workspace.yaml` definition for a specific server as YAML.
+Print one inline declaration from exactly one selected destination as redacted
+YAML, or as redacted structured data with `--json`.
 
 ```bash
 allagents mcp get deepwiki
+allagents mcp get tradingview --profile markets
 ```
 
-Exits with status 1 if the server is not defined in `workspace.yaml`.
+Exits with status 1 if the server is not defined at that destination.
+Plugin-provided declarations are not included by `list` or `get`.
 
 ### mcp update
 
-Re-sync MCP servers only, without touching skills, agents, hooks, or other plugin artifacts. Useful when you've edited `workspace.yaml`'s `mcpServers:` block manually and want to push the changes to clients without running a full workspace sync.
+Reconcile MCP servers without touching skills, agents, hooks, or other plugin
+artifacts. Project and ordinary user destinations run MCP-only reconciliation.
+An installed profile runs its ownership-aware profile reconciliation because
+some clients store settings and MCP in the same managed file. A declared but
+uninstalled profile is not implicitly installed.
 
 | Flag | Description |
 |------|-------------|
 | `--offline` | Use cached plugins without fetching from remote marketplaces |
+| `--scope <scope>` | Destination scope: `project` (default) or `user` |
+| `--profile <name>` | Named profile destination; cannot be combined with `--scope` |
 
 ```bash
 allagents mcp update
+allagents mcp update --scope user
+allagents mcp update --profile markets
 allagents mcp update --offline
 ```
 
@@ -532,10 +624,10 @@ To modify a server definition, use `allagents mcp add <name> ... --force`.
 
 ### Ownership model
 
-AllAgents only tracks MCP servers it added. This means:
+AllAgents only tracks MCP servers it added:
 
-- `mcp add` marks the server as AllAgents-owned in `.allagents/sync-state.json`.
-- `mcp remove` only removes servers from client MCP configs that AllAgents originally added. User-managed servers (added manually to `.mcp.json`, `.vscode/mcp.json`, etc.) are never touched.
-- If you manually add a server to a client config first, and then run `mcp add` with the same name, the existing user-managed entry is left alone (AllAgents will skip it with a warning).
+- `mcp add` records ownership in the selected destination's sync or profile state.
+- `mcp remove` only removes servers from client MCP configs that AllAgents originally added. User-managed servers are never touched.
+- If a same-name client entry existed before AllAgents managed it, the entry remains user-owned and is skipped with a warning.
 
 See [CLAUDE.md — MCP Server Sync](https://github.com/allagentsdev/allagents/blob/main/CLAUDE.md) for the full ownership rule.

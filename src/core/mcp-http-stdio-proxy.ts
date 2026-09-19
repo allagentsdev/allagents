@@ -1,63 +1,213 @@
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
-import { access } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { spawn } from 'node:child_process';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { dirname, join } from 'node:path';
 import {
-  type OAuthDiscoveryState,
   type OAuthClientProvider,
+  type OAuthDiscoveryState,
   UnauthorizedError,
 } from '@modelcontextprotocol/sdk/client/auth.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type {
   OAuthClientInformationMixed,
   OAuthClientMetadata,
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { getHomeDir } from '../constants.js';
+import type {
+  FetchLike,
+  Transport,
+} from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
+  CallToolRequestSchema as CallToolSchema,
   GetPromptRequestSchema as GetPromptSchema,
   ListPromptsRequestSchema as ListPromptsSchema,
-  ListResourceTemplatesRequestSchema as ListResourceTemplatesSchema,
   ListResourcesRequestSchema as ListResourcesSchema,
+  ListResourceTemplatesRequestSchema as ListResourceTemplatesSchema,
   ListToolsRequestSchema as ListToolsSchema,
   ReadResourceRequestSchema as ReadResourceSchema,
-  CallToolRequestSchema as CallToolSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { getHomeDir } from '../constants.js';
+import { ProfileNameSchema } from '../models/workspace-config.js';
 
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 export const AUTH_URL_LOG_PREFIX = 'If the browser does not open, visit: ';
+
+const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+export function resolveMcpHeaderReferences(
+  headers: Record<string, string>,
+  environment: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => {
+      const reference = ENVIRONMENT_REFERENCE.exec(value);
+      if (!reference) return [key, value];
+      const variable = reference[1] as string;
+      const resolved = environment[variable];
+      if (resolved === undefined) {
+        throw new Error(
+          `MCP header '${key}' references missing environment variable '${variable}'`,
+        );
+      }
+      return [key, resolved];
+    }),
+  );
+}
+
+export interface OAuthCallbackRequest {
+  authorizationUrl: URL;
+  redirectUrl: string;
+  state: string;
+  signal: AbortSignal;
+}
+
+export type OAuthCallbackUrlReader = (
+  request: OAuthCallbackRequest,
+) => Promise<string>;
+
+type ParsedOAuthCallback =
+  | { code: string; authorizationError?: never }
+  | { code?: never; authorizationError: true };
+
+export class OAuthAuthorizationError extends Error {
+  constructor() {
+    super('OAuth authorization failed');
+    this.name = 'OAuthAuthorizationError';
+  }
+}
+
+function parseOAuthCallbackResponse(
+  callbackUrl: string,
+  redirectUrl: string,
+  expectedState: string,
+): ParsedOAuthCallback {
+  let callback: URL;
+  try {
+    callback = new URL(callbackUrl.trim());
+  } catch {
+    throw new Error('Invalid OAuth callback URL');
+  }
+
+  const expected = new URL(redirectUrl);
+  if (
+    callback.username ||
+    callback.password ||
+    callback.origin !== expected.origin ||
+    callback.pathname !== expected.pathname ||
+    callback.hash
+  ) {
+    throw new Error(
+      'OAuth callback URL does not match the registered redirect',
+    );
+  }
+
+  const states = callback.searchParams.getAll('state');
+  if (states.length !== 1 || states[0] !== expectedState) {
+    throw new Error('OAuth state validation failed');
+  }
+
+  const errors = callback.searchParams.getAll('error');
+  const codes = callback.searchParams.getAll('code');
+  if (errors.length === 1 && errors[0] && codes.length === 0) {
+    return { authorizationError: true };
+  }
+  if (errors.length > 0) {
+    throw new Error('Invalid OAuth authorization response');
+  }
+  if (codes.length !== 1 || !codes[0]) {
+    throw new Error('No OAuth authorization code received');
+  }
+  return { code: codes[0] };
+}
+
+export function validateOAuthCallbackUrl(
+  callbackUrl: string,
+  redirectUrl: string,
+  expectedState: string,
+): void {
+  parseOAuthCallbackResponse(callbackUrl, redirectUrl, expectedState);
+}
+
+export function parseOAuthCallbackUrl(
+  callbackUrl: string,
+  redirectUrl: string,
+  expectedState: string,
+): string {
+  const callback = parseOAuthCallbackResponse(
+    callbackUrl,
+    redirectUrl,
+    expectedState,
+  );
+  if (callback.authorizationError) {
+    throw new OAuthAuthorizationError();
+  }
+  return callback.code;
+}
 
 export function hashServerUrl(serverUrl: string): string {
   return createHash('sha256').update(serverUrl).digest('hex').slice(0, 16);
 }
 
-function getCacheDir(serverUrl: string): string {
+export function getMcpOAuthCacheDir(
+  serverUrl: string,
+  profile?: string,
+): string {
+  const hash = hashServerUrl(serverUrl);
+  if (!profile) {
+    return join(getHomeDir(), '.allagents', 'oauth-proxy', hash);
+  }
   return join(
     getHomeDir(),
     '.allagents',
+    'profiles',
+    ProfileNameSchema.parse(profile),
     'oauth-proxy',
-    hashServerUrl(serverUrl),
+    hash,
   );
 }
 
-function getRequestInit(
+function getMcpFetch(
+  serverUrl: string,
   headers: Record<string, string>,
-): RequestInit | undefined {
+): FetchLike | undefined {
   if (Object.keys(headers).length === 0) {
     return undefined;
   }
-  return { headers };
+
+  const serverOrigin = new URL(serverUrl).origin;
+  return async (input, init) => {
+    const requestUrl = new URL(input.toString());
+    if (requestUrl.origin !== serverOrigin) {
+      return fetch(input, init);
+    }
+
+    const mergedHeaders = new Headers(headers);
+    new Headers(init?.headers).forEach((value, key) => {
+      mergedHeaders.set(key, value);
+    });
+
+    return fetch(input, {
+      ...init,
+      headers: mergedHeaders,
+      redirect: 'error',
+    });
+  };
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -77,7 +227,7 @@ async function readJsonFile<T>(path: string): Promise<T | undefined> {
 }
 
 async function writePrivateFile(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFile(path, content, { encoding: 'utf-8', mode: 0o600 });
 }
 
@@ -177,6 +327,13 @@ function tryOpenBrowser(url: string): Promise<void> {
   });
 }
 
+interface OAuthProviderOptions {
+  callbackUrlReader?: OAuthCallbackUrlReader;
+  authorizationOutput?: (message: string) => void;
+  allowAuthorization?: boolean;
+  profile?: string;
+}
+
 class FileOAuthClientProvider implements OAuthClientProvider {
   private readonly clientInfoPath: string;
   private readonly tokensPath: string;
@@ -188,18 +345,26 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   private discovery: OAuthDiscoveryState | undefined = undefined;
   private codeVerifierValue: string | undefined = undefined;
   private pendingAuth: Promise<string> | undefined = undefined;
+  private authorizationUnavailable = false;
+  private readonly callbackUrlReader: OAuthCallbackUrlReader | undefined;
+  private readonly authorizationOutput: (message: string) => void;
+  private readonly allowAuthorization: boolean;
   private readonly stateValue = randomUUID();
 
   constructor(
     private readonly port: number,
     serverUrl: string,
+    options: OAuthProviderOptions = {},
   ) {
-    const cacheDir = getCacheDir(serverUrl);
+    const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
     this.clientInfoPath = join(cacheDir, 'client-info.json');
     this.tokensPath = join(cacheDir, 'tokens.json');
     this.verifierPath = join(cacheDir, 'code-verifier.txt');
     this.discoveryPath = join(cacheDir, 'discovery.json');
     this.redirectUriValue = `http://127.0.0.1:${port}/callback`;
+    this.callbackUrlReader = options.callbackUrlReader;
+    this.authorizationOutput = options.authorizationOutput ?? console.error;
+    this.allowAuthorization = options.allowAuthorization ?? true;
   }
 
   get redirectUrl(): string {
@@ -260,6 +425,10 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
 
   redirectToAuthorization(authorizationUrl: URL): void {
+    if (!this.allowAuthorization) {
+      this.authorizationUnavailable = true;
+      return;
+    }
     this.pendingAuth ??= this.waitForAuthorizationCode(authorizationUrl);
   }
 
@@ -310,6 +479,9 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
 
   async waitForAuthCode(): Promise<string> {
+    if (this.authorizationUnavailable) {
+      throw new Error('OAuth authorization requires an interactive terminal');
+    }
     if (!this.pendingAuth) {
       throw new Error('OAuth authorization has not been started');
     }
@@ -317,89 +489,126 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
 
   private waitForAuthorizationCode(authorizationUrl: URL): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const server = createServer(
-        (request: IncomingMessage, response: ServerResponse) => {
-          try {
-            const parsed = new URL(
-              request.url ?? '/',
-              `http://127.0.0.1:${this.port}`,
-            );
-            const code = parsed.searchParams.get('code');
-            const error = parsed.searchParams.get('error');
-            const state = parsed.searchParams.get('state');
-
-            if (code) {
-              if (state !== this.stateValue) {
-                response.writeHead(400, {
-                  'content-type': 'text/html; charset=utf-8',
-                });
-                response.end(
-                  '<html><body><h1>Authorization failed</h1><p>State validation failed.</p></body></html>',
-                );
-                server.close();
-                reject(new Error('OAuth state validation failed'));
-                return;
-              }
-              response.writeHead(200, {
-                'content-type': 'text/html; charset=utf-8',
-              });
-              response.end(
-                '<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>',
-              );
-              server.close();
-              resolve(code);
-              return;
-            }
-
-            const message = error ?? 'No authorization code received';
-            response.writeHead(400, {
-              'content-type': 'text/html; charset=utf-8',
-            });
-            response.end(
-              `<html><body><h1>Authorization failed</h1><p>${message}</p></body></html>`,
-            );
-            server.close();
-            reject(new Error(message));
-          } catch (error) {
-            server.close();
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        },
-      );
-
-      const timeout = setTimeout(() => {
-        server.close();
-        reject(new Error('Timed out waiting for OAuth authorization callback'));
-      }, AUTH_TIMEOUT_MS);
-
-      server.on('close', () => {
-        clearTimeout(timeout);
-      });
-      server.on('error', reject);
-      server.listen(this.port, '127.0.0.1', () => {
-        console.error('Opening browser for authorization...');
-        console.error(
-          `${AUTH_URL_LOG_PREFIX}${authorizationUrl.toString()}`,
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    const readerAbortController = new AbortController();
+    let settled = false;
+    const settle = (
+      outcome: 'resolve' | 'reject',
+      value: string | Error,
+    ): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      readerAbortController.abort();
+      if (server.listening) server.close();
+      if (outcome === 'resolve') {
+        resolve(value as string);
+      } else {
+        reject(value as Error);
+      }
+    };
+    const acceptCallback = (callbackUrl: string): void => {
+      try {
+        settle(
+          'resolve',
+          parseOAuthCallbackUrl(
+            callbackUrl,
+            this.redirectUriValue,
+            this.stateValue,
+          ),
         );
-        // Test-only escape hatch: e2e tests fetch the URL themselves against a local
-        // dummy IdP, and skipping the real OS browser-open avoids ever launching one.
-        if (process.env.ALLAGENTS_MCP_OAUTH_NO_BROWSER === '1') {
-          console.error(
-            'Skipping automatic browser open (ALLAGENTS_MCP_OAUTH_NO_BROWSER=1).',
+      } catch (error) {
+        settle(
+          'reject',
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    };
+    const server = createServer(
+      (request: IncomingMessage, response: ServerResponse) => {
+        try {
+          const callbackUrl = new URL(
+            request.url ?? '/',
+            this.redirectUriValue,
+          ).toString();
+          const code = parseOAuthCallbackUrl(
+            callbackUrl,
+            this.redirectUriValue,
+            this.stateValue,
           );
-        } else {
-          void tryOpenBrowser(authorizationUrl.toString());
+          response.writeHead(200, {
+            'content-type': 'text/html; charset=utf-8',
+          });
+          response.end(
+            '<html><body><h1>Authorization complete</h1><p>You can close this window.</p></body></html>',
+          );
+          settle('resolve', code);
+        } catch (error) {
+          response.writeHead(400, {
+            'content-type': 'text/html; charset=utf-8',
+          });
+          response.end(
+            '<html><body><h1>Authorization failed</h1><p>The OAuth response was rejected.</p></body></html>',
+          );
+          settle(
+            'reject',
+            error instanceof Error ? error : new Error(String(error)),
+          );
         }
-      });
+      },
+    );
+    const timeout = setTimeout(() => {
+      settle(
+        'reject',
+        new Error('Timed out waiting for OAuth authorization callback'),
+      );
+    }, AUTH_TIMEOUT_MS);
+    server.on('error', (error) => settle('reject', error));
+    server.listen(this.port, '127.0.0.1', () => {
+      this.authorizationOutput('Opening browser for authorization...');
+      this.authorizationOutput(
+        `${AUTH_URL_LOG_PREFIX}${authorizationUrl.toString()}`,
+      );
+      this.authorizationOutput(
+        this.callbackUrlReader
+          ? 'Using a remote browser? Paste its callback URL in this terminal.'
+          : 'Using a remote browser? Run `allagents mcp reauth <name>` in this workspace, then reconnect.',
+      );
+      // Test-only escape hatch: e2e tests fetch the URL themselves against a local
+      // dummy IdP, and skipping the real OS browser-open avoids ever launching one.
+      if (process.env.ALLAGENTS_MCP_OAUTH_NO_BROWSER === '1') {
+        this.authorizationOutput(
+          'Skipping automatic browser open (ALLAGENTS_MCP_OAUTH_NO_BROWSER=1).',
+        );
+      } else {
+        void tryOpenBrowser(authorizationUrl.toString());
+      }
+      if (this.callbackUrlReader) {
+        void this.callbackUrlReader({
+          authorizationUrl,
+          redirectUrl: this.redirectUriValue,
+          state: this.stateValue,
+          signal: readerAbortController.signal,
+        })
+          .then(acceptCallback)
+          .catch((error) => {
+            if (readerAbortController.signal.aborted) return;
+            settle(
+              'reject',
+              error instanceof Error ? error : new Error(String(error)),
+            );
+          });
+      }
     });
+    return promise;
   }
 }
 
 async function buildOAuthProvider(
   serverUrl: string,
+  options: OAuthProviderOptions = {},
 ): Promise<FileOAuthClientProvider> {
-  const cacheDir = getCacheDir(serverUrl);
+  const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
   const cachedClientInfo = await readJsonFile<OAuthClientInformationMixed>(
     join(cacheDir, 'client-info.json'),
   );
@@ -409,7 +618,7 @@ async function buildOAuthProvider(
     port = await findFreePort();
   }
 
-  const provider = new FileOAuthClientProvider(port, serverUrl);
+  const provider = new FileOAuthClientProvider(port, serverUrl, options);
   await provider.load();
   return provider;
 }
@@ -427,11 +636,21 @@ function parseCallToolResponse(
   };
 }
 
+interface RemoteConnection {
+  client: Client;
+  transport: StreamableHTTPClientTransport;
+}
+
+interface RemoteTransportOptions extends OAuthProviderOptions {
+  headers?: Record<string, string>;
+}
+
 async function connectRemoteTransport(
   serverUrl: string,
-  headers: Record<string, string>,
-): Promise<Client> {
-  const provider = await buildOAuthProvider(serverUrl);
+  options: RemoteTransportOptions = {},
+): Promise<RemoteConnection> {
+  const provider = await buildOAuthProvider(serverUrl, options);
+  const headers = resolveMcpHeaderReferences(options.headers ?? {});
   const client = new Client(
     {
       name: 'AllAgents',
@@ -441,10 +660,10 @@ async function connectRemoteTransport(
   );
 
   const buildTransport = () => {
-    const requestInit = getRequestInit(headers);
+    const mcpFetch = getMcpFetch(serverUrl, headers);
     return new StreamableHTTPClientTransport(new URL(serverUrl), {
       authProvider: provider,
-      ...(requestInit && { requestInit }),
+      ...(mcpFetch && { fetch: mcpFetch }),
     });
   };
 
@@ -462,14 +681,80 @@ async function connectRemoteTransport(
     await client.connect(transport as unknown as Transport);
   }
 
-  return client;
+  return { client, transport };
+}
+
+export interface ConnectHttpMcpServerOptions {
+  headers?: Record<string, string>;
+  callbackUrlReader?: OAuthCallbackUrlReader;
+  authorizationOutput?: (message: string) => void;
+  resetCredentials?: boolean;
+  allowAuthorization?: boolean;
+  profile?: string;
+}
+
+export async function connectHttpMcpServer(
+  serverUrl: string,
+  options: ConnectHttpMcpServerOptions = {},
+): Promise<void> {
+  const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
+  const backupDir = options.resetCredentials
+    ? `${cacheDir}.reauth-backup-${randomUUID()}`
+    : undefined;
+  let hasBackup = false;
+
+  if (backupDir) {
+    try {
+      await rename(cacheDir, backupDir);
+      hasBackup = true;
+    } catch (error) {
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    const { client, transport } = await connectRemoteTransport(
+      serverUrl,
+      options,
+    );
+    try {
+      await transport.terminateSession();
+    } finally {
+      await client.close();
+    }
+  } catch (error) {
+    if (backupDir) {
+      try {
+        await rm(cacheDir, { recursive: true, force: true });
+        if (hasBackup) await rename(backupDir, cacheDir);
+      } catch (restoreError) {
+        throw new AggregateError(
+          [error, restoreError],
+          'MCP reauthentication failed and the previous credentials could not be restored',
+        );
+      }
+    }
+    throw error;
+  }
+
+  if (hasBackup && backupDir) {
+    await rm(backupDir, { recursive: true, force: true });
+  }
 }
 
 export async function runHttpMcpStdioProxy(
   serverUrl: string,
   headers: Record<string, string> = {},
+  options: { profile?: string } = {},
 ): Promise<void> {
-  const remote = await connectRemoteTransport(serverUrl, headers);
+  const { client: remote } = await connectRemoteTransport(serverUrl, {
+    headers,
+    ...options,
+  });
   const local = new Server(
     {
       name: 'AllAgents',

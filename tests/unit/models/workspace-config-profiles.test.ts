@@ -425,6 +425,48 @@ describe('profile workspace declarations', () => {
     }
   });
 
+  it('accepts destination-local profile proxy policy', () => {
+    const result = UserWorkspaceConfigSchema.parse(
+      userConfigWithProfile({
+        clients: [{ name: 'codex' }, { name: 'copilot' }],
+        mcpServers: {
+          remote: { url: 'https://mcp.example', clients: ['codex', 'copilot'] },
+        },
+        mcpProxy: {
+          servers: {
+            remote: { proxy: ['codex', 'copilot'] },
+            shared: { proxy: ['*'] },
+          },
+        },
+      }),
+    );
+
+    expect(result.profiles?.research?.mcpProxy).toEqual({
+      clients: [],
+      servers: {
+        remote: { proxy: ['codex', 'copilot'] },
+        shared: { proxy: ['*'] },
+      },
+    });
+  });
+
+  it('requires profile proxy selectors to be unique declared clients', () => {
+    for (const mcpProxy of [
+      { clients: ['omp'] },
+      { clients: ['codex', 'codex'] },
+      { servers: { remote: { proxy: ['omp'] } } },
+      { servers: { remote: { proxy: ['codex', 'codex'] } } },
+    ]) {
+      const result = UserWorkspaceConfigSchema.safeParse(
+        userConfigWithProfile({
+          clients: [{ name: 'codex' }],
+          mcpProxy,
+        }),
+      );
+      expect(result.success).toBe(false);
+    }
+  });
+
   it('requires exact portable secret references in profile MCP credentials', () => {
     for (const server of [
       { command: 'local-mcp', env: { TOKEN: 'plaintext' } },

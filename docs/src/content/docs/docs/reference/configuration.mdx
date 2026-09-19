@@ -196,6 +196,13 @@ profiles:
         command: review-mcp
         env:
           REVIEW_TOKEN: ${REVIEW_TOKEN}
+      tradingview:
+        type: http
+        url: https://mcp.tradingview.com/mcp
+    mcpProxy:
+      servers:
+        tradingview:
+          proxy: [copilot]
 
   codex-review:
     clients:
@@ -253,6 +260,7 @@ profiles:
 | `plugins[].clients` | No | Restrict the plugin to named clients in this profile |
 | `plugins[].skills` | No | Skill allowlist or `{ exclude: [...] }` where the adapter supports filtering |
 | `profiles.<name>.mcpServers` | No | Profile-scoped stdio or HTTP MCP declarations |
+| `profiles.<name>.mcpProxy` | No | Profile-local HTTP-to-stdio routing policy; selectors must be clients declared by that profile |
 
 Relative local plugin sources resolve from the user's home directory, not the
 current project. Profile names and launcher names are safe command basenames;
@@ -272,6 +280,12 @@ MCP credentials must remain runtime references. Environment values and HTTP
 headers accept exact `${ENV_VAR}` references only, and credential-bearing
 command arguments must use the same exact form. Resolved secret values are
 never written to plans, launchers, profile state, or generated configuration.
+
+Profile MCP is materialized inside the profile root. Codex writes
+`clients/codex/home/<profile>.config.toml`; Copilot writes
+`clients/copilot/home/mcp-config.json`. Proxied HTTP servers share OAuth only
+inside that profile, under `oauth-proxy/<url-hash>`. Removing the profile removes
+that profile-owned OAuth state.
 
 OpenCode profile settings accept `model`, `small_model`, `default_agent`,
 `username`, `share`, `autoupdate`, `snapshot`, `subagent_depth`, `logLevel`,
@@ -512,7 +526,7 @@ This differs from [plugin skill deduplication](/docs/guides/plugins/#duplicate-s
 
 ## MCP Servers
 
-The optional top-level `mcpServers` field defines MCP servers managed directly by the workspace. Servers defined here are synced to all configured project-scoped MCP clients (`claude`, `codex`, `vscode`, `copilot`).
+The optional top-level `mcpServers` field defines MCP servers managed directly by a project or ordinary user workspace. Project servers sync to configured project MCP clients; user servers sync to the corresponding user destinations.
 
 ```yaml
 mcpServers:
@@ -547,15 +561,22 @@ mcpServers:
 | `command` | stdio only | Executable for the stdio command |
 | `args` | No | Command arguments array (stdio transport only) |
 | `env` | No | Environment variables map (stdio transport only) |
-| `clients` | No | Subset of project-scoped clients that should receive this server. Defaults to all configured clients. |
+| `clients` | No | Subset of clients in this destination that should receive this server. Defaults to all configured clients. |
 
-Manage these entries declaratively in `workspace.yaml`, or via the [`allagents mcp` commands](/docs/reference/cli/#mcp-commands). Workspace-level servers override any plugin-supplied server with the same name (with a warning).
+Manage these entries declaratively in the selected `workspace.yaml`, or via the
+[`allagents mcp` commands](/docs/reference/cli/#mcp-commands). Workspace-level
+servers override plugin-supplied servers with the same name, with a warning.
 
-Servers AllAgents adds are tracked in `.allagents/sync-state.json`; pre-existing user-managed servers in client MCP configs (`.mcp.json`, `.vscode/mcp.json`, `.copilot/mcp-config.json`, `.codex/config.toml`) are never touched.
+Ownership is tracked separately for project, ordinary user, and each named
+profile. Pre-existing user-managed entries in client configs are never claimed
+or removed.
 
-## MCP Proxy
+## Advanced MCP Routing
 
-The optional `mcpProxy` section rewrites HTTP MCP servers to stdio via AllAgents' built-in `allagents mcp proxy` bridge for clients that need it. See the [MCP Proxy guide](/docs/guides/mcp-proxy/) for details.
+HTTP servers created with `allagents mcp add` are routed through AllAgents
+automatically. The optional `mcpProxy` section applies the same built-in bridge
+to HTTP servers supplied by plugins, globally or per server. See the
+[HTTP MCP Servers guide](/docs/guides/mcp-proxy/) for details.
 
 ```yaml
 mcpProxy:
@@ -570,9 +591,9 @@ mcpProxy:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `clients` | Yes | Clients where all HTTP servers are proxied to stdio |
+| `clients` | No | Clients where all HTTP servers are proxied to stdio; defaults to an empty list |
 | `servers` | No | Per-server overrides with additional client lists |
-| `servers.<name>.proxy` | Yes (per entry) | Additional clients to proxy this specific server for |
+| `servers.<name>.proxy` | Yes (per entry) | Additional clients for this server, or `*` for every current and future eligible client |
 
 Only servers with HTTP transport (`url` field) are transformed. Stdio servers pass through unchanged.
 

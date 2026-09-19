@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import type {
@@ -6,30 +6,44 @@ import type {
   ProfileState,
 } from '../../models/profile-state.js';
 import {
+  type ClientType,
   getPluginRef,
   getPluginSource,
-  type ClientType,
   type InstallMode,
+  type McpServerConfig,
   type ProfileDeclaration,
-  type ProfilePluginEntry,
   ProfileNameSchema,
+  type ProfilePluginEntry,
   type UserWorkspaceConfig,
 } from '../../models/workspace-config.js';
+import { parseUserWorkspaceConfig } from '../../utils/workspace-parser.js';
+import { applyMcpProxy } from '../mcp-proxy.js';
 import type {
   NativeInspectionResult,
   NativeResource,
 } from '../native/types.js';
 import { sanitizeNativeProvenance } from '../native/types.js';
-import { copyPluginToWorkspace, collectPluginSkills } from '../transform.js';
-import { parseUserWorkspaceConfig } from '../../utils/workspace-parser.js';
-import { resolveProfileFileSource } from './source.js';
+import { collectPluginSkills, copyPluginToWorkspace } from '../transform.js';
+import { serializeProfileMcpServers } from './adapters/mcp.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
   assertSafeProfilePath,
   fingerprintProfileFile,
   sha256Fingerprint,
 } from './files.js';
+import type {
+  ProfileOperationKind,
+  ProfilePlan,
+  ProfilePlanAction,
+  ProfilePlanClient,
+  ProfilePlanMcpServer,
+  ProfilePlanStep,
+  ProfilePlanStepDetail,
+  ProfileRuntimeOptions,
+  ProfileStepKind,
+} from './index.js';
 import { renderProfileLaunchers } from './launcher.js';
+import { resolveProfileFileSource } from './source.js';
 import {
   hashProfileDeclaration,
   loadProfileState,
@@ -43,17 +57,6 @@ import {
   type ProfileMarketplaceRegistration,
   type ProfileResolvedPlugin,
 } from './types.js';
-import type {
-  ProfileOperationKind,
-  ProfilePlan,
-  ProfilePlanAction,
-  ProfilePlanClient,
-  ProfilePlanMcpServer,
-  ProfilePlanStep,
-  ProfilePlanStepDetail,
-  ProfileRuntimeOptions,
-  ProfileStepKind,
-} from './index.js';
 
 export interface ResolvedProfileRuntime {
   readonly userConfigPath: string;
@@ -399,7 +402,6 @@ function sameNativeIdentity(
   );
 }
 
-
 function findInstalledNativeResource(
   inspection: NativeInspectionResult,
   matches: (resource: NativeResource) => boolean,
@@ -501,31 +503,17 @@ async function planManagedFile(input: {
   };
 }
 
-function hasSelectedMcp(
-  declaration: ProfileDeclaration,
-  client: ClientType,
-): boolean {
-  return Object.values(declaration.mcpServers ?? {}).some(
-    (server) => !server.clients || server.clients.includes(client),
-  );
-}
-
 function managedContextRoot(context: ProfileClientContext): string {
   return context.operationContext.roots?.config ?? context.root;
 }
-const EXACT_SECRET_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const SECRET_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 function requestedSecretNames(value: unknown): string[] {
   const names = new Set<string>();
   const visit = (entry: unknown): void => {
     if (typeof entry === 'string') {
-      const match = EXACT_SECRET_REFERENCE.exec(entry);
-      if (match?.[1]) names.add(match[1]);
-      try {
-        const url = new URL(entry);
-        for (const queryValue of url.searchParams.values()) visit(queryValue);
-      } catch {
-        // Non-URL strings have already been checked as exact references.
+      for (const match of entry.matchAll(SECRET_REFERENCE)) {
+        if (match[1]) names.add(match[1]);
       }
       return;
     }
@@ -544,14 +532,10 @@ function requestedSecretNames(value: unknown): string[] {
 }
 
 function mcpDisclosures(
-  declaration: ProfileDeclaration,
-  client: ClientType,
+  mcpServers: Readonly<Record<string, McpServerConfig>>,
 ): readonly ProfilePlanMcpServer[] {
   const servers: ProfilePlanMcpServer[] = [];
-  for (const [name, server] of Object.entries(
-    declaration.mcpServers ?? {},
-  ).sort(([left], [right]) => left.localeCompare(right))) {
-    if (server.clients && !server.clients.includes(client)) continue;
+  for (const [name, server] of Object.entries(mcpServers)) {
     if ('url' in server) {
       servers.push({
         name,
@@ -567,7 +551,7 @@ function mcpDisclosures(
           command: server.command,
           args: Object.freeze(
             (server.args ?? []).map((argument) =>
-              EXACT_SECRET_REFERENCE.test(argument) ? '[REDACTED]' : argument,
+              argument.replace(SECRET_REFERENCE, '[REDACTED]'),
             ),
           ),
         },
@@ -577,10 +561,6 @@ function mcpDisclosures(
   }
   return Object.freeze(servers);
 }
-
-
-
-
 
 async function planRoot(
   client: ClientType,
@@ -700,8 +680,8 @@ export async function planProfileOperation(
   const priorState = loadedState.status === 'loaded' ? loadedState.state : null;
   if (operation !== 'remove' && !declaration)
     throw new Error(`Profile '${profile}' is not declared`);
-  if (operation === 'remove' && !priorState)
-    throw new Error(`Profile '${profile}' is not installed`);
+  if (operation === 'remove' && !priorState && !declaration)
+    throw new Error(`Profile '${profile}' is not installed or declared`);
 
   const desiredClients = declaration
     ? declaration.clients.map((client) => client.name)
@@ -957,9 +937,32 @@ export async function planProfileOperation(
         }
       }
 
+      const selectedMcpServers = serializeProfileMcpServers(
+        {
+          plugins: [],
+          ...(declaration.mcpServers && {
+            mcpServers: declaration.mcpServers,
+          }),
+        },
+        client,
+      );
+      const effectiveMcpServers =
+        selectedMcpServers === null
+          ? undefined
+          : declaration.mcpProxy
+            ? Object.fromEntries(
+                applyMcpProxy(
+                  new Map(Object.entries(selectedMcpServers)),
+                  client,
+                  declaration.mcpProxy,
+                  { profile },
+                ),
+              )
+            : selectedMcpServers;
+      const hasMcp = Object.keys(effectiveMcpServers ?? {}).length > 0;
+
       const requiresMcpPrerequisite =
-        hasSelectedMcp(declaration, client) &&
-        adapter.mcpPrerequisite !== undefined;
+        hasMcp && adapter.mcpPrerequisite !== undefined;
       const plannedMcpPrerequisite = adapter.mcpPrerequisite
         ? nativePlugins.find(({ resource }) =>
             adapter.mcpPrerequisite?.matches(resource),
@@ -1272,14 +1275,13 @@ export async function planProfileOperation(
           ...filePlugins,
         ],
         settings: declaredClient.settings,
-        ...(declaration.mcpServers && { mcpServers: declaration.mcpServers }),
+        ...(effectiveMcpServers && { mcpServers: effectiveMcpServers }),
       };
       if (
         Object.keys(declaredClient.settings).length > 0 &&
         !adapter.capabilities.settings
       )
         throw new Error(`Profile client '${client}' does not support settings`);
-      const hasMcp = hasSelectedMcp(declaration, client);
       if (hasMcp && !adapter.capabilities.mcp)
         throw new Error(
           `Profile client '${client}' does not support MCP configuration`,
@@ -1306,7 +1308,9 @@ export async function planProfileOperation(
                 ...planned,
                 public: {
                   ...planned.public,
-                  detail: { mcpServers: mcpDisclosures(declaration, client) },
+                  detail: {
+                    mcpServers: mcpDisclosures(effectiveMcpServers ?? {}),
+                  },
                 },
                 context,
               }
@@ -1329,7 +1333,7 @@ export async function planProfileOperation(
           public: {
             ...planned.public,
             detail: {
-              mcpServers: mcpDisclosures(declaration, client),
+              mcpServers: mcpDisclosures(effectiveMcpServers ?? {}),
             },
           },
           ...(requiresMcpPrerequisite && {

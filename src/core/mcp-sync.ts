@@ -1,31 +1,28 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
+import { CONFIG_DIR, getHomeDir, WORKSPACE_CONFIG_FILE } from '../constants.js';
+import type { SyncState } from '../models/sync-state.js';
 import type {
   ClientType,
+  UserWorkspaceConfig,
   WorkspaceConfig,
 } from '../models/workspace-config.js';
-import type { SyncState } from '../models/sync-state.js';
-import {
-  buildPluginSyncPlans,
-  collectSyncClients,
-  seedFetchCacheFromMarketplaces,
-  validateAllPlugins,
-  type ValidatedPlugin,
-} from './sync.js';
-import type { McpMergeResult } from './vscode-mcp.js';
-import { collectMcpServers, syncVscodeMcpConfig } from './vscode-mcp.js';
+import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { syncClaudeMcpConfig } from './claude-mcp.js';
 import { syncCodexProjectMcpConfig } from './codex-mcp.js';
+import { ensureMarketplacesRegistered } from './marketplace.js';
 import { applyMcpProxy } from './mcp-proxy.js';
+import type { ValidatedPlugin } from './sync.js';
 import {
   getPreviouslySyncedMcpServers,
   loadSyncState,
-  saveSyncState,
   type McpScope,
+  saveSyncState,
 } from './sync-state.js';
-import { ensureMarketplacesRegistered } from './marketplace.js';
-import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
+import { syncUserMcpAdapters } from './user-mcp-sync.js';
+import { getUserWorkspaceConfig } from './user-workspace.js';
+import type { McpMergeResult } from './vscode-mcp.js';
+import { collectMcpServers, syncVscodeMcpConfig } from './vscode-mcp.js';
 import { migrateWorkspaceSkillsV1toV2 } from './workspace-modify.js';
 
 /**
@@ -90,7 +87,7 @@ function buildSyncSpecs(workspacePath: string): McpSyncSpec[] {
     {
       client: 'copilot',
       scope: 'copilot',
-      configPath: join(workspacePath, '.copilot', 'mcp-config.json'),
+      configPath: join(workspacePath, '.github', 'mcp.json'),
       syncFn: syncClaudeMcpConfig,
     },
   ];
@@ -185,6 +182,58 @@ export interface SyncMcpOnlyResult {
   error?: string;
 }
 
+interface PreparedMcpOnlySync {
+  validPlugins: ValidatedPlugin[];
+  syncClients: ClientType[];
+  warnings: string[];
+}
+
+async function prepareMcpOnlySync(
+  config: WorkspaceConfig,
+  scope: 'project' | 'user',
+  root: string,
+  offline: boolean,
+): Promise<PreparedMcpOnlySync> {
+  // Deferred because sync.ts imports this module's project orchestrator; a
+  // static reverse import would create an mcp-sync.ts <-> sync.ts load cycle.
+  const {
+    buildPluginSyncPlans,
+    collectSyncClients,
+    seedFetchCacheFromMarketplaces,
+    validateAllPlugins,
+  } = await import('./sync.js');
+  const { plans, warnings } = buildPluginSyncPlans(
+    config.plugins,
+    config.clients,
+    scope,
+  );
+  const activePlans = plans.filter(
+    (plan) =>
+      plan.clients.length > 0 ||
+      (scope === 'project' && plan.nativeClients.length > 0),
+  );
+  const syncClients = collectSyncClients(config.clients, activePlans);
+
+  if (!offline) {
+    const marketplaceResults = await ensureMarketplacesRegistered(
+      activePlans.map((plan) => plan.source),
+    );
+    await seedFetchCacheFromMarketplaces(marketplaceResults);
+  }
+
+  const validatedPlugins = await validateAllPlugins(activePlans, root, offline);
+  const validPlugins = validatedPlugins.filter(
+    (plugin): plugin is ValidatedPlugin => plugin.success,
+  );
+  warnings.push(
+    ...validatedPlugins
+      .filter((plugin) => !plugin.success)
+      .map((plugin) => `${plugin.plugin}: ${plugin.error} (skipped)`),
+  );
+
+  return { validPlugins, syncClients, warnings };
+}
+
 /**
  * Standalone MCP-only sync for the `allagents mcp update` command.
  *
@@ -226,42 +275,11 @@ export async function syncMcpOnly(
     };
   }
 
-  const warnings: string[] = [];
-
-  const { plans, warnings: planWarnings } = buildPluginSyncPlans(
-    config.plugins,
-    config.clients,
+  const { validPlugins, syncClients, warnings } = await prepareMcpOnlySync(
+    config,
     'project',
-  );
-  warnings.push(...planWarnings);
-
-  const filteredPlans = plans.filter(
-    (plan) => plan.clients.length > 0 || plan.nativeClients.length > 0,
-  );
-  const syncClients = collectSyncClients(config.clients, filteredPlans);
-
-  // Pre-register marketplaces so that plugin validation can resolve them.
-  // Skip in offline mode to avoid network calls.
-  if (!offline) {
-    const marketplaceResults = await ensureMarketplacesRegistered(
-      filteredPlans.map((plan) => plan.source),
-    );
-    await seedFetchCacheFromMarketplaces(marketplaceResults);
-  }
-
-  // Validate plugins so we can read their .mcp.json files
-  const validatedPlugins = await validateAllPlugins(
-    filteredPlans,
     workspacePath,
     offline,
-  );
-  const validPlugins = validatedPlugins.filter(
-    (v): v is ValidatedPlugin => v.success,
-  );
-  warnings.push(
-    ...validatedPlugins
-      .filter((v) => !v.success)
-      .map((v) => `${v.plugin}: ${v.error} (skipped)`),
   );
 
   const previousState = await loadSyncState(workspacePath);
@@ -306,5 +324,88 @@ export async function syncMcpOnly(
     success: true,
     mcpResults: syncResult.mcpResults,
     warnings,
+  };
+}
+
+/**
+ * Reconcile only ordinary user-scoped MCP destinations.
+ *
+ * This intentionally omits user workspace migrations, plugin file operations,
+ * native installs, and profile materialization.
+ */
+export async function syncUserMcpOnly(
+  options: { offline?: boolean; dryRun?: boolean } = {},
+): Promise<SyncMcpOnlyResult> {
+  const { offline = false, dryRun = false } = options;
+  let config: UserWorkspaceConfig | null;
+  try {
+    config = await getUserWorkspaceConfig();
+  } catch (error) {
+    return {
+      success: false,
+      mcpResults: {},
+      warnings: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (!config) {
+    return { success: true, mcpResults: {}, warnings: [] };
+  }
+
+  const homeDir = getHomeDir();
+  const { validPlugins, syncClients, warnings } = await prepareMcpOnlySync(
+    config,
+    'user',
+    homeDir,
+    offline,
+  );
+
+  const previousState = await loadSyncState(homeDir);
+  const syncResult = await syncUserMcpAdapters({
+    validPlugins,
+    config,
+    previousState,
+    syncClients,
+    dryRun,
+    force: false,
+  });
+  warnings.push(...syncResult.warnings);
+
+  if (!dryRun) {
+    const trackingChanged = Object.entries(syncResult.trackedServers).some(
+      ([scope, current]) => {
+        if (!current) return false;
+        const previous = previousState?.mcpServers?.[scope] ?? [];
+        return (
+          current.length !== previous.length ||
+          current.some((name, index) => name !== previous[index])
+        );
+      },
+    );
+    const adaptersChanged = Object.values(syncResult.mcpResults).some(
+      (result) =>
+        result !== undefined &&
+        (result.added > 0 || result.overwritten > 0 || result.removed > 0),
+    );
+
+    if (trackingChanged || adaptersChanged) {
+      await saveSyncState(homeDir, {
+        files: previousState?.files ?? {},
+        mcpServers: {
+          ...previousState?.mcpServers,
+          ...syncResult.trackedServers,
+        },
+      });
+    }
+  }
+
+  return {
+    success: syncResult.complete,
+    mcpResults: syncResult.mcpResults,
+    warnings,
+    ...(!syncResult.complete && {
+      error: 'MCP sync was incomplete; retained ownership for failed clients',
+    }),
   };
 }

@@ -48,11 +48,17 @@ describe('mcpProxy workspace config', () => {
     expect(result.success).toBe(true);
   });
 
-  test('rejects mcpProxy without clients', () => {
+  test('defaults clients to empty for server-only proxy policy', () => {
     const result = WorkspaceConfigSchema.safeParse({
       ...baseConfig,
       mcpProxy: { servers: { 'my-api': { proxy: ['codex'] } } },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mcpProxy).toEqual({
+        clients: [],
+        servers: { 'my-api': { proxy: ['codex'] } },
+      });
+    }
   });
 });

@@ -1,7 +1,7 @@
-import * as p from '@clack/prompts';
-import { settings } from '@clack/core';
-import chalk from 'chalk';
 import { relative } from 'node:path';
+import { settings } from '@clack/core';
+import * as p from '@clack/prompts';
+import chalk from 'chalk';
 import packageJson from '../../../package.json';
 import { TuiCache } from './cache.js';
 import { getTuiContext, type TuiContext } from './context.js';
@@ -11,12 +11,14 @@ const { select } = p;
 // Disable Escape key as cancel trigger to prevent terminal freezes.
 // Ctrl+C (\x03) still works for cancellation.
 settings.aliases.delete('escape');
-import { runSync } from './actions/sync.js';
-import { runStatus } from './actions/status.js';
-import { runBrowseMarketplaces, runPlugins } from './actions/plugins.js';
-import { runManageClients } from './actions/clients.js';
-import { runSkills } from './actions/skills.js';
+
 import { getUpdateNotice } from '../update-check.js';
+import { runManageClients } from './actions/clients.js';
+import { runMcpServers } from './actions/mcp.js';
+import { runBrowseMarketplaces, runPlugins } from './actions/plugins.js';
+import { runSkills } from './actions/skills.js';
+import { runStatus } from './actions/status.js';
+import { runSync } from './actions/sync.js';
 
 export type MenuAction =
   | 'workspace'
@@ -24,24 +26,27 @@ export type MenuAction =
   | 'plugins'
   | 'skills'
   | 'clients'
+  | 'mcp'
   | 'marketplace'
   | 'exit';
 
 /**
  * Build context-aware menu options based on workspace state.
- * Plugins, Skills, Clients, and Marketplaces are always visible.
+ * Plugins, Skills, Clients, MCP Servers, and Marketplaces are always visible.
  */
 export function buildMenuOptions(context: TuiContext) {
-  const options: Array<{ label: string; value: MenuAction; hint?: string }> = [];
+  const options: Array<{ label: string; value: MenuAction; hint?: string }> =
+    [];
 
   if (context.needsSync) {
-    options.push({ label: 'Sync plugins', value: 'sync', hint: 'sync needed' });
+    options.push({ label: 'Update', value: 'sync', hint: 'update needed' });
   }
 
   options.push({ label: 'Workspace', value: 'workspace' });
   options.push({ label: 'Plugins', value: 'plugins' });
   options.push({ label: 'Skills', value: 'skills' });
   options.push({ label: 'Clients', value: 'clients' });
+  options.push({ label: 'MCP Servers', value: 'mcp' });
   options.push({ label: 'Marketplaces', value: 'marketplace' });
 
   options.push({ label: 'Exit', value: 'exit' });
@@ -59,7 +64,7 @@ function buildCompactSummary(context: TuiContext): string {
   parts.push(`${context.userPluginCount} user`);
   parts.push(`${context.marketplaceCount} marketplaces`);
   if (context.needsSync) {
-    parts.push(chalk.yellow('sync needed'));
+    parts.push(chalk.yellow('update needed'));
   }
   return parts.join(', ');
 }
@@ -82,9 +87,9 @@ function buildSummary(context: TuiContext): string {
   lines.push(`Marketplaces: ${context.marketplaceCount}`);
 
   if (context.needsSync) {
-    lines.push(`Sync: ${chalk.yellow('needed')}`);
+    lines.push(`Update: ${chalk.yellow('needed')}`);
   } else if (context.hasWorkspace) {
-    lines.push(`Sync: ${chalk.green('up to date')}`);
+    lines.push(`Update: ${chalk.green('up to date')}`);
   }
 
   return lines.join('\n');
@@ -142,6 +147,9 @@ export async function runWizard(): Promise<void> {
         break;
       case 'clients':
         await runManageClients(context, cache);
+        break;
+      case 'mcp':
+        await runMcpServers(context, cache);
         break;
       case 'marketplace':
         await runBrowseMarketplaces(context, cache);

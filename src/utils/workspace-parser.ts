@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
+
 import {
-  ProjectWorkspaceConfigSchema,
-  UserWorkspaceConfigSchema,
   type ProjectWorkspaceConfig,
+  ProjectWorkspaceConfigSchema,
   type UserWorkspaceConfig,
+  UserWorkspaceConfigSchema,
   type WorkspaceConfig,
 } from '../models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
@@ -13,15 +14,19 @@ const configName = `${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`;
 
 export type WorkspaceConfigScope = 'project' | 'user';
 
+export type EditableUserWorkspaceConfig = Omit<
+  UserWorkspaceConfig,
+  'repositories' | 'plugins' | 'clients'
+> &
+  Partial<Pick<UserWorkspaceConfig, 'repositories' | 'plugins' | 'clients'>>;
+
 function formatValidationError(
   path: string,
   scope: WorkspaceConfigScope,
   input: unknown,
 ): ProjectWorkspaceConfig | UserWorkspaceConfig {
   const schema =
-    scope === 'user'
-      ? UserWorkspaceConfigSchema
-      : ProjectWorkspaceConfigSchema;
+    scope === 'user' ? UserWorkspaceConfigSchema : ProjectWorkspaceConfigSchema;
   const result = schema.safeParse(input);
   if (result.success) return result.data;
 
@@ -35,7 +40,11 @@ export function validateProjectWorkspaceConfig(
   input: unknown,
   path: string = configName,
 ): ProjectWorkspaceConfig {
-  return formatValidationError(path, 'project', input) as ProjectWorkspaceConfig;
+  return formatValidationError(
+    path,
+    'project',
+    input,
+  ) as ProjectWorkspaceConfig;
 }
 
 export function validateUserWorkspaceConfig(
@@ -107,6 +116,28 @@ export async function parseWorkspaceConfigForEdit(
   return input as WorkspaceConfig;
 }
 
+async function loadUserWorkspaceConfigForEdit(path: string): Promise<{
+  input: EditableUserWorkspaceConfig;
+  validated: UserWorkspaceConfig;
+}> {
+  const input = await loadConfigFile(path);
+  const validated = validateUserWorkspaceConfig(input, path);
+  return {
+    input: input as EditableUserWorkspaceConfig,
+    validated,
+  };
+}
+
+/**
+ * Validate a user workspace for mutation while preserving its raw field
+ * omissions. Callers must validate the whole document again before writing.
+ */
+export async function parseUserWorkspaceConfigDocumentForEdit(
+  path: string,
+): Promise<EditableUserWorkspaceConfig> {
+  return (await loadUserWorkspaceConfigForEdit(path)).input;
+}
+
 /**
  * Validate a user workspace before mutation without materializing profile
  * defaults or dropping unrelated top-level fields. Profiles-only workspaces
@@ -114,12 +145,10 @@ export async function parseWorkspaceConfigForEdit(
  */
 export async function parseUserWorkspaceConfigForEdit(
   path: string,
-): Promise<WorkspaceConfig> {
-  const input = await loadConfigFile(path);
-  const validated = validateUserWorkspaceConfig(input);
-  const config = input as Record<string, unknown>;
-  config.repositories ??= validated.repositories;
-  config.plugins ??= validated.plugins;
-  config.clients ??= validated.clients;
-  return config as WorkspaceConfig;
+): Promise<UserWorkspaceConfig> {
+  const { input, validated } = await loadUserWorkspaceConfigForEdit(path);
+  input.repositories ??= validated.repositories;
+  input.plugins ??= validated.plugins;
+  input.clients ??= validated.clients;
+  return input as UserWorkspaceConfig;
 }

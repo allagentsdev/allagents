@@ -24,6 +24,13 @@ npx allagents update
 
 No cloning required — AllAgents fetches the `workspace.yaml` directly from GitHub and sets up everything.
 
+Install the end-user AllAgents skill when you want your coding agent to operate
+the CLI using its current machine-readable command contracts:
+
+```bash
+npx allagents plugin install allagents@allagentsdev/allagents --scope user
+```
+
 ## How It Works
 
 1. **Configure** your workspace with repos, plugins, and target clients in `workspace.yaml`
@@ -101,9 +108,9 @@ clients:
 | `allagents profile remove <name> --yes` | Remove unchanged managed profile resources |
 | `allagents skill add <name> [--from <source>] [--scope project\|user] [--client <clients>] [--yes]` | Add source-backed skills for selected scope and clients (plural `skills` alias supported) |
 | `allagents skill list` | List skills and status |
-| `allagents mcp add <name> <commandOrUrl>` | Add an MCP server and sync to clients |
-| `allagents mcp proxy <serverUrl>` | Bridge a remote HTTP MCP server to local stdio |
-| `allagents mcp list` | List workspace MCP servers |
+| `allagents mcp add <name> <commandOrUrl> [--scope user \| --profile <name>]` | Add, authenticate, and sync an MCP server |
+| `allagents mcp reauth <name> [--scope user \| --profile <name>]` | Reauthenticate an HTTP MCP server in one destination |
+| `allagents mcp list [--scope user \| --profile <name>]` | List MCP declarations in one destination |
 | `allagents workspace status` | Show workspace state |
 | `allagents self update` | Update AllAgents CLI |
 

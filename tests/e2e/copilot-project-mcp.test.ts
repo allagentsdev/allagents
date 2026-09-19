@@ -32,7 +32,7 @@ describe('copilot project-scoped MCP sync e2e', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  test('sync writes MCP servers to project .copilot/mcp-config.json when copilot client is configured', async () => {
+  test('sync writes MCP servers to project .github/mcp.json when copilot client is configured', async () => {
     writeFileSync(
       join(testDir, '.allagents', 'workspace.yaml'),
       `repositories:
@@ -48,7 +48,7 @@ clients:
 
     expect(result.success).toBe(true);
 
-    const mcpConfigPath = join(testDir, '.copilot', 'mcp-config.json');
+    const mcpConfigPath = join(testDir, '.github', 'mcp.json');
     expect(existsSync(mcpConfigPath)).toBe(true);
 
     const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'));
@@ -80,7 +80,7 @@ clients:
 
     expect(result.success).toBe(true);
     expect(result.mcpResults?.copilot).toBeUndefined();
-    const mcpConfigPath = join(testDir, '.copilot', 'mcp-config.json');
+    const mcpConfigPath = join(testDir, '.github', 'mcp.json');
     expect(existsSync(mcpConfigPath)).toBe(false);
   });
 
@@ -118,7 +118,7 @@ clients:
     expect(result3.mcpResults?.copilot?.removed).toBe(1);
     expect(result3.mcpResults?.copilot?.removedServers).toContain('deepwiki');
 
-    const mcpConfig = JSON.parse(readFileSync(join(testDir, '.copilot', 'mcp-config.json'), 'utf-8'));
+    const mcpConfig = JSON.parse(readFileSync(join(testDir, '.github', 'mcp.json'), 'utf-8'));
     expect(mcpConfig.mcpServers.deepwiki).toBeUndefined();
   });
 });

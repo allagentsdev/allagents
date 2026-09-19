@@ -1,4 +1,5 @@
 import { subcommands } from 'cmd-ts';
+import { terminalSafe } from './terminal-output.js';
 
 /**
  * Command metadata type and help text builder for enriched --help output.
@@ -31,6 +32,8 @@ export interface AgentCommandMeta extends CommandMeta {
   positionals?: CommandPositional[];
   options?: CommandOption[];
   outputSchema?: Record<string, unknown>;
+  /** Whether an agent can invoke the command without a human interaction step. */
+  interaction?: 'none' | 'conditional' | 'required';
   /**
    * Allowlist of fields that may be requested via `--json=<f1>,<f2>`.
    *
@@ -68,6 +71,7 @@ export function buildDescription(meta: CommandMeta): string {
  */
 export function conciseSubcommands(
   config: Parameters<typeof subcommands>[0],
+  hiddenSubcommands: readonly string[] = [],
 ): ReturnType<typeof subcommands> {
   const result = subcommands(config);
   const originalPrintHelp = result.printHelp.bind(result);
@@ -82,12 +86,20 @@ export function conciseSubcommands(
         cmd.description = cmd.description.split('\n')[0] ?? cmd.description;
       }
     }
-    const output = originalPrintHelp(context);
+    let output = originalPrintHelp(context);
     for (const [key, cmd] of Object.entries(config.cmds)) {
       const original = originals.get(key);
       if (original !== undefined) {
         cmd.description = original;
       }
+    }
+    for (const name of hiddenSubcommands) {
+      output = output
+        .split('\n')
+        .filter(
+          (line) => !terminalSafe(line).startsWith(`- ${name} -`),
+        )
+        .join('\n');
     }
     return output;
   };

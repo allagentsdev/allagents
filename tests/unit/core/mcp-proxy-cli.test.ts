@@ -7,6 +7,9 @@ import { buildCodexMcpAddArgs } from '../../../src/core/codex-mcp.js';
 import { syncVscodeMcpConfig } from '../../../src/core/vscode-mcp.js';
 import { applyMcpProxy } from '../../../src/core/mcp-proxy.js';
 import type { McpProxyConfig } from '../../../src/models/workspace-config.js';
+import packageJson from '../../../package.json';
+
+const packageRef = `allagents@${packageJson.version}`;
 
 describe('CLI args with proxy transform', () => {
   test('buildClaudeMcpAddArgs handles proxied HTTP config', () => {
@@ -19,8 +22,8 @@ describe('CLI args with proxy transform', () => {
 
     const args = buildClaudeMcpAddArgs('deepwiki', proxiedConfig);
     expect(args).toEqual([
-      'mcp', 'add', '--scope', 'user', 'deepwiki', '--', 'allagents',
-      'mcp', 'proxy', 'https://mcp.deepwiki.com/mcp',
+      'mcp', 'add', '--scope', 'user', 'deepwiki', '--', 'npx',
+      '-y', packageRef, 'mcp', 'proxy', 'https://mcp.deepwiki.com/mcp',
     ]);
   });
 
@@ -34,8 +37,8 @@ describe('CLI args with proxy transform', () => {
 
     const args = buildCodexMcpAddArgs('deepwiki', proxiedConfig);
     expect(args).toEqual([
-      'mcp', 'add', 'deepwiki', '--', 'allagents',
-      'mcp', 'proxy', 'https://mcp.deepwiki.com/mcp',
+      'mcp', 'add', 'deepwiki', '--', 'npx',
+      '-y', packageRef, 'mcp', 'proxy', 'https://mcp.deepwiki.com/mcp',
     ]);
   });
 });
@@ -57,8 +60,8 @@ describe('syncVscodeMcpConfig with serverOverrides', () => {
   test('writes proxied stdio config when serverOverrides is provided', () => {
     const proxiedServers = new Map<string, unknown>([
       ['deepwiki', {
-        command: 'allagents',
-        args: ['mcp', 'proxy', 'https://mcp.deepwiki.com/mcp'],
+        command: 'npx',
+        args: ['-y', packageRef, 'mcp', 'proxy', 'https://mcp.deepwiki.com/mcp'],
       }],
     ]);
 
@@ -68,7 +71,12 @@ describe('syncVscodeMcpConfig with serverOverrides', () => {
     expect(result.addedServers).toEqual(['deepwiki']);
 
     const written = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(written.servers.deepwiki.command).toBe('allagents');
-    expect(written.servers.deepwiki.args[0]).toBe('mcp');
+    expect(written.servers.deepwiki.command).toBe('npx');
+    expect(written.servers.deepwiki.args.slice(0, 4)).toEqual([
+      '-y',
+      packageRef,
+      'mcp',
+      'proxy',
+    ]);
   });
 });

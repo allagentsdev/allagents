@@ -9,7 +9,10 @@ export function isJsonMode(): boolean {
   return jsonMode;
 }
 
-export function setJsonMode(value: boolean, options?: { fields?: string[]; jqExpr?: string }): void {
+export function setJsonMode(
+  value: boolean,
+  options?: { fields?: string[]; jqExpr?: string },
+): void {
   jsonMode = value;
   jsonFields = options?.fields ?? null;
   jqExpr = options?.jqExpr ?? null;
@@ -32,14 +35,21 @@ export interface JsonEnvelope {
  * narrows each item to the requested fields. Otherwise the filter is applied
  * to the top-level `data` object directly.
  */
-function applyFieldFilter(envelope: JsonEnvelope, fields: string[]): JsonEnvelope {
+function applyFieldFilter(
+  envelope: JsonEnvelope,
+  fields: string[],
+): JsonEnvelope {
   if (!envelope.data || typeof envelope.data !== 'object') return envelope;
   const data = envelope.data as Record<string, unknown>;
   const keys = Object.keys(data);
 
   // Single top-level array of objects → filter each item.
   const arrayKey = keys.find(
-    (k) => Array.isArray(data[k]) && (data[k] as unknown[]).every((it) => it !== null && typeof it === 'object' && !Array.isArray(it)),
+    (k) =>
+      Array.isArray(data[k]) &&
+      (data[k] as unknown[]).every(
+        (it) => it !== null && typeof it === 'object' && !Array.isArray(it),
+      ),
   );
   if (arrayKey && keys.length >= 1) {
     const items = data[arrayKey] as Array<Record<string, unknown>>;
@@ -51,7 +61,10 @@ function applyFieldFilter(envelope: JsonEnvelope, fields: string[]): JsonEnvelop
   return { ...envelope, data: projectFields(data, fields) };
 }
 
-function projectFields(obj: Record<string, unknown>, fields: string[]): Record<string, unknown> {
+function projectFields(
+  obj: Record<string, unknown>,
+  fields: string[],
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of fields) {
     if (f in obj) out[f] = obj[f];
@@ -60,30 +73,38 @@ function projectFields(obj: Record<string, unknown>, fields: string[]): Record<s
 }
 
 /**
- * Run an envelope through the system `jq` binary. Returns the stdout string.
+ * Run a JSON value through the system `jq` binary. Returns the stdout string.
  * On any failure, exits with a clear error rather than dumping a raw stderr.
  */
-function runJq(envelope: JsonEnvelope, expr: string): string {
-  const input = JSON.stringify(envelope);
+function runJq(value: unknown, expr: string): string {
+  const input = JSON.stringify(value);
   const result = spawnSync('jq', [expr], { input, encoding: 'utf-8' });
   if (result.error || result.status !== 0) {
-    const msg = result.stderr?.trim() || result.error?.message || 'jq invocation failed';
+    const msg =
+      result.stderr?.trim() || result.error?.message || 'jq invocation failed';
     process.stderr.write(`Error: --jq failed: ${msg}\n`);
     process.exit(1);
   }
   return result.stdout.trimEnd();
 }
 
+/**
+ * Format a bare JSON value through the active serializer.
+ */
+export function formatJsonValue(value: unknown): string {
+  return jqExpr ? runJq(value, jqExpr) : JSON.stringify(value, null, 2);
+}
+
+export function jsonValueOutput(value: unknown): void {
+  console.log(formatJsonValue(value));
+}
+
 export function jsonOutput(envelope: JsonEnvelope): void {
-  let final = envelope;
-  if (jsonFields && jsonFields.length > 0) {
-    final = applyFieldFilter(envelope, jsonFields);
-  }
-  if (jqExpr) {
-    console.log(runJq(final, jqExpr));
-    return;
-  }
-  console.log(JSON.stringify(final, null, 2));
+  const final =
+    jsonFields && jsonFields.length > 0
+      ? applyFieldFilter(envelope, jsonFields)
+      : envelope;
+  jsonValueOutput(final);
 }
 
 /**
@@ -93,9 +114,11 @@ export function jsonOutput(envelope: JsonEnvelope): void {
  *   `json`        — boolean, true if the flag was present in either form.
  *   `jsonFields`  — comma-split field list when `--json=<fields>` was supplied.
  */
-export function extractJsonFlag(
-  args: string[],
-): { args: string[]; json: boolean; jsonFields?: string[] } {
+export function extractJsonFlag(args: string[]): {
+  args: string[];
+  json: boolean;
+  jsonFields?: string[];
+} {
   const out: string[] = [];
   let json = false;
   let fields: string[] | undefined;
@@ -109,7 +132,10 @@ export function extractJsonFlag(
       json = true;
       const value = a.slice('--json='.length);
       if (value.length > 0) {
-        fields = value.split(',').map((s) => s.trim()).filter(Boolean);
+        fields = value
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
       }
       continue;
     }
@@ -125,7 +151,10 @@ export function extractJsonFlag(
  * `--jq` without `--json` is rejected by the caller; this function only does
  * lexical extraction so the args list passed to cmd-ts no longer contains it.
  */
-export function extractJqFlag(args: string[]): { args: string[]; jqExpr?: string } {
+export function extractJqFlag(args: string[]): {
+  args: string[];
+  jqExpr?: string;
+} {
   const idx = args.indexOf('--jq');
   if (idx === -1) return { args };
   const expr = args[idx + 1];
@@ -135,6 +164,15 @@ export function extractJqFlag(args: string[]): { args: string[]; jqExpr?: string
   }
   const next = [...args.slice(0, idx), ...args.slice(idx + 2)];
   return { args: next, jqExpr: expr };
+}
+
+export function jsonFieldAllowlist(
+  meta: AgentCommandMeta | undefined,
+): readonly string[] {
+  if (meta?.jsonFields && meta.jsonFields.length > 0) {
+    return meta.jsonFields;
+  }
+  return Object.keys(meta?.outputSchema ?? {});
 }
 
 /**
@@ -148,9 +186,8 @@ export function validateJsonFields(
   meta: AgentCommandMeta | undefined,
 ): readonly string[] | undefined {
   if (!fields || fields.length === 0) return undefined;
-  const allow = meta?.jsonFields;
-  if (!allow || allow.length === 0) {
-    // No allowlist declared → accept any field (no validation).
+  const allow = jsonFieldAllowlist(meta);
+  if (allow.length === 0) {
     return fields;
   }
   const unknown = fields.find((f) => !allow.includes(f));

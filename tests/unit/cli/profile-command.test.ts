@@ -838,7 +838,7 @@ describe('profile formatting', () => {
 });
 
 describe('profile root registration', () => {
-  test('is present in root help and agent help', () => {
+  test('is present in root help and structured JSON help', () => {
     const rootHelp = Bun.spawnSync(
       ['bun', 'run', cliEntry, '--help'],
       { stdout: 'pipe', stderr: 'pipe' },
@@ -846,12 +846,12 @@ describe('profile root registration', () => {
     expect(rootHelp.exitCode).toBe(0);
     expect(rootHelp.stdout.toString()).toContain('profile');
 
-    const agentHelp = Bun.spawnSync(
-      ['bun', 'run', cliEntry, '--agent-help', 'profile'],
+    const structuredHelp = Bun.spawnSync(
+      ['bun', 'run', cliEntry, 'profile', '--help', '--json'],
       { stdout: 'pipe', stderr: 'pipe' },
     );
-    expect(agentHelp.exitCode).toBe(0);
-    const parsed = JSON.parse(agentHelp.stdout.toString()) as {
+    expect(structuredHelp.exitCode).toBe(0);
+    const parsed = JSON.parse(structuredHelp.stdout.toString()) as {
       commands: Array<{ command: string }>;
     };
     expect(parsed.commands.map((entry) => entry.command)).toEqual([

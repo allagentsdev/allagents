@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { extractAgentHelpFlag, findMetaByCommand } from '../../../src/cli/agent-help.js';
+import { findMetaByCommand } from '../../../src/cli/structured-help.js';
 import {
   initMeta,
   setupMeta,
@@ -50,32 +50,6 @@ const allCommands: AgentCommandMeta[] = [
   skillsUpdateMeta,
   updateMeta,
 ];
-
-describe('extractAgentHelpFlag', () => {
-  test('returns agentHelp false when flag is absent', () => {
-    const result = extractAgentHelpFlag(['workspace', 'sync']);
-    expect(result.agentHelp).toBe(false);
-    expect(result.args).toEqual(['workspace', 'sync']);
-  });
-
-  test('strips --agent-help from end of args', () => {
-    const result = extractAgentHelpFlag(['workspace', 'sync', '--agent-help']);
-    expect(result.agentHelp).toBe(true);
-    expect(result.args).toEqual(['workspace', 'sync']);
-  });
-
-  test('strips --agent-help from beginning of args', () => {
-    const result = extractAgentHelpFlag(['--agent-help', 'workspace', 'sync']);
-    expect(result.agentHelp).toBe(true);
-    expect(result.args).toEqual(['workspace', 'sync']);
-  });
-
-  test('strips --agent-help from middle of args', () => {
-    const result = extractAgentHelpFlag(['workspace', '--agent-help', 'sync']);
-    expect(result.agentHelp).toBe(true);
-    expect(result.args).toEqual(['workspace', 'sync']);
-  });
-});
 
 describe('agent command metadata', () => {
   test('contains exactly 20 commands', () => {
@@ -202,15 +176,46 @@ describe('findMetaByCommand', () => {
     expect(meta!.command).toBe('status');
   });
 
-  test('resolves deprecated "workspace status" alias to status meta', () => {
-    const meta = findMetaByCommand('workspace status');
-    expect(meta).toBeDefined();
-    expect(meta!.command).toBe('status');
+  test('resolves the public MCP setup commands', () => {
+    const addMeta = findMetaByCommand('mcp add tradingview https://mcp.tradingview.com/mcp');
+    const reauthMeta = findMetaByCommand('mcp reauth tradingview');
+    expect(addMeta?.command).toBe('mcp add');
+    expect(reauthMeta?.command).toBe('mcp reauth');
+    expect(addMeta?.interaction).toBe('conditional');
+    expect(addMeta?.outputSchema).toBeDefined();
+    expect(reauthMeta?.interaction).toBe('required');
+    expect(findMetaByCommand('mcp list')?.outputSchema).toMatchObject({
+      total: 'number',
+    });
+    expect(findMetaByCommand('mcp get')?.outputSchema).toMatchObject({
+      name: 'string',
+    });
+    expect(findMetaByCommand('mcp update')?.outputSchema).toBeDefined();
+  });
+
+  test('resolves public workspace aliases to their shared metadata', () => {
+    expect(findMetaByCommand('workspace init ./project')?.command).toBe('init');
+    expect(findMetaByCommand('workspace sync --profile work')?.command).toBe(
+      'update',
+    );
+    expect(findMetaByCommand('workspace status')?.command).toBe('status');
   });
 
   test('resolves command metadata when rest-positionals follow the command', () => {
     const meta = findMetaByCommand('skill update code-review glow-api');
     expect(meta?.command).toBe('skill update');
+  });
+
+  test('resolves workspace-only commands exposed by the human command tree', () => {
+    expect(findMetaByCommand('workspace prune')?.command).toBe(
+      'workspace prune',
+    );
+    expect(findMetaByCommand('workspace repo add ../project')?.command).toBe(
+      'workspace repo add',
+    );
+    expect(findMetaByCommand('workspace repo list')?.outputSchema).toMatchObject(
+      { total: 'number' },
+    );
   });
 
   test('returns undefined for unknown command', () => {

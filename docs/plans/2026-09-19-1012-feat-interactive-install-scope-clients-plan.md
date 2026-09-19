@@ -80,7 +80,7 @@ The feature is primarily UX. Existing marketplace resolution, declaration instal
 - A shared summary-data model rendered by CLI and TUI.
 - Localized project/user declaration persistence for client overrides while preserving object fields.
 - Crash-safe publication of the targeted project/user config via the repository’s established same-directory temporary-write-and-rename pattern.
-- Existing command metadata, agent help, user docs, changelog, focused regression tests, and built-CLI dogfood.
+- Existing command metadata, structured help, user docs, changelog, focused regression tests, and built-CLI dogfood.
 
 ### Out of Scope
 
@@ -231,7 +231,7 @@ Only these areas require code-review attention beyond dogfooding:
 - `src/cli/tui/actions/plugins.ts`
 - `src/cli/metadata/plugin.ts`
 - `tests/unit/cli/tui-plugin-install.test.ts` (new)
-- `tests/unit/cli/agent-help.test.ts`
+- `tests/unit/cli/structured-help.test.ts`
 - `tests/e2e/plugin-install-options.test.ts` (new)
 
 **Changes:**
@@ -281,7 +281,7 @@ Only these areas require code-review attention beyond dogfooding:
 
 - Document chooser order, first-config default consequence, per-plugin overrides, flags, and non-interactive behavior.
 - Add a valid `plugins[].clients` example using `source`.
-- Update command metadata and generated agent help.
+- Update command metadata and structured help.
 - Remove temporary dogfood workspaces and any obsolete plan artifacts after implementation.
 
 ## Verification Contract

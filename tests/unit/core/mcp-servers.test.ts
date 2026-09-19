@@ -1,17 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import {
-  addWorkspaceMcpServer,
+  addMcpServer,
   buildMcpServerConfigFromFlags,
-  clearWorkspaceMcpServerProxy,
-  getWorkspaceMcpServer,
-  listWorkspaceMcpServers,
+  getMcpServer,
+  listMcpServers,
   parseKeyValuePairs,
-  removeWorkspaceMcpServer,
-  setWorkspaceMcpServerProxy,
+  removeMcpServer,
+  resolveMcpDestination,
+  type McpDestination,
 } from '../../../src/core/mcp-servers.js';
 
 function makeTempWorkspace(): string {
@@ -35,220 +41,329 @@ function readWorkspace(dir: string): Record<string, unknown> {
   >;
 }
 
-describe('addWorkspaceMcpServer', () => {
+
+describe('destination-aware MCP declarations', () => {
   let dir: string;
+  let configPath: string;
+
   beforeEach(() => {
     dir = makeTempWorkspace();
+    configPath = join(dir, '.allagents', 'workspace.yaml');
   });
+
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('adds an http server', async () => {
-    const result = await addWorkspaceMcpServer(
-      'deepwiki',
-      { type: 'http', url: 'https://mcp.deepwiki.com/mcp' },
-      dir,
-    );
-    expect(result.success).toBe(true);
+  test('rejects simultaneous scope and profile selectors', () => {
+    expect(() =>
+      resolveMcpDestination({
+        cwd: dir,
+        scope: 'user',
+        profile: 'research',
+      }),
+    ).toThrow('--scope and --profile cannot be used together');
+  });
 
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpServers).toEqual({
-      deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' },
+  test('resolves an unflagged command from HOME to the user destination', () => {
+    const originalHome = process.env.ALLAGENTS_TEST_HOME;
+    process.env.ALLAGENTS_TEST_HOME = dir;
+    try {
+      expect(resolveMcpDestination({ cwd: dir })).toEqual({
+        kind: 'user',
+        configPath: join(dir, '.allagents', 'workspace.yaml'),
+      });
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ALLAGENTS_TEST_HOME;
+      } else {
+        process.env.ALLAGENTS_TEST_HOME = originalHome;
+      }
+    }
+  });
+
+  test('rejects explicit project scope from HOME instead of aliasing user state', () => {
+    const originalHome = process.env.ALLAGENTS_TEST_HOME;
+    process.env.ALLAGENTS_TEST_HOME = dir;
+    try {
+      expect(() =>
+        resolveMcpDestination({ cwd: dir, scope: 'project' }),
+      ).toThrow('--scope project cannot be used from the home directory');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ALLAGENTS_TEST_HOME;
+      } else {
+        process.env.ALLAGENTS_TEST_HOME = originalHome;
+      }
+    }
+  });
+
+  test('mutates ordinary user declarations without changing profiles', async () => {
+    writeFileSync(
+      configPath,
+      `repositories: []
+plugins: []
+clients:
+  - codex
+profiles:
+  research:
+    clients:
+      - name: copilot
+`,
+      'utf-8',
+    );
+    const destination: McpDestination = {
+      kind: 'user',
+      configPath,
+    };
+
+    const result = await addMcpServer(
+      destination,
+      'remote',
+      { type: 'http', url: 'https://mcp.example' },
+      { proxy: { clients: ['codex'] } },
+    );
+
+    expect(result.success).toBe(true);
+    expect(await getMcpServer(destination, 'remote')).toEqual({
+      type: 'http',
+      url: 'https://mcp.example',
     });
-  });
-
-  test('rejects duplicate without force', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    const result = await addWorkspaceMcpServer('a', { command: 'y' }, dir);
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('already exists');
-  });
-
-  test('replaces duplicate with force', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    const result = await addWorkspaceMcpServer('a', { command: 'y' }, dir, true);
-    expect(result.success).toBe(true);
-    const cfg = readWorkspace(dir);
-    expect((cfg.mcpServers as Record<string, { command: string }>).a.command).toBe('y');
-  });
-
-  test('rejects invalid config', async () => {
-    // Neither command nor url
-    const result = await addWorkspaceMcpServer(
-      'bad',
-      { type: 'http' } as unknown as Parameters<typeof addWorkspaceMcpServer>[1],
-      dir,
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Invalid MCP server config');
-  });
-
-  test('preserves other workspace.yaml fields on add', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    const cfg = readWorkspace(dir);
-    expect(cfg.repositories).toEqual([]);
-    expect(cfg.plugins).toEqual([]);
-    expect(cfg.clients).toEqual(['claude']);
-  });
-
-  test('persists server-scoped proxy intent without widening global proxy clients', async () => {
-    await addWorkspaceMcpServer(
-      'wtgkb',
-      { type: 'http', url: 'https://knowledge.mcp.wtg.zone' },
-      dir,
-    );
-
-    const result = await setWorkspaceMcpServerProxy('wtgkb', dir);
-    expect(result.success).toBe(true);
-    expect(result.proxyClients).toEqual(['claude']);
-
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpProxy).toEqual({
-      clients: [],
-      servers: {
-        wtgkb: { proxy: ['claude'] },
+    expect(await listMcpServers(destination)).toEqual({
+      remote: { type: 'http', url: 'https://mcp.example' },
+    });
+    expect(readWorkspace(dir)).toMatchObject({
+      profiles: {
+        research: {
+          clients: [{ name: 'copilot' }],
+        },
+      },
+      mcpProxy: {
+        servers: {
+          remote: { proxy: ['codex'] },
+        },
       },
     });
   });
 
-  test('preserves existing workspace-wide proxy defaults when adding server-scoped proxy intent', async () => {
+  test('serializes concurrent declaration updates without losing either server', async () => {
+    const destination: McpDestination = {
+      kind: 'project',
+      workspacePath: dir,
+      configPath,
+    };
+
+    const [first, second] = await Promise.all([
+      addMcpServer(destination, 'first', { command: 'first-mcp' }),
+      addMcpServer(destination, 'second', { command: 'second-mcp' }),
+    ]);
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    expect(await listMcpServers(destination)).toEqual({
+      first: { command: 'first-mcp' },
+      second: { command: 'second-mcp' },
+    });
+  });
+
+  test('rejects a symbolic-link workspace config without replacing its target', async () => {
+    const targetPath = join(dir, 'workspace-target.yaml');
+    const original = readFileSync(configPath, 'utf8');
+    writeFileSync(targetPath, original, 'utf8');
+    rmSync(configPath);
+    symlinkSync(targetPath, configPath);
+    const destination: McpDestination = {
+      kind: 'project',
+      workspacePath: dir,
+      configPath,
+    };
+
+    const result = await addMcpServer(destination, 'blocked', {
+      command: 'blocked-mcp',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('symbolic-link workspace config');
+    expect(readFileSync(targetPath, 'utf8')).toBe(original);
+  });
+
+  test('atomically writes profile server and proxy policy', async () => {
     writeFileSync(
-      join(dir, '.allagents', 'workspace.yaml'),
+      configPath,
       `repositories: []
 plugins: []
-clients:
-  - claude
-  - codex
-mcpProxy:
-  clients:
-    - codex
+clients: []
+profiles:
+  markets:
+    clients:
+      - name: codex
+      - name: copilot
 `,
       'utf-8',
     );
+    const destination: McpDestination = {
+      kind: 'profile',
+      name: 'markets',
+      configPath,
+    };
 
-    await addWorkspaceMcpServer(
-      'wtgkb',
-      { type: 'http', url: 'https://knowledge.mcp.wtg.zone' },
-      dir,
+    const result = await addMcpServer(
+      destination,
+      'tradingview',
+      {
+        type: 'http',
+        url: 'https://mcp.tradingview.com/mcp',
+        clients: ['codex', 'copilot'],
+      },
+      { proxy: { clients: ['codex', 'copilot'] } },
     );
-    const result = await setWorkspaceMcpServerProxy('wtgkb', dir, ['claude']);
-    expect(result.success).toBe(true);
 
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpProxy).toEqual({
-      clients: ['codex'],
-      servers: {
-        wtgkb: { proxy: ['claude'] },
+    expect(result.success).toBe(true);
+    expect(readWorkspace(dir)).toMatchObject({
+      profiles: {
+        markets: {
+          mcpServers: {
+            tradingview: {
+              type: 'http',
+              url: 'https://mcp.tradingview.com/mcp',
+              clients: ['codex', 'copilot'],
+            },
+          },
+          mcpProxy: {
+            servers: {
+              tradingview: { proxy: ['codex', 'copilot'] },
+            },
+          },
+        },
       },
     });
   });
 
-  test('clears server-scoped proxy intent without removing workspace-wide defaults', async () => {
+  test('rejects invalid profile selectors without partially writing', async () => {
     writeFileSync(
-      join(dir, '.allagents', 'workspace.yaml'),
-      `repositories: []
-plugins: []
-clients:
-  - claude
-  - codex
-mcpProxy:
-  clients:
-    - codex
+      configPath,
+      `profiles:
+  markets:
+    clients:
+      - name: codex
 `,
       'utf-8',
     );
+    const before = readFileSync(configPath, 'utf-8');
+    const destination: McpDestination = {
+      kind: 'profile',
+      name: 'markets',
+      configPath,
+    };
 
-    await addWorkspaceMcpServer(
-      'wtgkb',
-      { type: 'http', url: 'https://knowledge.mcp.wtg.zone' },
-      dir,
+    const result = await addMcpServer(
+      destination,
+      'remote',
+      {
+        type: 'http',
+        url: 'https://mcp.example',
+        clients: ['copilot'],
+      },
+      { proxy: { clients: ['copilot'] } },
     );
-    await setWorkspaceMcpServerProxy('wtgkb', dir, ['claude']);
 
-    const result = await clearWorkspaceMcpServerProxy('wtgkb', dir);
-    expect(result.success).toBe(true);
-
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpProxy).toEqual({
-      clients: ['codex'],
-    });
-  });
-});
-
-describe('removeWorkspaceMcpServer', () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = makeTempWorkspace();
-  });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('removes an existing server', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    const result = await removeWorkspaceMcpServer('a', dir);
-    expect(result.success).toBe(true);
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpServers).toBeUndefined();
-  });
-
-  test('fails when server does not exist', async () => {
-    const result = await removeWorkspaceMcpServer('nonexistent', dir);
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not found');
+    expect(result.error).toContain('not declared by this profile');
+    expect(readFileSync(configPath, 'utf-8')).toBe(before);
   });
 
-  test('removes server-scoped proxy intent when removing a server', async () => {
-    await addWorkspaceMcpServer(
-      'wtgkb',
-      { type: 'http', url: 'https://knowledge.mcp.wtg.zone' },
-      dir,
+  test('rejects an invalid profile server name before writing', async () => {
+    writeFileSync(
+      configPath,
+      `profiles:
+  markets:
+    clients:
+      - name: codex
+`,
+      'utf-8',
     );
-    await setWorkspaceMcpServerProxy('wtgkb', dir, ['claude']);
+    const before = readFileSync(configPath, 'utf-8');
+    const result = await addMcpServer(
+      { kind: 'profile', name: 'markets', configPath },
+      'invalid/name',
+      { command: 'local-mcp' },
+      { proxy: false },
+    );
 
-    const result = await removeWorkspaceMcpServer('wtgkb', dir);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Expected 1-100 ASCII');
+    expect(readFileSync(configPath, 'utf-8')).toBe(before);
+  });
+
+  test('rejects an undeclared profile destination', async () => {
+    const result = await addMcpServer(
+      { kind: 'profile', name: 'missing', configPath },
+      'remote',
+      { command: 'local-mcp' },
+      { proxy: false },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Profile 'missing' is not declared");
+  });
+
+  test('removes only the selected profile declaration and proxy policy', async () => {
+    writeFileSync(
+      configPath,
+      `profiles:
+  markets:
+    clients:
+      - name: codex
+    mcpServers:
+      remote:
+        url: https://mcp.example
+    mcpProxy:
+      servers:
+        remote:
+          proxy:
+            - codex
+  research:
+    clients:
+      - name: copilot
+    mcpServers:
+      keep:
+        command: keep-mcp
+`,
+      'utf-8',
+    );
+    const destination: McpDestination = {
+      kind: 'profile',
+      name: 'markets',
+      configPath,
+    };
+
+    const result = await removeMcpServer(destination, 'remote');
+
     expect(result.success).toBe(true);
-
-    const cfg = readWorkspace(dir);
-    expect(cfg.mcpProxy).toBeUndefined();
-  });
-});
-
-describe('getWorkspaceMcpServer / listWorkspaceMcpServers', () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = makeTempWorkspace();
-  });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test('get returns null for missing server', async () => {
-    const cfg = await getWorkspaceMcpServer('missing', dir);
-    expect(cfg).toBeNull();
-  });
-
-  test('get returns server config', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    const cfg = await getWorkspaceMcpServer('a', dir);
-    expect(cfg).toEqual({ command: 'x' } as unknown as typeof cfg);
-  });
-
-  test('list returns all servers', async () => {
-    await addWorkspaceMcpServer('a', { command: 'x' }, dir);
-    await addWorkspaceMcpServer(
-      'b',
-      { type: 'http', url: 'https://b.test' },
-      dir,
-    );
-    const servers = await listWorkspaceMcpServers(dir);
-    expect(Object.keys(servers).sort()).toEqual(['a', 'b']);
-  });
-
-  test('list returns empty object when none defined', async () => {
-    const servers = await listWorkspaceMcpServers(dir);
-    expect(servers).toEqual({});
+    expect(readWorkspace(dir)).toMatchObject({
+      profiles: {
+        markets: {
+          clients: [{ name: 'codex' }],
+        },
+        research: {
+          mcpServers: {
+            keep: { command: 'keep-mcp' },
+          },
+        },
+      },
+    });
+    expect(
+      (
+        (readWorkspace(dir).profiles as Record<string, Record<string, unknown>>)
+          .markets
+      ).mcpServers,
+    ).toBeUndefined();
+    expect(
+      (
+        (readWorkspace(dir).profiles as Record<string, Record<string, unknown>>)
+          .markets
+      ).mcpProxy,
+    ).toBeUndefined();
   });
 });
 

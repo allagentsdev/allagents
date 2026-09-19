@@ -1,155 +1,147 @@
 import {
   existsSync,
-  readFileSync,
-  writeFileSync,
   lstatSync,
+  readFileSync,
   type Stats,
+  writeFileSync,
 } from 'node:fs';
-import { rm, unlink, rmdir, copyFile } from 'node:fs/promises';
-import { join, resolve, dirname, relative } from 'node:path';
+import { copyFile, rm, rmdir, unlink } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
 import JSON5 from 'json5';
 import {
-  CONFIG_DIR,
-  WORKSPACE_CONFIG_FILE,
   AGENT_FILES,
+  CONFIG_DIR,
   getHomeDir,
+  WORKSPACE_CONFIG_FILE,
 } from '../constants.js';
-import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
-import type {
-  WorkspaceConfig,
-  ClientType,
-  PluginEntry,
-  WorkspaceFile,
-  SyncMode,
-  PluginSkillsConfig,
-} from '../models/workspace-config.js';
+import type { ClientMapping } from '../models/client-mapping.js';
 import {
-  getPluginClients,
-  getEffectivePluginSource,
-  getPluginExclude,
-  getClientTypes,
-  normalizeClientEntry,
-  resolveInstallMode,
-  type ClientEntry,
-} from '../models/workspace-config.js';
-import {
-  isGitHubUrl,
-  parseGitHubUrl,
-  parseFileSource,
-  stripGitRef,
-} from '../utils/plugin-path.js';
-import { fetchPlugin, getPluginName, seedFetchCache } from './plugin.js';
-import {
-  copyPluginToWorkspace,
-  copyWorkspaceFiles,
-  collectPluginSkills,
-  type CopyResult,
-  findRelocatedGitHubHooks,
-  dedupeAgentFilesByName,
-  planAgentOutputs,
-  type AgentDedupeRecord,
-  type AgentOutput,
-  type AgentOutputConflict,
-  type AgentOutputFailure,
-  type AgentOutputPlan,
-} from './transform.js';
-import { updateAgentFiles } from './workspace-repo.js';
-import {
-  discoverWorkspaceSkills,
-  writeSkillsIndex,
-  cleanupSkillsIndex,
-  groupSkillsByRepo,
-} from './repo-skills.js';
-import {
-  CLIENT_MAPPINGS,
-  USER_CLIENT_MAPPINGS,
   CANONICAL_SKILLS_PATH,
+  CLIENT_MAPPINGS,
   isUniversalClient,
   resolveClientMappings,
+  USER_CLIENT_MAPPINGS,
 } from '../models/client-mapping.js';
-import type { ClientMapping } from '../models/client-mapping.js';
 import type { MarketplaceFileArtifacts } from '../models/marketplace-manifest.js';
-import { getEmbeddedMarketplaceFileArtifacts } from '../utils/marketplace-manifest-parser.js';
-import {
-  resolveSkillNames,
-  getSkillKey,
-  type SkillEntry,
-} from '../utils/skill-name-resolver.js';
-import {
-  isPluginSpec,
-  resolvePluginSpecWithAutoRegister,
-  ensureMarketplacesRegistered,
-  parsePluginSpec,
-  getMarketplaceOverrides,
-  getRegistryPath,
-  getProjectRegistryPath,
-  getMarketplace,
-  getMarketplaceAccessError,
-} from './marketplace.js';
-import {
-  loadSyncState,
-  saveSyncState,
-  saveNativeStateResources,
-  getPreviouslySyncedFiles,
-  getPreviouslySyncedMcpServers,
-  getNativeStateResources,
-  nativeStateOwnership,
-} from './sync-state.js';
 import type {
   NativeStateResource,
   SyncState,
   SyncStateSource,
 } from '../models/sync-state.js';
+import type {
+  ClientType,
+  PluginEntry,
+  PluginSkillsConfig,
+  SyncMode,
+  WorkspaceConfig,
+  WorkspaceFile,
+} from '../models/workspace-config.js';
 import {
-  getUserWorkspaceConfig,
-  migrateUserWorkspaceSkillsV1toV2,
-} from './user-workspace.js';
+  type ClientEntry,
+  getClientTypes,
+  getEffectivePluginSource,
+  getPluginClients,
+  getPluginExclude,
+  normalizeClientEntry,
+  resolveInstallMode,
+} from '../models/workspace-config.js';
+import { getEmbeddedMarketplaceFileArtifacts } from '../utils/marketplace-manifest-parser.js';
 import {
-  generateVscodeWorkspace,
-  getWorkspaceOutputPath,
-  computeWorkspaceHash,
-  reconcileVscodeWorkspaceFolders,
-} from './vscode-workspace.js';
+  isGitHubUrl,
+  parseFileSource,
+  parseGitHubUrl,
+  stripGitRef,
+} from '../utils/plugin-path.js';
 import {
-  setRepositories,
-  updateRepositories,
-  migrateWorkspaceSkillsV1toV2,
-} from './workspace-modify.js';
-import { collectMcpServers, syncVscodeMcpConfig } from './vscode-mcp.js';
-import type { McpMergeResult } from './vscode-mcp.js';
-import { applyMcpProxy } from './mcp-proxy.js';
-import { syncCodexMcpServers } from './codex-mcp.js';
+  getSkillKey,
+  resolveSkillNames,
+  type SkillEntry,
+} from '../utils/skill-name-resolver.js';
+import { Stopwatch } from '../utils/stopwatch.js';
+import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
+import {
+  assertSafeDestination,
+  clientMappingsFromContexts,
+  pathIsWithin,
+  type ResolvedClientContext,
+  resolveClientContexts,
+  resolveMappedPath,
+} from './client-context.js';
 import { syncCodexProjectHooks } from './codex-hooks.js';
 import {
   COPILOT_MANAGED_HOOKS_RELATIVE_PATH,
   syncCopilotProjectHooks,
 } from './copilot-hooks.js';
+import { processManagedRepos } from './managed-repos.js';
 import {
-  syncClaudeMcpConfig,
-  syncClaudeMcpServersViaCli,
-} from './claude-mcp.js';
-import { getCopilotMcpConfigPath } from './copilot-mcp.js';
+  ensureMarketplacesRegistered,
+  getMarketplace,
+  getMarketplaceAccessError,
+  getMarketplaceOverrides,
+  getProjectRegistryPath,
+  getRegistryPath,
+  isPluginSpec,
+  parsePluginSpec,
+  resolvePluginSpecWithAutoRegister,
+} from './marketplace.js';
 import { syncMcpServers as runMcpSync } from './mcp-sync.js';
 import {
   getNativeClient,
   mergeNativeSyncResults,
-  sanitizeNativeProvenance,
   type NativeEffect,
   type NativeMutationResult,
   type NativeOperationContext,
   type NativeResource,
   type NativeSyncResult,
+  sanitizeNativeProvenance,
 } from './native/index.js';
-import { Stopwatch } from '../utils/stopwatch.js';
-import { processManagedRepos } from './managed-repos.js';
+import { fetchPlugin, getPluginName, seedFetchCache } from './plugin.js';
 import {
-  assertSafeDestination,
-  clientMappingsFromContexts,
-  pathIsWithin,
-  resolveClientContexts,
-  resolveMappedPath,
-  type ResolvedClientContext,
-} from './client-context.js';
+  cleanupSkillsIndex,
+  discoverWorkspaceSkills,
+  groupSkillsByRepo,
+  writeSkillsIndex,
+} from './repo-skills.js';
+import {
+  getNativeStateResources,
+  getPreviouslySyncedFiles,
+  loadSyncState,
+  nativeStateOwnership,
+  saveNativeStateResources,
+  saveSyncState,
+} from './sync-state.js';
+import {
+  type AgentDedupeRecord,
+  type AgentOutput,
+  type AgentOutputConflict,
+  type AgentOutputFailure,
+  type AgentOutputPlan,
+  type CopyResult,
+  collectPluginSkills,
+  copyPluginToWorkspace,
+  copyWorkspaceFiles,
+  dedupeAgentFilesByName,
+  findRelocatedGitHubHooks,
+  planAgentOutputs,
+} from './transform.js';
+import { syncUserMcpAdapters } from './user-mcp-sync.js';
+import {
+  getUserWorkspaceConfig,
+  migrateUserWorkspaceSkillsV1toV2,
+} from './user-workspace.js';
+import type { McpMergeResult } from './vscode-mcp.js';
+import {
+  computeWorkspaceHash,
+  generateVscodeWorkspace,
+  getWorkspaceOutputPath,
+  reconcileVscodeWorkspaceFolders,
+} from './vscode-workspace.js';
+import {
+  migrateWorkspaceSkillsV1toV2,
+  setRepositories,
+  updateRepositories,
+} from './workspace-modify.js';
+import { updateAgentFiles } from './workspace-repo.js';
 
 /**
  * Result of deduplicating clients by skillsPath
@@ -453,7 +445,7 @@ export function nativeOperationContext(
 export function nativeContextIdentity(context: NativeOperationContext): string {
   if (context.client !== 'omp') return resolve(context.root);
   const roots = Object.entries(context.roots ?? {})
-    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([name, path]) => [name, resolve(path)]);
   return JSON.stringify({
     root: resolve(context.root),
@@ -519,10 +511,7 @@ export function nativeIdentityMatches(
         candidate.marketplaceName === targetSpec.marketplaceName,
     );
   }
-  if (
-    requestedSpec?.plugin === target ||
-    resolvedSpec?.plugin === target
-  ) {
+  if (requestedSpec?.plugin === target || resolvedSpec?.plugin === target) {
     return true;
   }
 
@@ -548,7 +537,8 @@ function nativeSelectionMatches(
   return (
     !selection ||
     selection.targets.some((target) =>
-      nativeIdentityMatches(target, requestedIdentity, resolvedIdentity))
+      nativeIdentityMatches(target, requestedIdentity, resolvedIdentity),
+    )
   );
 }
 
@@ -584,7 +574,10 @@ async function preflightNativePlans(
         errors.push(resolution.error ?? `${client} rejected '${plan.source}'`);
         continue;
       }
-      const logicalIdentity = nativeLogicalIdentity(client, resolution.resource);
+      const logicalIdentity = nativeLogicalIdentity(
+        client,
+        resolution.resource,
+      );
       const clientIdentities = desiredIdentities.get(client) ?? new Map();
       const duplicate = clientIdentities.get(logicalIdentity);
       if (duplicate) {
@@ -645,14 +638,13 @@ function nativePreflightFailureResult(
       const resolution = adapter?.resolveSource(plan.source, context, {
         source: plan.source,
       });
-      const resource: NativeResource =
-        resolution?.resource ?? {
-          kind: client === 'pi' ? 'package' : 'plugin',
-          requestedIdentity: plan.source,
-          resolvedIdentity: plan.source,
-          context,
-          provenance: { source: plan.source },
-        };
+      const resource: NativeResource = resolution?.resource ?? {
+        kind: client === 'pi' ? 'package' : 'plugin',
+        requestedIdentity: plan.source,
+        resolvedIdentity: plan.source,
+        context,
+        provenance: { source: plan.source },
+      };
       const error =
         errors.find(
           (candidate) =>
@@ -847,10 +839,7 @@ const MANAGED_DIRECTORY_KEYS = [
   'githubPath',
 ] as const satisfies readonly (keyof ClientMapping)[];
 
-function resolveTrackedPath(
-  workspacePath: string,
-  filePath: string,
-): string {
+function resolveTrackedPath(workspacePath: string, filePath: string): string {
   return resolveMappedPath(workspacePath, filePath.replace(/[\\/]$/, ''));
 }
 
@@ -918,14 +907,7 @@ export async function selectivePurgeWorkspace(
     const purgedPaths: string[] = [];
 
     for (const filePath of previousFiles) {
-      if (
-        !trackedPathIsAllowed(
-          workspacePath,
-          filePath,
-          mapping,
-          context,
-        )
-      ) {
+      if (!trackedPathIsAllowed(workspacePath, filePath, mapping, context)) {
         continue;
       }
       const cleanPath = resolveTrackedPath(workspacePath, filePath);
@@ -950,7 +932,10 @@ export async function selectivePurgeWorkspace(
           await unlink(cleanPath);
         }
         purgedPaths.push(filePath);
-        await cleanupEmptyParents(context?.writeRoot ?? workspacePath, cleanPath);
+        await cleanupEmptyParents(
+          context?.writeRoot ?? workspacePath,
+          cleanPath,
+        );
       } catch {
         // Best effort - continue with other files
       }
@@ -1299,8 +1284,7 @@ export function collectSyncedPaths(
         }
       }
 
-      const directoryRoots = MANAGED_DIRECTORY_KEYS
-        .map((key) => mapping[key])
+      const directoryRoots = MANAGED_DIRECTORY_KEYS.map((key) => mapping[key])
         .filter((path): path is string => path !== undefined)
         .map((path) => resolveMappedPath(workspacePath, path));
       const belongsToDirectory = directoryRoots.some((root) =>
@@ -1605,7 +1589,8 @@ export function buildPluginSyncPlans(
     for (const client of pluginClientTypes) {
       const clientEntry = normalizeClientEntry(
         clientEntries.find(
-          (entry) => (typeof entry === 'string' ? entry : entry.name) === client,
+          (entry) =>
+            (typeof entry === 'string' ? entry : entry.name) === client,
         ) ?? client,
       );
       if (resolveInstallMode(plugin, clientEntry) === 'file') {
@@ -2151,7 +2136,8 @@ async function syncNativePlugins(
           selection,
           resource.requestedIdentity,
           resource.resolvedIdentity,
-        ));
+        ),
+      );
       if (selected.length > 0) desiredByClient.set(client, selected);
     }
   }
@@ -2174,7 +2160,8 @@ async function syncNativePlugins(
             selection,
             resource.requestedIdentity,
             resource.resolvedIdentity,
-          ))
+          ),
+        )
       ) {
         clients.add(client);
       }
@@ -2271,14 +2258,17 @@ async function syncNativePlugins(
             resource.requestedIdentity,
             resource.resolvedIdentity,
           )
-        : true);
+        : true,
+    );
 
     let inspection = await adapter.inspect(context);
     if (!inspection.success) {
-      const affected = desired.length > 0
-        ? desired
-        : tracked.map((resource) =>
-            nativeResourceFromState(resource, context));
+      const affected =
+        desired.length > 0
+          ? desired
+          : tracked.map((resource) =>
+              nativeResourceFromState(resource, context),
+            );
       for (const resource of affected) {
         effects.push({
           action: 'failed',
@@ -2928,7 +2918,6 @@ export async function syncWorkspace(
   workspacePath: string = process.cwd(),
   options: SyncOptions = {},
 ): Promise<SyncResult> {
-
   const {
     offline = false,
     dryRun = false,
@@ -3046,7 +3035,6 @@ export async function syncWorkspace(
     );
   }
 
-
   // Generic marketplace registration/fetch is needed only by file targets.
   const filePlans = filteredPlans.filter((plan) => plan.clients.length > 0);
   const marketplaceResults = await sw.measure('marketplace-registration', () =>
@@ -3083,7 +3071,9 @@ export async function syncWorkspace(
     sw.stop('workspace-source-validation');
   }
 
-  const failedValidations = validatedPlugins.filter((plugin) => !plugin.success);
+  const failedValidations = validatedPlugins.filter(
+    (plugin) => !plugin.success,
+  );
   const requiredNativeFailures = failedValidations.filter((plugin) => {
     const plan = filteredPlans.find(
       (candidate) => candidate.configurationIndex === plugin.configurationIndex,
@@ -3115,7 +3105,9 @@ export async function syncWorkspace(
   }
 
   const validPlugins = validatedPlugins.filter((plugin) => plugin.success);
-  const filePlugins = validPlugins.filter((plugin) => plugin.clients.length > 0);
+  const filePlugins = validPlugins.filter(
+    (plugin) => plugin.clients.length > 0,
+  );
   if (validPlugins.length === 0 && filteredPlans.length > 0) {
     return failedSyncResult(
       `All plugins failed validation (workspace unchanged):\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
@@ -3128,9 +3120,7 @@ export async function syncWorkspace(
     !!config.workspace?.source && !validatedWorkspaceSource;
   const workspaceFilesSourcePath = validatedWorkspaceSource?.resolved;
   const workspaceFilesToCopy =
-    config.workspace && !skipWorkspaceFiles
-      ? [...config.workspace.files]
-      : [];
+    config.workspace && !skipWorkspaceFiles ? [...config.workspace.files] : [];
   let workspaceFilesGithubCache = new Map<string, string>();
   if (config.workspace && !skipWorkspaceFiles) {
     if (hasRepositories && workspaceFilesSourcePath) {
@@ -3209,10 +3199,7 @@ export async function syncWorkspace(
     clientContexts,
     CLIENT_MAPPINGS,
   );
-  const resolvedMappings = resolveClientMappings(
-    syncClients,
-    contextMappings,
-  );
+  const resolvedMappings = resolveClientMappings(syncClients, contextMappings);
 
   // Step 2b: Get paths that will be purged (for dry-run reporting)
   // In non-destructive mode, only show files from state (or nothing on first sync)
@@ -3509,7 +3496,8 @@ export async function syncWorkspace(
       (effect) => effect.action === 'failed' || effect.action === 'unknown',
     ).length ?? 0;
   const totalFailed = fileFailures + nativeFailures;
-  const hasFailures = pluginResults.some((result) => !result.success) ||
+  const hasFailures =
+    pluginResults.some((result) => !result.success) ||
     totalFailed > 0 ||
     nativeResult?.success === false;
 
@@ -3534,28 +3522,24 @@ export async function syncWorkspace(
   if (!dryRun) {
     const sources = await buildSourcesProvenance(filePlugins, config.plugins);
     await sw.measure('persist-state', () =>
-      persistSyncState(
-        workspacePath,
-        newStatePaths,
-        {
-          ...(vscodeState && { vscodeState }),
-          ...(codexHookSync.managedHooks && {
-            codexHooks: codexHookSync.managedHooks,
-          }),
-          ...(Object.keys(mcpResults).length > 0 && {
-            mcpTrackedServers: Object.fromEntries(
-              Object.entries(mcpResults).map(([scope, r]) => [
-                scope,
-                r.trackedServers,
-              ]),
-            ),
-          }),
-          ...(writtenSkillsIndexFiles.length > 0 && {
-            skillsIndex: writtenSkillsIndexFiles,
-          }),
-          ...(Object.keys(sources).length > 0 && { sources }),
-        },
-      ),
+      persistSyncState(workspacePath, newStatePaths, {
+        ...(vscodeState && { vscodeState }),
+        ...(codexHookSync.managedHooks && {
+          codexHooks: codexHookSync.managedHooks,
+        }),
+        ...(Object.keys(mcpResults).length > 0 && {
+          mcpTrackedServers: Object.fromEntries(
+            Object.entries(mcpResults).map(([scope, r]) => [
+              scope,
+              r.trackedServers,
+            ]),
+          ),
+        }),
+        ...(writtenSkillsIndexFiles.length > 0 && {
+          skillsIndex: writtenSkillsIndexFiles,
+        }),
+        ...(Object.keys(sources).length > 0 && { sources }),
+      }),
     );
   }
 
@@ -3723,7 +3707,9 @@ export async function syncUserWorkspace(
     () => validateAllPlugins(pluginPlans, homeDir, offline),
     `${pluginPlans.length} plugin(s)`,
   );
-  const failedValidations = validatedPlugins.filter((plugin) => !plugin.success);
+  const failedValidations = validatedPlugins.filter(
+    (plugin) => !plugin.success,
+  );
   const requiredNativeFailures = failedValidations.filter((plugin) => {
     const plan = pluginPlans.find(
       (candidate) => candidate.configurationIndex === plugin.configurationIndex,
@@ -3750,7 +3736,9 @@ export async function syncUserWorkspace(
     );
   }
   const validPlugins = validatedPlugins.filter((plugin) => plugin.success);
-  const filePlugins = validPlugins.filter((plugin) => plugin.clients.length > 0);
+  const filePlugins = validPlugins.filter(
+    (plugin) => plugin.clients.length > 0,
+  );
   const messages: string[] = [];
   if (validPlugins.length === 0 && pluginPlans.length > 0) {
     return failedSyncResult(
@@ -3842,11 +3830,7 @@ export async function syncUserWorkspace(
   );
   const pluginSkillMaps = buildPluginSkillNameMaps(allSkills);
   const agentOutputPlan = await sw.measure('agent-output-planning', () =>
-    planValidatedPluginAgentOutputs(
-      filePlugins,
-      homeDir,
-      userContextMappings,
-    ),
+    planValidatedPluginAgentOutputs(filePlugins, homeDir, userContextMappings),
   );
   appendAgentOutputConflictWarnings(agentOutputPlan, warnings);
   const indexedAgentOutputPlan = indexAgentOutputPlan(agentOutputPlan);
@@ -3895,129 +3879,20 @@ export async function syncUserWorkspace(
     `${filePlugins.length} plugin(s)`,
   );
 
-  // MCP Proxy: prepare transform if configured (user-scoped)
-  const userMcpProxyConfig = config.mcpProxy;
-  const userWorkspaceMcpServers = config.mcpServers;
-
-  // Emit collection warnings once across all user-scoped client syncs.
-  let userCollectWarningsEmitted = false;
-  function getUserServersForClient(client: ClientType): Map<string, unknown> {
-    const { servers, warnings: collectWarnings } = collectMcpServers(
-      filePlugins,
-      userWorkspaceMcpServers,
-      client,
-    );
-    if (!userCollectWarningsEmitted) {
-      warnings.push(...collectWarnings);
-      userCollectWarningsEmitted = true;
-    }
-    if (userMcpProxyConfig) {
-      return applyMcpProxy(servers, client, userMcpProxyConfig);
-    }
-    return servers;
-  }
-
-  // Sync MCP server configs to VS Code if vscode client is configured
   sw.start('mcp-sync');
-  const mcpResults: Record<string, McpMergeResult> = {};
-  if (syncClients.includes('vscode')) {
-    const trackedMcpServers = getPreviouslySyncedMcpServers(
-      previousState,
-      'vscode',
-    );
-    const vscodeMcpOverrides = getUserServersForClient('vscode');
-    const vscodeMcp = syncVscodeMcpConfig(filePlugins, {
-      dryRun,
-      force,
-      trackedServers: trackedMcpServers,
-      serverOverrides: vscodeMcpOverrides,
-    });
-    if (vscodeMcp.warnings.length > 0) {
-      warnings.push(...vscodeMcp.warnings);
-    }
-    mcpResults.vscode = vscodeMcp;
-  }
-
-  // Sync MCP servers to Codex CLI if codex client is configured
-  if (syncClients.includes('codex')) {
-    const trackedMcpServers = getPreviouslySyncedMcpServers(
-      previousState,
-      'codex',
-    );
-    const codexMcpOverrides = getUserServersForClient('codex');
-    const codexMcp = await syncCodexMcpServers(filePlugins, {
-      dryRun,
-      trackedServers: trackedMcpServers,
-      ...(codexMcpOverrides && { serverOverrides: codexMcpOverrides }),
-    });
-    if (codexMcp.warnings.length > 0) {
-      warnings.push(...codexMcp.warnings);
-    }
-    mcpResults.codex = codexMcp;
-  }
-
-  // Sync MCP servers to Claude Code via CLI if claude client is configured
-  if (syncClients.includes('claude')) {
-    const trackedMcpServers = getPreviouslySyncedMcpServers(
-      previousState,
-      'claude',
-    );
-    const claudeMcpOverrides = getUserServersForClient('claude');
-    const claudeMcp = await syncClaudeMcpServersViaCli(filePlugins, {
-      dryRun,
-      trackedServers: trackedMcpServers,
-      ...(claudeMcpOverrides && { serverOverrides: claudeMcpOverrides }),
-    });
-    if (claudeMcp.warnings.length > 0) {
-      warnings.push(...claudeMcp.warnings);
-    }
-    mcpResults.claude = claudeMcp;
-  }
-
-  // Sync MCP servers to Copilot CLI config if copilot client is configured
-  if (syncClients.includes('copilot')) {
-    const trackedMcpServers = getPreviouslySyncedMcpServers(
-      previousState,
-      'copilot',
-    );
-    const copilotMcpPath = getCopilotMcpConfigPath();
-    const copilotMcpOverrides = getUserServersForClient('copilot');
-    const copilotMcp = syncClaudeMcpConfig(filePlugins, {
-      dryRun,
-      force,
-      configPath: copilotMcpPath,
-      trackedServers: trackedMcpServers,
-      ...(copilotMcpOverrides && { serverOverrides: copilotMcpOverrides }),
-    });
-    if (copilotMcp.warnings.length > 0) {
-      warnings.push(...copilotMcp.warnings);
-    }
-    mcpResults.copilot = copilotMcp;
-  }
-
+  const userMcpSyncResult = await syncUserMcpAdapters({
+    validPlugins: filePlugins,
+    config,
+    previousState,
+    syncClients,
+    dryRun,
+    force,
+  });
   sw.stop('mcp-sync');
-
-  // Warn about clients that don't support user-scoped MCP sync
-  const USER_MCP_CLIENTS = new Set([
-    'claude',
-    'codex',
-    'vscode',
-    'copilot',
-    'universal',
-  ]);
-  const allUserMcpServers = collectMcpServers(
-    filePlugins,
-    userWorkspaceMcpServers,
-  ).servers;
-  if (allUserMcpServers.size > 0) {
-    for (const client of syncClients) {
-      if (!USER_MCP_CLIENTS.has(client)) {
-        warnings.push(
-          `MCP servers not synced for ${client} (not supported at user scope)`,
-        );
-      }
-    }
-  }
+  warnings.push(...userMcpSyncResult.warnings);
+  const mcpResults: Record<string, McpMergeResult> = {
+    ...userMcpSyncResult.mcpResults,
+  };
 
   // Run native CLI installations for user scope
   const nativeResult = await sw.measure('native-plugin-sync', () =>
@@ -4078,20 +3953,16 @@ export async function syncUserWorkspace(
   // Save sync state (including MCP servers and native resources).
   if (!dryRun) {
     await sw.measure('persist-state', () =>
-      persistSyncState(
-        homeDir,
-        newStatePaths,
-        {
-          ...(Object.keys(mcpResults).length > 0 && {
-            mcpTrackedServers: Object.fromEntries(
-              Object.entries(mcpResults).map(([scope, r]) => [
-                scope,
-                r.trackedServers,
-              ]),
-            ),
-          }),
-        },
-      ),
+      persistSyncState(homeDir, newStatePaths, {
+        ...(Object.keys(mcpResults).length > 0 && {
+          mcpTrackedServers: Object.fromEntries(
+            Object.entries(mcpResults).map(([scope, r]) => [
+              scope,
+              r.trackedServers,
+            ]),
+          ),
+        }),
+      }),
     );
   }
 

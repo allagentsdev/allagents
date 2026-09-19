@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { CodexProfileAdapter } from '../../../../src/core/profile/adapters/codex.js';
+import packageJson from '../../../../package.json';
 
 describe('Codex profile adapter', () => {
   it('isolates CODEX_HOME, selects an exact named config, and preserves cwd', () => {
@@ -130,6 +131,21 @@ describe('Codex profile adapter', () => {
           args: ['server.js'],
           env: { LOCAL_TOKEN: '${LOCAL_TOKEN}' },
         },
+        bridge: {
+          command: 'npx',
+          args: [
+            '-y',
+            'allagents@1.15.0',
+            'mcp',
+            'proxy',
+            'https://mcp.example.test',
+            '--profile',
+            'review',
+            '--header-env',
+            'Authorization=REMOTE_TOKEN',
+          ],
+          env: { REMOTE_TOKEN: '${REMOTE_TOKEN}' },
+        },
         remote: {
           url: 'https://mcp.example.test',
           headers: {
@@ -149,6 +165,10 @@ describe('Codex profile adapter', () => {
         'personality = "pragmatic"\n' +
         'sandbox_mode = "workspace-write"\n' +
         'web_search = "cached"\n\n' +
+        '[mcp_servers.bridge]\n' +
+        `args = ["-y", "allagents@${packageJson.version}", "mcp", "proxy", "https://mcp.example.test", "--profile", "review", "--header-env", "Authorization=REMOTE_TOKEN"]\n` +
+        'command = "npx"\n' +
+        'env_vars = ["REMOTE_TOKEN"]\n\n' +
         '[mcp_servers.local]\n' +
         'args = ["server.js"]\n' +
         'command = "node"\n' +

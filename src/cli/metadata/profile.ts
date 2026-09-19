@@ -202,9 +202,9 @@ export const profileStatusMeta: AgentCommandMeta = {
 
 export const profileRemoveMeta: AgentCommandMeta = {
   command: 'profile remove',
-  description: 'Remove an installed global profile safely',
+  description: 'Remove an installed or declared global profile safely',
   whenToUse:
-    'When you want AllAgents to remove resources it owns for one installed user profile while retaining referenced resources',
+    'When you want AllAgents to remove resources and profile-owned OAuth credentials for one installed or declared user profile while retaining referenced resources',
   examples: [
     'allagents profile remove work',
     'allagents profile remove work --dry-run',
@@ -212,7 +212,7 @@ export const profileRemoveMeta: AgentCommandMeta = {
     'allagents --json profile remove work --yes',
   ],
   expectedOutput:
-    'Displays a redacted deterministic removal plan, asks before applying unless --yes is supplied, and reports removed, retained, unchanged, or failed resources.',
+    'Displays a redacted deterministic removal plan, asks before applying unless --yes is supplied, removes profile-owned OAuth credentials even for a declared-only profile, and reports removed, retained, unchanged, or failed resources.',
   positionals: profileNamePositional,
   options: mutationOptions,
   outputSchema: {

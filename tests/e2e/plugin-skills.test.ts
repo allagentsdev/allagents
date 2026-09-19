@@ -333,9 +333,7 @@ description: Blog watcher
         existsSync(join(tmpDir, '.github', 'skills', 'ediprod', 'SKILL.md')),
       ).toBe(true);
       expect(existsSync(join(tmpDir, '.github', 'hooks'))).toBe(false);
-      expect(existsSync(join(tmpDir, '.copilot', 'mcp-config.json'))).toBe(
-        false,
-      );
+      expect(existsSync(join(tmpDir, '.github', 'mcp.json'))).toBe(false);
     } finally {
       if (originalTestHome === undefined) {
         delete process.env.ALLAGENTS_TEST_HOME;

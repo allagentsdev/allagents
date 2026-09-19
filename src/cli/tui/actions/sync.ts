@@ -15,23 +15,23 @@ export async function runSync(context: TuiContext): Promise<void> {
 
     // Sync project-level plugins if workspace exists
     if (context.hasWorkspace && context.workspacePath) {
-      s.start('Syncing project plugins...');
+      s.start('Updating project...');
       const result = await syncWorkspace(context.workspacePath);
 
       if (result.error) {
         if (context.userPluginCount > 0) {
-          s.message('Syncing user plugins...');
+          s.message('Updating user configuration...');
         } else {
-          s.stop('Sync failed');
+          s.stop('Update failed');
         }
-        p.note(result.error, 'Sync Error');
+        p.note(result.error, 'Update Error');
       } else {
         projectLines = formatVerboseSyncLines(result);
         if (context.userPluginCount > 0) {
-          s.message('Syncing user plugins...');
+          s.message('Updating user configuration...');
         } else {
-          s.stop('Sync complete');
-          p.note(projectLines.join('\n'), 'Project Sync');
+          s.stop('Update complete');
+          p.note(projectLines.join('\n'), 'Project Update');
           return;
         }
       }
@@ -40,21 +40,21 @@ export async function runSync(context: TuiContext): Promise<void> {
     // Sync user-level plugins
     if (context.userPluginCount > 0) {
       if (!context.hasWorkspace || !context.workspacePath) {
-        s.start('Syncing user plugins...');
+        s.start('Updating user configuration...');
       }
       const userResult = await syncUserWorkspace();
-      s.stop('Sync complete');
+      s.stop('Update complete');
 
       // Show project results first (deferred from above)
       if (projectLines) {
-        p.note(projectLines.join('\n'), 'Project Sync');
+        p.note(projectLines.join('\n'), 'Project Update');
       }
 
       if (userResult.error) {
-        p.note(userResult.error, 'User Sync Error');
+        p.note(userResult.error, 'User Update Error');
       } else {
         const lines = formatVerboseSyncLines(userResult);
-        p.note(lines.join('\n'), 'User Sync');
+        p.note(lines.join('\n'), 'User Update');
       }
     }
   } catch (error) {

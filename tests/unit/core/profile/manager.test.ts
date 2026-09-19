@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { dump } from 'js-yaml';
+import packageJson from '../../../../package.json';
 import {
   applyProfilePlan,
   getProfileStatus,
@@ -31,6 +42,7 @@ import type {
   NativeResource,
   NativeResourceObservation,
 } from '../../../../src/core/native/types.js';
+import type { ClientType } from '../../../../src/models/workspace-config.js';
 
 const roots: string[] = [];
 
@@ -185,7 +197,7 @@ class MemoryProfileAdapter implements ProfileAdapter {
   runtimeChecks = 0;
 
   constructor(
-    readonly client: 'pi' | 'omp',
+    readonly client: ClientType,
     private readonly home: string,
   ) {
     this.nativeClient = new MemoryNativeClient(client);
@@ -640,6 +652,98 @@ describe('profile lifecycle manager', () => {
     expect(await readFile(join(test.home, '.allagents', 'profiles', 'work', 'clients', 'pi', 'agent', 'mcp.json'), 'utf8')).toContain('docs-mcp');
   });
 
+  it('applies profile proxy policy after client selection', async () => {
+    const test = await fixture();
+    await writeWorkspace(test.userConfigPath, {
+      markets: {
+        clients: [{ name: 'codex' }, { name: 'omp' }],
+        plugins: [],
+        mcpServers: {
+          tradingview: {
+            url: 'https://mcp.tradingview.com/mcp',
+            headers: { Authorization: '${TRADINGVIEW_TOKEN}' },
+            clients: ['codex'],
+          },
+          excluded: {
+            url: 'https://mcp.example/excluded',
+            clients: ['omp'],
+          },
+        },
+        mcpProxy: {
+          servers: {
+            tradingview: { proxy: ['codex'] },
+            excluded: { proxy: ['codex'] },
+          },
+        },
+      },
+    });
+    const codex = new MemoryProfileAdapter('codex', test.home);
+    const omp = new MemoryProfileAdapter('omp', test.home);
+    const deps = dependencies(codex, omp);
+
+    const plan = await planProfileOperation(
+      'markets',
+      'install',
+      test.options,
+      deps,
+    );
+    const mcpStep = plan.steps.find(
+      (step) => step.kind === 'mcp' && step.client === 'codex',
+    );
+    expect(mcpStep?.detail?.mcpServers).toEqual([
+      {
+        name: 'tradingview',
+        transport: 'stdio',
+        command: {
+          command: 'npx',
+          args: [
+            '-y',
+            `allagents@${packageJson.version}`,
+            'mcp',
+            'proxy',
+            'https://mcp.tradingview.com/mcp',
+            '--profile',
+            'markets',
+            '--header-env',
+            'Authorization=TRADINGVIEW_TOKEN',
+          ],
+        },
+        requestedSecrets: ['TRADINGVIEW_TOKEN'],
+      },
+    ]);
+
+    expect((await applyProfilePlan(plan, test.options, deps)).success).toBe(true);
+    const mcpPath = join(
+      test.home,
+      '.allagents',
+      'profiles',
+      'markets',
+      'clients',
+      'codex',
+      'agent',
+      'mcp.json',
+    );
+    expect(JSON.parse(await readFile(mcpPath, 'utf8'))).toEqual({
+      mcpServers: {
+        tradingview: {
+          command: 'npx',
+          args: [
+            '-y',
+            `allagents@${packageJson.version}`,
+            'mcp',
+            'proxy',
+            'https://mcp.tradingview.com/mcp',
+            '--profile',
+            'markets',
+            '--header-env',
+            'Authorization=TRADINGVIEW_TOKEN',
+          ],
+          env: { TRADINGVIEW_TOKEN: '${TRADINGVIEW_TOKEN}' },
+        },
+      },
+    });
+  });
+
   it('references a usable preexisting Pi MCP adapter without taking cleanup ownership', async () => {
     const test = await fixture();
     await writeWorkspace(test.userConfigPath, {
@@ -1087,6 +1191,116 @@ describe('profile lifecycle manager', () => {
       'removed',
     );
     await expect(stat(clientRoot)).rejects.toThrow();
+  });
+
+  it('removes profile-owned OAuth state while preserving unrelated residue', async () => {
+    const test = await fixture();
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'pi' }], plugins: [] },
+    });
+    const pi = new MemoryProfileAdapter('pi', test.home);
+    const deps = dependencies(pi);
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
+    const profileRoot = join(test.home, '.allagents', 'profiles', 'work');
+    const oauthRoot = join(profileRoot, 'oauth-proxy');
+    const residue = join(profileRoot, 'notes.txt');
+    await mkdir(join(oauthRoot, 'server'), { recursive: true });
+    await writeFile(join(oauthRoot, 'server', 'tokens.json'), '{}', 'utf8');
+    await writeFile(residue, 'keep', 'utf8');
+
+    const removal = await planProfileOperation(
+      'work',
+      'remove',
+      test.options,
+      deps,
+    );
+    const result = await applyProfilePlan(removal, test.options, deps);
+
+    expect(result.status).toBe('removed');
+    await expect(stat(oauthRoot)).rejects.toThrow();
+    expect(await readFile(residue, 'utf8')).toBe('keep');
+    await expect(stat(join(profileRoot, 'state.json'))).rejects.toThrow();
+  });
+
+  it('removes OAuth state for a declared profile that was never installed', async () => {
+    const test = await fixture();
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'pi' }], plugins: [] },
+    });
+    const deps = dependencies(new MemoryProfileAdapter('pi', test.home));
+    const profileRoot = join(test.home, '.allagents', 'profiles', 'work');
+    const oauthRoot = join(profileRoot, 'oauth-proxy');
+    await mkdir(join(oauthRoot, 'server'), { recursive: true });
+    await writeFile(join(oauthRoot, 'server', 'tokens.json'), '{}', 'utf8');
+
+    const removal = await planProfileOperation(
+      'work',
+      'remove',
+      test.options,
+      deps,
+    );
+    const result = await applyProfilePlan(removal, test.options, deps);
+
+    expect(result.status).toBe('removed');
+    await expect(stat(oauthRoot)).rejects.toThrow();
+    await expect(stat(join(profileRoot, 'state.json'))).rejects.toThrow();
+  });
+
+  it('rejects a symlinked OAuth root without deleting its target or removal state', async () => {
+    const test = await fixture();
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'pi' }], plugins: [] },
+    });
+    const deps = dependencies(new MemoryProfileAdapter('pi', test.home));
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
+    const profileRoot = join(test.home, '.allagents', 'profiles', 'work');
+    const oauthRoot = join(profileRoot, 'oauth-proxy');
+    const externalRoot = join(test.home, 'external-oauth');
+    const externalToken = join(externalRoot, 'tokens.json');
+    await mkdir(externalRoot, { recursive: true });
+    await writeFile(externalToken, 'keep', 'utf8');
+    await symlink(externalRoot, oauthRoot, 'dir');
+
+    const removal = await planProfileOperation(
+      'work',
+      'remove',
+      test.options,
+      deps,
+    );
+    const result = await applyProfilePlan(removal, test.options, deps);
+
+    expect(result.status).toBe('partial');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('symbolic link');
+    expect(await readFile(externalToken, 'utf8')).toBe('keep');
+    expect((await stat(join(profileRoot, 'state.json'))).isFile()).toBe(true);
+
+    await unlink(oauthRoot);
+    const retry = await planProfileOperation(
+      'work',
+      'remove',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(retry, test.options, deps)).status).toBe(
+      'removed',
+    );
   });
 
   it('inspects replaced managed roots for state-only clients', async () => {

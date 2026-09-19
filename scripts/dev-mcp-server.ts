@@ -9,7 +9,7 @@ async function main() {
   console.log(`  OAuth issuer: ${server.idpIssuer}`);
   console.log('');
   console.log('Point allagents at it, e.g.:');
-  console.log(`  allagents mcp add local-dev ${server.mcpUrl} --proxy`);
+  console.log(`  allagents mcp add local-dev ${server.mcpUrl}`);
   console.log(`  bun run scripts/smoke-mcp-oauth.ts ${server.mcpUrl}`);
   console.log('');
   console.log(

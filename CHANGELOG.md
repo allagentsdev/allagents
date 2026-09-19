@@ -4,9 +4,13 @@
 
 ### Breaking Changes
 
-- **MCP proxy command**: Removed the temporary `allagents mcp proxy-stdio` alias. Use `allagents mcp proxy <serverUrl>` instead.
+- **MCP setup commands**: HTTP servers added with `allagents mcp add` now
+  authenticate and route through AllAgents automatically. The public
+  `--proxy` option and `mcp auth <serverUrl>` command were replaced by
+  `mcp reauth <name>`. The generated `mcp proxy` helper remains internal.
 
-  **Migration**: Re-run `allagents mcp update` or `allagents update` after upgrading so synced client configs are regenerated with `mcp proxy`.
+  **Migration**: Remove `--proxy` from `mcp add` calls. Replace
+  `allagents mcp auth <url>` with `allagents mcp reauth <configured-name>`.
 
 - **Plugin Git ref terminology**: Renamed workspace plugin `pin` to `ref`, CLI
   `--pin` to `--ref`, and sync-state `pinnedRef` to `requestedRef`. Inline
@@ -15,7 +19,37 @@
   **Migration**: Replace `pin:` with `ref:` in plugin objects and `--pin` with
   `--ref` in scripts. This is a clean cutover; the old names are not accepted.
 
+### Fixed
+
+- Project-scoped Copilot MCP servers are now written to `.github/mcp.json`,
+  which Copilot CLI discovers, instead of the unsupported
+  `.copilot/mcp-config.json` project path.
+- Interactive OAuth guidance for `mcp add` and `mcp reauth` now uses normal
+  terminal output instead of the error channel. Callback URLs are entered
+  through an abortable masked prompt, and failed reauthentication restores the
+  previous working credentials.
+
 ### Added
+
+- Added a thin first-party AllAgents skill that treats the installed CLI as
+  authoritative and follows its progressive `--help --json` indexes and leaf
+  contracts instead of relying on memorized commands.
+- Added progressive machine-readable CLI help: concise root and group indexes
+  lead to leaf contracts with usage guidance, interaction requirements,
+  expected output, options, examples, and output schemas.
+
+- Added the official TradingView MCP plugin with OAuth-backed access to market
+  data, analytics, watchlists, alerts, news, and screeners.
+- Added automatic OAuth login to `allagents mcp add` and named credential
+  renewal with `allagents mcp reauth`, including local loopback completion and
+  remote callback URL paste with strict redirect and state validation.
+- Generated HTTP MCP bridges now invoke the current pinned AllAgents version
+  through cached `npx`, so managed MCP connections do not require a global
+  AllAgents installation.
+- Full MCP server management in the interactive TUI, including destination
+  selection, listing, inspection, add, reauthenticate, and remove flows for
+  project, user, and named-profile declarations. Client configuration updates
+  automatically after mutations, with a contextual retry when an update fails.
 
 - Pi and OMP as file-sync clients at project and user scope, including native
   runtime skill paths and agent instructions.

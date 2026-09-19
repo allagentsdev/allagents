@@ -188,7 +188,7 @@ flowchart LR
 
 ### System-Wide Impact
 
-- **CLI and agents:** Human output, `--json`, exit codes, and agent-help schemas stay stable. Automation still sees successful no-op checks as existing update outcomes.
+- **CLI and agents:** Human output, `--json`, exit codes, and structured-help schemas stay stable. Automation still sees successful no-op checks as existing update outcomes.
 - **Filesystem state:** Direct plugin and skill no-ops avoid persistent checkout work while retaining existing scope synchronization. Marketplace no-ops retain the registry timestamp write required by compatibility.
 - **Dependency direction:** CLI/TUI callers create a neutral context and pass it into domain updaters; domain updaters consume context/Git/identity helpers. The leaf identity helper and Git module never import plugin, marketplace, skill, or CLI/TUI modules.
 - **Scope ownership:** Remote and physical checkout facts can be shared, but each consumer independently derives public output and writes only its owning registry. External-plugin `changed` is the OR of successful marketplace and external-checkout physical changes without changing current public precedence or sync eligibility.

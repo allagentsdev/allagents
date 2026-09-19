@@ -6,10 +6,11 @@ import type {
   ProfileState,
 } from '../../models/profile-state.js';
 import {
-  ProfileNameSchema,
   type ClientType,
   type ProfileDeclaration,
+  ProfileNameSchema,
 } from '../../models/workspace-config.js';
+import { getProfileAdapter } from './adapters/registry.js';
 import {
   assertSafeProfilePath,
   fingerprintProfileFile,
@@ -17,30 +18,6 @@ import {
   removeManagedFile,
   sha256Fingerprint,
 } from './files.js';
-import { diagnoseLauncherPath, renderProfileLaunchers } from './launcher.js';
-import {
-  checkpointProfileResource,
-  createProfileState,
-  getProfileStatePath,
-  hashProfileDeclaration,
-  loadProfileState,
-  sanitizeProfileError,
-  saveProfileState,
-} from './state.js';
-import {
-  getInternalProfilePlan,
-  getProfileRoot,
-  planProfileOperation,
-  readProfileWorkspace,
-  readOptionalProfileWorkspace,
-  resolveProfileRuntimeOptions,
-  type InternalProfilePlan,
-  type InternalProfilePlanStep,
-  type ProfilePlanDependencies,
-  type ResolvedProfileRuntime,
-} from './plan.js';
-import { getProfileAdapter } from './adapters/registry.js';
-import { isNativeProfileAdapter, type ProfileAdapter } from './types.js';
 import type {
   ProfileApplyResult,
   ProfileApplyStep,
@@ -50,6 +27,29 @@ import type {
   ProfileRuntimeOptions,
   ProfileStatusResult,
 } from './index.js';
+import { diagnoseLauncherPath, renderProfileLaunchers } from './launcher.js';
+import {
+  getInternalProfilePlan,
+  getProfileRoot,
+  type InternalProfilePlan,
+  type InternalProfilePlanStep,
+  type ProfilePlanDependencies,
+  planProfileOperation,
+  type ResolvedProfileRuntime,
+  readOptionalProfileWorkspace,
+  readProfileWorkspace,
+  resolveProfileRuntimeOptions,
+} from './plan.js';
+import {
+  checkpointProfileResource,
+  createProfileState,
+  getProfileStatePath,
+  hashProfileDeclaration,
+  loadProfileState,
+  sanitizeProfileError,
+  saveProfileState,
+} from './state.js';
+import { isNativeProfileAdapter, type ProfileAdapter } from './types.js';
 
 export interface ProfileManagerDependencies extends ProfilePlanDependencies {
   readonly now?: () => Date;
@@ -190,6 +190,23 @@ async function removeEmptyManagedRoot(root: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
     throw error;
   }
+}
+
+async function removeProfileOAuthProxyRoot(profileRoot: string): Promise<void> {
+  const oauthProxyRoot = join(profileRoot, 'oauth-proxy');
+  await assertSafeProfilePath(profileRoot, oauthProxyRoot);
+  const stats = await lstat(oauthProxyRoot).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!stats) return;
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(
+      `Profile OAuth proxy root is not a real directory: ${oauthProxyRoot}`,
+    );
+  }
+  await assertSafeProfilePath(profileRoot, oauthProxyRoot);
+  await rm(oauthProxyRoot, { recursive: true, force: true });
 }
 
 async function removeOwnedManagedRoot(
@@ -606,18 +623,10 @@ export async function applyProfilePlan(
   if (plan.operation === 'remove') {
     if (!retainedManaged) {
       try {
+        await removeProfileOAuthProxyRoot(profileRoot);
         const statePath = getProfileStatePath(profileRoot);
         await assertSafeProfilePath(profileRoot, statePath);
         await rm(statePath, { force: true });
-        await removeEmptyManagedRoot(profileRoot);
-        return {
-          profile: plan.profile,
-          operation: plan.operation,
-          status: 'removed',
-          success: true,
-          steps: results,
-          warnings: plan.warnings,
-        };
       } catch (error) {
         const message = safeError(error);
         return {
@@ -630,6 +639,22 @@ export async function applyProfilePlan(
           error: message,
         };
       }
+      const warnings = [...plan.warnings];
+      try {
+        await removeEmptyManagedRoot(profileRoot);
+      } catch (error) {
+        warnings.push(
+          `Profile resources were removed, but the empty profile directory could not be pruned: ${safeError(error)}`,
+        );
+      }
+      return {
+        profile: plan.profile,
+        operation: plan.operation,
+        status: 'removed',
+        success: true,
+        steps: results,
+        warnings,
+      };
     }
     state = await saveProfileState(profileRoot, {
       ...state,

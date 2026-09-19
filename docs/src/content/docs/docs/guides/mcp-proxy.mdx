@@ -1,185 +1,215 @@
 ---
-title: MCP Proxy
-description: Transparently proxy HTTP MCP servers through a built-in stdio bridge, with OAuth handled for you.
+title: HTTP MCP Servers
+description: Add, authenticate, and share HTTP MCP servers across AI clients.
 ---
 
-Some MCP servers use HTTP transport with OAuth authentication, but not every AI client supports HTTP natively. The MCP proxy feature rewrites HTTP server configs to run through AllAgents' own built-in stdio bridge (`allagents mcp proxy <serverUrl>`), so all clients connect through an already-authenticated proxy — no separate package to install.
-
-## Quick Start
-
-The fastest way to try MCP proxy is to scaffold the ready-made
-[`examples/workspaces/mcp-proxy`](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/mcp-proxy)
-workspace with `allagents workspace init --from`:
+AllAgents acts as the MCP client for HTTP servers it manages. One command
+connects to the server, handles OAuth when required, saves the selected project,
+user, or profile declaration, and syncs every selected AI client:
 
 ```bash
-allagents workspace init ./mcp-proxy-demo \
-  --from allagentsdev/allagents/examples/workspaces/mcp-proxy
-cd ./mcp-proxy-demo
+allagents mcp add tradingview https://mcp.tradingview.com/mcp
 ```
 
-This creates a workspace pre-configured with the `deepwiki` plugin — a real
-public HTTP MCP server (`https://mcp.deepwiki.com/mcp`) — and an `mcpProxy`
-section that rewrites it to stdio for Codex while leaving Claude's HTTP
-config untouched:
+You do not need to run a separate proxy or authentication command.
+
+## Add a Server
+
+Use a stable name and the server's HTTP endpoint:
+
+```bash
+allagents mcp add deepwiki https://mcp.deepwiki.com/mcp
+allagents mcp add tradingview https://mcp.tradingview.com/mcp
+```
+
+For an HTTP server, `mcp add`:
+
+1. Connects as the AllAgents MCP client
+2. Opens a browser if the server requires OAuth
+3. Verifies the MCP connection before changing the selected declaration
+4. Stores the server under that destination's `mcpServers`
+5. Routes the selected AI clients through AllAgents and syncs their configs
+
+Public servers such as DeepWiki complete without a browser. OAuth servers such
+as TradingView prompt for login on the first connection.
+
+### Local and Remote Browsers
+
+The same command supports both environments:
+
+- **Local browser:** approve access and let the browser return to the loopback
+  callback. The terminal continues automatically.
+- **Remote or headless host:** open the printed authorization URL on another
+  device. After approval, copy the complete loopback callback URL from the
+  browser address bar and paste it into the waiting terminal prompt.
+
+AllAgents accepts only the registered loopback address with the exact OAuth
+state.
+
+In a non-interactive shell, AllAgents still verifies the connection without
+opening a browser. Public servers and servers with valid cached credentials
+succeed. If fresh OAuth consent is required, the command fails before changing
+the workspace; rerun it in an interactive terminal.
+
+### Client Filters and Headers
+
+```bash
+allagents mcp add internal https://mcp.internal.corp \
+  --header Authorization=Bearer-token \
+  --client claude \
+  --client codex,copilot
+```
+
+`--client` is repeatable and comma-compatible. It limits both server sync and
+AllAgents routing; duplicate values are ignored in first-seen order. Without
+`--client`, routing stays dynamic so clients added to the destination later
+receive the same AllAgents-managed connection.
+`--header` values are sent only to the MCP server origin, not to OAuth
+discovery or identity-provider origins.
+
+Profile declarations accept only exact environment references for header values:
+
+```bash
+allagents mcp add tradingview https://mcp.tradingview.com/mcp \
+  --profile markets \
+  --header 'Authorization=${TRADINGVIEW_TOKEN}'
+```
+
+Generated profile bridge arguments store the header-to-variable binding, not
+the resolved secret. AllAgents resolves the variable immediately before the MCP
+connection and fails clearly when it is missing.
+
+## Reauthenticate
+
+Use the configured server name, not its URL:
+
+```bash
+allagents mcp reauth tradingview
+allagents mcp reauth tradingview --scope user
+allagents mcp reauth tradingview --profile markets
+```
+
+`reauth` clears only the selected destination's cached OAuth registration and
+tokens, then runs a fresh connection and login. It does not revoke the grant at
+the remote provider. Reconnect the AI client afterward if it already had an MCP
+session open.
+
+## Stdio Servers
+
+Stdio servers use the same `add` command and run directly rather than through
+the HTTP client:
+
+```bash
+allagents mcp add gh-server npx \
+  --arg=-y \
+  --arg=@modelcontextprotocol/server-github \
+  -e GH_TOKEN=ghp_xxx
+```
+
+## How HTTP Routing Works
+
+AI clients have different MCP transport support. AllAgents normalizes that
+difference: HTTP servers added with `mcp add` are synced as stdio commands that
+launch AllAgents' internal HTTP bridge. OAuth registration and tokens are
+therefore shared instead of being configured independently in every client.
+
+The generated client config may contain an internal invocation like:
+
+```json
+{
+  "tradingview": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "allagents@<version>",
+      "mcp",
+      "proxy",
+      "https://mcp.tradingview.com/mcp"
+    ]
+  }
+}
+```
+
+For a named profile, the generated arguments also include `--profile <name>`.
+That hidden selector makes every client inside one profile share the same
+profile-owned credentials without sharing them with another profile.
+
+This is generated plumbing, not a setup command. AllAgents pins the package
+version that created the config, and `npx` reuses npm's package cache on later
+launches.
+
+### Plugin-Provided Servers
+
+Servers declared by plugins are not added through `mcp add`. To route those
+through AllAgents, use the advanced destination-local `mcpProxy` setting:
 
 ```yaml
-# .allagents/workspace.yaml
-repositories: []
-
-plugins:
-  # Real HTTP MCP server from the official AllAgents marketplace.
-  # Ships a `.mcp.json` that points at https://mcp.deepwiki.com/mcp
-  - allagentsdev/allagents/plugins/deepwiki
-
-clients:
-  - claude
-  - codex
-
 mcpProxy:
-  # Claude Code supports HTTP MCP natively, so it gets the original URL.
-  # Codex only speaks stdio, so rewrite its config to run through the
-  # built-in `allagents mcp proxy` bridge.
   clients:
     - codex
-```
-
-`workspace init` also runs the initial sync, so you can immediately inspect
-what each client received:
-
-```bash
-cat .mcp.json            # Claude — original HTTP config
-cat .codex/config.toml   # Codex — rewritten to `allagents mcp proxy` stdio
-```
-
-DeepWiki is a public, no-auth MCP server, so this example works end-to-end
-with nothing more than `allagents` itself installed. Point any of your
-configured clients at the workspace and you can immediately call tools like
-`read_wiki_structure` or `ask_question` against any indexed GitHub repo.
-
-## Why Use MCP Proxy
-
-- **OAuth handled once** — the built-in proxy runs the full PKCE authorization flow the first time it connects, then caches the client registration and tokens under `~/.allagents/oauth-proxy/`; subsequent connections reuse them (with automatic token refresh) instead of reopening a browser
-- **Stdio everywhere** — clients that only support stdio can connect to HTTP servers
-- **Transparent** — configure which clients need proxying and AllAgents rewrites configs automatically during sync
-- **Nothing extra to install** — the proxy is built into the `allagents` binary; there's no separate package to fetch or cache on first use
-
-## Configuration
-
-Add an `mcpProxy` section to your `workspace.yaml`:
-
-```yaml
-mcpProxy:
-  clients:
-    - claude
-    - copilot
   servers:
-    my-internal-api:
+    plugin-server:
       proxy:
-        - codex
-```
-
-### Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `clients` | Yes | Default list of clients where all HTTP servers are proxied |
-| `servers` | No | Per-server overrides |
-| `servers.<name>.proxy` | Yes (if server entry exists) | Additional clients to proxy this specific server for |
-
-### How It Works
-
-1. During `allagents update`, AllAgents collects MCP servers from installed plugins
-2. For each server + client pair, it checks if proxying is needed:
-   - Is the client listed in `mcpProxy.clients`?
-   - Is there a per-server override in `mcpProxy.servers.<name>.proxy` that includes this client?
-3. If yes **and** the server uses HTTP transport (has a `url` field), the config is rewritten to invoke `allagents mcp proxy` via stdio
-4. Stdio servers are never transformed — they pass through unchanged
-
-### Transform Example
-
-A plugin provides an HTTP MCP server:
-
-```json
-{
-  "knowledge-base": {
-    "url": "https://knowledge.mcp.example.com"
-  }
-}
-```
-
-With `mcpProxy.clients: [claude]`, the synced config for Claude becomes:
-
-```json
-{
-  "knowledge-base": {
-    "command": "allagents",
-    "args": ["mcp", "proxy", "https://knowledge.mcp.example.com"]
-  }
-}
-```
-
-Other clients not listed in `mcpProxy.clients` receive the original HTTP config unchanged.
-
-## Per-Server Overrides
-
-The `servers` map lets you proxy specific servers for additional clients beyond the default list:
-
-```yaml
-mcpProxy:
-  clients:
-    - claude
-  servers:
-    my-internal-api:
-      proxy:
-        - codex
+        - claude
         - copilot
 ```
 
-In this example:
-- **All HTTP servers** are proxied for `claude` (from the default `clients` list)
-- **Only `my-internal-api`** is additionally proxied for `codex` and `copilot`
+The optional `clients` list applies to every HTTP server in that destination.
+Per-server lists add clients for only the named server, and `*` selects every
+eligible client. Profiles place the same shape beside their own `mcpServers`
+under `profiles.<name>.mcpProxy`; profile policy never uses qualified global
+client IDs. Stdio servers are never transformed.
 
-Per-server `proxy` lists are additive — they extend the default `clients`, not replace them.
+## OAuth Cache
 
-## OAuth & Token Cache
+AllAgents caches OAuth client registration, tokens, PKCE verifier, and
+discovery metadata per server URL. Project and ordinary user declarations share
+the ordinary cache:
 
-The first time `allagents mcp proxy <url>` connects to a server that requires OAuth, it runs the standard authorization-code + PKCE flow: it registers a client with the server's authorization server (or reuses a cached registration), opens your browser to complete the login, and exchanges the resulting code for tokens.
-
-Client registration, tokens, and discovery metadata are cached per server under:
-
-```
+```text
 ~/.allagents/oauth-proxy/<hash-of-server-url>/
-  client-info.json
-  tokens.json
-  code-verifier.txt
-  discovery.json
 ```
 
-Later connections reuse this cache — no browser prompt — and an expired access token is refreshed automatically using the cached refresh token, still without reopening a browser. If you ever need to force a fresh login for a specific server (e.g. a revoked token), delete that server's subdirectory and reconnect.
+Each named profile owns an isolated cache:
+
+```text
+~/.allagents/profiles/<profile>/oauth-proxy/<hash-of-server-url>/
+```
+
+Both contain `client-info.json`, `tokens.json`, `code-verifier.txt`, and
+`discovery.json`. Clients inside one profile share those files; different
+profiles do not. Later connections reuse valid tokens and refresh expired access
+tokens when possible. `mcp reauth --profile <name>` resets only that profile.
+Removing an installed or declared-only profile removes its OAuth subtree with
+its other profile-owned runtime state. Cleanup rejects symbolic-link or
+non-directory OAuth roots and retains retryable state on failure.
 
 ## Prerequisites
 
-None beyond `allagents` itself — the proxy has no separate runtime dependency to fetch or cache.
+The generated bridge requires Node.js with `npx` available. A global AllAgents
+installation is not required: both setup and the generated MCP connection can
+use the npm cache.
 
-:::caution
-`allagents` must be installed and on `PATH` (`npm install -g allagents` or `bun install -g allagents`) — running it via `npx allagents` is **not** enough for this feature. The proxy command is invoked directly by each MCP client (Claude Code, Codex, etc.), not by you, and the generated config embeds a bare `command: "allagents"`. `npx` resolves and runs the package for *your own* shell invocation, but doesn't add anything to `PATH` for another process to find afterward — so a client spawning that config later will fail with "command not found" unless `allagents` is genuinely installed.
-:::
+The first bridge launch downloads the pinned AllAgents package if that version
+is not already cached. Later launches reuse the cached package. Environments
+that must work offline should prime the cache before disconnecting.
 
-## Scope
+## Destinations
 
-MCP proxy works with both project-scoped and user-scoped syncs.
+HTTP MCP routing supports project, ordinary user, and named profile
+destinations. Omit destination flags for project scope, use `--scope user` for
+ordinary user configuration, or `--profile <name>` for a profile. `--scope` and
+`--profile` cannot be combined. From the home directory, the project path
+aliases the user workspace, so an unflagged command resolves to user scope and
+explicit `--scope project` is rejected.
 
-### Project Scope
+| Destination | Codex | Copilot |
+|-------------|-------|---------|
+| Project | `.codex/config.toml` | `.github/mcp.json` |
+| User | `~/.codex/config.toml` | `~/.copilot/mcp-config.json` |
+| Profile | `~/.allagents/profiles/<name>/clients/codex/home/<name>.config.toml` | `~/.allagents/profiles/<name>/clients/copilot/home/mcp-config.json` |
 
-During `allagents update`, proxied servers are written to each client's project-level MCP config file:
-
-| Client | Config File |
-|--------|------------|
-| Claude | `.mcp.json` |
-| VS Code | `.vscode/mcp.json` |
-| Copilot | `.copilot/mcp-config.json` |
-| Codex | `.codex/config.toml` |
-
-### User Scope
-
-When using `--scope user`, proxied servers are synced via client CLI commands (`claude mcp add`, `codex mcp add`) to user-level config, making them available across all projects.
+Project and ordinary user updates are MCP-only. Updating an installed profile
+uses the ownership-aware profile reconciler because some clients combine MCP
+and settings in one file. Editing a declared but uninstalled profile does not
+implicitly install it.

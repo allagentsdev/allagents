@@ -222,7 +222,7 @@ flowchart TB
 - **Goal:** Expose the orchestration as a predictable interactive and scriptable command.
 - **Requirements:** R1-R3, R6, R8-R12; F1-F3.
 - **Dependencies:** U1, U2.
-- **Files:** `src/cli/commands/plugin-skills.ts`, `src/cli/metadata/plugin-skills.ts`, `src/cli/skill-arg-normalizer.ts`, `tests/unit/cli/skill-update.test.ts`, `tests/unit/cli/agent-help.test.ts`.
+- **Files:** `src/cli/commands/plugin-skills.ts`, `src/cli/metadata/plugin-skills.ts`, `src/cli/skill-arg-normalizer.ts`, `tests/unit/cli/skill-update.test.ts`, `tests/unit/cli/structured-help.test.ts`.
 - **Approach:** Register `update`; validate scope/filter values; use Clack for scope and confirmation prompts; group warnings once per physical refresh unit with every impacted scope/plugin listed; collect all decisions before execution; interpret No as retain/skip and cancel as pre-mutation abort; render one concise summary; produce the same result model and exit contract through JSON without UI noise.
 - **Patterns to follow:** Existing skill search scope picker, global JSON envelope helpers, and enriched command metadata.
 - **Test scenarios:**

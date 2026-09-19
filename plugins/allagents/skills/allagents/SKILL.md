@@ -5,11 +5,11 @@ description: Manage AllAgents workspaces, plugins, skills, client targets, globa
 
 # AllAgents CLI
 
-Use an AllAgents CLI runner as the authoritative mutation boundary. Prefer its commands over hand-editing AllAgents declarations or generated client files.
+The installed AllAgents CLI owns the current command surface and operational contract. This skill only resolves the runner, loads that contract, and applies it. Do not maintain a second command reference here.
 
 ## Resolve the CLI runner
 
-Choose one runner at the start of the task and use it for every discovery, execution, and verification command:
+Choose one runner at the start of the task and use it for discovery, execution, and verification:
 
 1. If `allagents` is on `PATH`, use `allagents`.
 2. Otherwise, if `npx` is available, use `npx --yes allagents`.
@@ -17,66 +17,35 @@ Choose one runner at the start of the task and use it for every discovery, execu
 
 Examples below use `allagents`; substitute the complete `npx --yes allagents` prefix when that is the selected runner. Do not mix runners within one operation.
 
-## Resolve the current command contract
+## Load the current contract
 
-1. Confirm the installed version with `allagents --version`.
-2. Discover top-level commands with `allagents --help --json`.
-3. Narrow to the relevant group with `allagents <group> --help --json`.
-4. Before execution, inspect the leaf command with `allagents <command> --help --json`.
-5. Use the returned positionals, options, examples, interaction requirements, output schema, and JSON field allowlist as the source of truth.
+1. Confirm the selected runner with `allagents --version`.
+2. Discover the current top-level surface with `allagents --help --json`.
+3. Select a command group from that response and load it with `allagents <group> --help --json`.
+4. Before execution, load the selected leaf with `allagents <command> --help --json`.
+5. Follow the returned `when_to_use`, positionals, options, examples, interaction requirement, output schema, and JSON field allowlist.
 
-Do not rely on memorized flags when structured help is available. Do not invent aliases or combine options that the leaf metadata does not advertise.
+The structured response is authoritative. Do not rely on remembered flags, copied examples, aliases, destination behavior, or mutation semantics. If the installed CLI does not advertise an operation, do not invent it.
 
-## Choose the interface
+## Execute through the discovered surface
 
-- Run `allagents` without arguments in an interactive terminal when the user wants to browse and make choices in the TUI.
-- Use direct commands when the requested operation and destination are already known.
-- For automation, use `--json`, explicit selectors, and non-interactive confirmation options advertised by the leaf help.
-- Use `--json=<fields>` only with fields listed by that command. Use `--jq` only with JSON output.
-- Treat the process exit code and structured success envelope as authoritative. Verify mutations with the corresponding list, get, or status command.
+- Run `allagents` without arguments in an interactive terminal only when the user wants to browse and choose in the TUI.
+- Use the discovered direct command when the operation is already known.
+- For automation, use `--json` plus only the explicit selectors and non-interactive options advertised by the leaf help.
+- Use `--json=<fields>` only with fields in the leaf's JSON allowlist. Use `--jq` only with JSON output.
+- Prefer an advertised CLI command over hand-editing an AllAgents declaration or generated client file.
+- Preserve the exact scope, destination, profile, clients, and other ownership selectors requested by the user. If the request is insufficient and the CLI requires a choice, ask rather than guessing.
+- Never echo credentials. Supply sensitive values only through mechanisms advertised by the current leaf help.
 
-## Route the request
+Treat the process exit code and structured result as authoritative. After a mutation, rediscover and run the relevant read-only list, get, or status command against the same selectors. Do not claim success from a config write alone when the CLI reports a partial update or failed client reconciliation.
 
-| Intent | Inspect first |
-| --- | --- |
-| Initialize or reconcile a workspace | `allagents --help --json`, then the selected workspace or update command help |
-| Inspect declared and live state | `allagents status --help --json` |
-| Install, list, update, or remove plugins | `allagents plugin --help --json` |
-| Discover, install, enable, disable, or update skills | `allagents skill --help --json` |
-| Add, inspect, authenticate, update, or remove MCP servers | `allagents mcp --help --json` |
-| Install, inspect, update, or remove global profiles | `allagents profile --help --json` |
-| Update a globally installed CLI | `allagents self update --help --json`; with the npx runner, use `npx --yes allagents@latest` and skip self-update |
+## Recover from errors
 
-Always continue from group help to the chosen leaf command before executing it.
-
-## Destination and ownership rules
-
-AllAgents keeps project, ordinary user, and named-profile state separate.
-
-- Use the destination explicitly requested by the user.
-- When a mutating command supports destination flags, pass the explicit project, user, or profile selector advertised by its help.
-- Never guess a named profile.
-- Do not treat generated client files as declarations. Change the AllAgents-owned declaration through the CLI, then let AllAgents update client configuration.
-- If an update fails after a declaration mutation, report that split state and use the command's documented update or retry path. Do not silently rewrite generated files.
-
-## MCP workflow
-
-1. Select exactly one project, user, or named-profile destination.
-2. Inspect `allagents mcp --help --json`, then the selected MCP leaf command help.
-3. List the destination before destructive or authentication-changing operations.
-4. Execute the mutation with an explicit destination when the help supports one.
-5. Verify the result with the corresponding MCP list or get command in the same destination.
-
-Never print credential values. Prefer environment-variable references for secret headers or environment values when the command contract supports them. Preserve OAuth browser and callback interaction when structured help marks it as required.
-
-## Safety
-
-- Review declared setup commands before running any workspace setup action. Setup is an explicit trust boundary.
-- Use a dry-run option before a material mutation whenever the leaf help advertises one.
-- Do not edit or delete user-owned client configuration outside AllAgents ownership records.
-- Do not cross project, user, or profile boundaries to make a command succeed.
-- Stop on validation, authentication, ownership, or partial-update errors; report the selected destination and the recovery command exposed by structured help.
+- Read the structured error before retrying.
+- If command syntax is rejected, reload root, group, and leaf help; do not fall back to stale syntax.
+- If a mutation may have partially applied, inspect current state before any retry.
+- Follow only recovery operations exposed by the installed CLI.
 
 ## Completion
 
-Report the command path used, selected destination and clients, structured result, and verification command. For a mutation, completion requires the declared state and the corresponding live or generated client state to agree, or an explicit partial-update error with its recovery path.
+Report the selected runner, command path, explicit selectors, structured result, and verification command. Completion requires the declared state and corresponding live or generated state to agree, or an explicit partial-update result with the CLI-advertised recovery path.

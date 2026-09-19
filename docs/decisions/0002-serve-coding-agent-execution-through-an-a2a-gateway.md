@@ -2,606 +2,457 @@
 
 - Status: Accepted; implementation pending
 - Date: 2026-09-17
+- Updated: 2026-09-19
 
 ## Context
 
-AllAgents already owns cross-client agent configuration, workspace knowledge,
-plugins, hooks, MCP configuration, and launchers for Codex and other coding
-agents. External systems also need to invoke those agents without importing
-AllAgents internals or coupling to an interactive CLI process.
+AllAgents already owns cross-client agent configuration, project workspace
+knowledge, global profiles, plugins, hooks, MCP configuration, and generated
+launchers. External systems also need to invoke those agents without importing
+AllAgents internals or driving an interactive terminal.
 
-The first planned consumer is AI Evals. Its
-[ADR 0036](https://github.com/WiseTechGlobal/ai-evals/blob/main/docs/adr/0036-remove-the-ai-evals-workspace-runtime.md)
-removes AI Evals-owned coding workspaces in favor of a Promptfoo provider that
-needs one remote coding-agent call to return output, usage, traces, file
-changes, produced artifacts, failures, cleanup outcomes, and execution
-provenance. Future clients may need the same execution boundary without
-Promptfoo or evaluation semantics.
+The first planned consumer is AI Evals. It needs one remote coding-agent call to
+return terminal output, usage, traces, file changes, produced artifacts,
+failures, cleanup outcomes, and execution provenance. Future trusted tools on a
+private developer network may need the same execution boundary.
 
-A coding-agent execution is more than a model request. It includes immutable
-workspace selection, repository or snapshot acquisition, environment setup,
-credentials, permissions, agent invocation, cancellation, evidence capture,
-process termination, and cleanup. A workspace may contain multiple repositories
-or be produced from a digest-pinned snapshot or organization-specific source.
-Those responsibilities need one public contract while allowing materially
-different execution backends and acquisition mechanisms.
+The initial product is not a public multi-tenant control plane. Developers are
+expected to run one gateway for one AllAgents project workspace and expose it on
+loopback, a firewalled network, or a Tailscale network. Network reachability is
+the trust and authorization boundary.
+
+A coding-agent execution still includes more than a model request. The gateway
+must acquire an immutable workspace, select a configured agent target, contain
+credentials to their required phases, propagate cancellation, collect evidence,
+terminate descendants, and clean up. Those responsibilities need one public
+contract even when the initial deployment remains a single trusted process.
 
 The contract must not turn AllAgents into an evaluation harness. Dataset
-expansion, repetition, assertions, scoring, experiment scheduling, and durable
+expansion, repetitions, assertions, scoring, experiment scheduling, and durable
 evaluation Runs remain consumer concerns.
 
 ## Decision
 
-### Add a separately deployable execution gateway
+### Add a trusted-network execution gateway
 
-AllAgents will provide a separately testable and deployable execution-gateway
-entry point. It will not be coupled to an interactive CLI command lifecycle.
+AllAgents will provide an independently testable `allagents gateway serve`
+entry point. It is separate from the interactive CLI command lifecycle but may
+run as a single local service process that supervises acquisition and provider
+child processes.
 
-The gateway owns:
+The gateway implements A2A 1.0 HTTP+JSON plus a required versioned AllAgents
+coding-execution extension. It owns:
 
-- authentication and authorization;
 - stable Task and idempotency identity;
+- execution-target selection;
+- workspace acquisition;
 - deadline and cancellation propagation;
-- execution-profile and backend selection;
-- normalization of terminal output and evidence;
-- protocol-level Task status and bounded retention; and
+- normalized terminal output and evidence;
+- bounded Task and Artifact retention; and
 - enforcement of the coding-execution contract across every backend.
 
 The gateway is not an evaluator, grader, experiment scheduler, retry authority,
-or durable evaluation Run ledger. It does not own a consumer's result store.
+or durable evaluation Run ledger.
 
-### Keep the gateway separate from execution backends
+### Trust the network boundary instead of adding application authentication
 
-The initial design supports two execution backends, delivered in this order:
+The initial gateway has no application-level authentication or per-caller
+authorization. It may bind to loopback, a specific interface, or `0.0.0.0`.
+Loopback remains the default when no listen address is supplied, but an explicit
+`0.0.0.0` binding is valid and requires no unsafe-mode flag.
 
-1. Codex; and
-2. Pi.
+Every host able to reach the listener is equally trusted. Any reachable caller
+may invoke every exposed target, list and retrieve retained Tasks and Artifacts,
+and request cancellation. Task lookup and idempotency are deployment-wide, not
+scoped to a caller identity. Operators must use Tailscale ACLs, host firewalls,
+container networking, or equivalent network controls when the listener is not
+loopback-only.
 
-Each backend implements the same conformance contract. Provider-specific
-process, session, structured-output, cancellation, and evidence behavior
-remains behind its adapter. OpenCode and other coding agents remain possible
-follow-up adapters rather than part of the first delivery.
+TLS termination, OIDC, static bearer tokens, per-tenant ownership, and
+multi-tenant information-hiding are deferred. They require a separate decision
+when the service is exposed outside one trusted network boundary.
 
-Execution workers own workspace materialization, environment setup, agent
-invocation, evidence collection, process termination, and cleanup. The gateway
-must not execute evaluated agents, run materializer images, or mount writable
-workspaces in the gateway process.
+### Use existing workspace files as the configuration authority
 
-When deployed on Kubernetes, the gateway runs as its own Deployment and
-ClusterIP Service, separate from consumers and execution workers. A backend
-dispatches to a worker pool, per-invocation Job, or stronger sandbox according
-to the selected execution profile. The protocol does not require one worker
-topology.
+The initial gateway has no `gateway.yaml` or `worker.yaml`.
 
-A separate gateway Pod is a service and failure boundary, not per-invocation
-security isolation. Deployments requiring hostile-code or tenant isolation
-must create or select a stronger execution boundary behind the gateway.
+One gateway process serves one project workspace selected by `--workspace` or
+the current directory. The project `.allagents/workspace.yaml` remains
+canonical for repository identities, remote sources, destination paths,
+default revisions, workspace files, plugins, and named OCI snapshot sources.
 
-### Make workspace materialization explicit and operator-registered
+The user `~/.allagents/workspace.yaml` remains canonical for global profiles and
+launcher-backed execution targets. A launcher-bearing profile client is exposed
+only when it explicitly declares:
 
-The public extension represents one workspace as a closed discriminated union.
-The allowed `kind` values and shapes are:
+```yaml
+profiles:
+  review:
+    clients:
+      - name: codex
+        launcher: codex-review
+        gateway:
+          expose: true
+```
 
-1. `repositories`, with a bounded list of direct Git repositories, each with a
-   canonical credential-free HTTPS URL, full commit object ID, collision-free
-   relative destination, and optional repository-relative subdirectory;
-2. `workspaceSnapshot`, with an OCI workspace snapshot referenced by manifest
-   digest and accompanied by the versioned AllAgents workspace manifest; or
-3. `materializer`, with an operator-registered materializer ID, an expected
-   workspace-manifest digest, and bounded structured inputs.
+The public target ID is the launcher basename. Launcher names are already
+portable and collision-checked across every user profile, while one profile may
+contain several clients and therefore several launchers. Internally the target
+resolves to exactly one `(profile, client)` pair. The gateway reserves built-in
+target IDs, initially `codex` and `pi`; an exposed launcher whose portable
+collision key matches a built-in ID is invalid.
 
-Fields from another union variant are invalid.
+The built-in `codex` and `pi` targets remain available when their adapters are
+ready. Explicit launcher-backed targets add configured variants such as
+`codex-review` and `pi-tools`. Initially only Codex and Pi profile clients are
+gateway-executable; other launcher-bearing clients become eligible only after a
+reviewed adapter implements the common execution contract.
 
-The third mode supports organization-specific acquisition such as JFrog,
-generated sources, or custom monorepo assembly without accepting executable
-configuration from the caller. The request cannot supply a builder image,
-Dockerfile, Compose file, shell command, credential, mutable image tag, network
-policy, or output contract.
+The generated launcher file is a local UX artifact, not the remote execution
+boundary. The gateway never discovers launchers from `PATH`, accepts a command,
+executable path, arbitrary arguments, or environment overrides from a request,
+or appends request data to a generated launcher. It resolves the profile through
+its typed adapter and invokes the provider's supported automation surface.
 
-Direct Git and OCI acquisition revalidate scheme, normalized host, resolved
-address, port, and redirect policy for every connection. OCI foreign or
-external layer URLs are rejected by default, and registry credentials are never
-forwarded across origins.
+Process-level options use exact flags and environment variables for:
 
-Each materializer ID is defined in an operator-owned deployment registry. The
-gateway receives only its non-secret descriptor: ID, bounded input schema,
-expected definition digest, expected output-manifest version, and required
-worker capabilities. The worker receives the runtime definition, which
-additionally pins an OCI image by digest and fixes credential handle names or
-mount identities, allowed network destinations, resource and phase deadlines,
-cache policy, and the OCI runner or sandbox capability. Credential values are
-not part of either descriptor.
+- listener and workspace selection;
+- a project-specific state-directory override;
+- terminal Task retention and bounded Artifact/event storage;
+- GitHub App identifiers and private-key file references;
+- the configured GitHub CLI account;
+- an OCI credential file or fixed credential-helper executable; and
+- Codex and Pi auth-file handles.
 
-The worker computes an algorithm-qualified definition digest over a versioned,
-domain-separated canonical serialization of every non-secret,
-behavior-affecting runtime field. The expected workspace-manifest digest
-likewise identifies the canonical bytes of one declared manifest version. An
-execution profile explicitly allows source modes and materializer IDs and
-authorizes canonical Git repositories or namespaces, OCI namespaces, and
-resource selectors inside structured materializer inputs. At readiness the
-gateway matches its expected descriptor digest and profile against the
-authenticated worker's computed digest and capabilities. At admission it
-validates the selected ID, expected output digest, structured inputs, and
-resource authorization; the worker resolves the same definition locally and
-rejects missing, changed, or unsupported definitions before acquisition.
+By default the state root is a deterministic child of
+`~/.allagents/gateway/` keyed by the canonical project-workspace identity. The
+store persists and verifies that identity and holds an exclusive lock for the
+process lifetime. The root is current-user owned, private, symlink- and hard-
+link-resistant, and disjoint from project, profile, and invocation roots.
 
-Every source mode produces the same versioned workspace manifest. The manifest
-separates worker-verified observations from materializer-attested claims and
-records the verification method for each identity. It includes requested and
-resolved commits or OCI digests, destinations, materializer identity and image
-digest when applicable, normalized input and output digests, resulting tree
-identities, and completeness. Materializer assertions are not described as
-independently verified unless the worker or a configured trusted acquisition
-service performs that verification.
+Secret values never belong in either workspace file.
 
-The worker materializes into a worker-owned staging directory under the same
-filesystem publication root as the final workspace; readiness rejects a
-cross-filesystem layout and publication never falls back to copy-then-delete.
-After validating paths, file types, limits, identities, and the manifest, the
-worker stops the materializer and removes its credential, process, mount, and
-runner boundary. The validated host-owned staging tree remains. The worker then
-atomically renames that tree into its final location before profile-owned setup
-or any coding agent starts.
+### Support direct repositories and OCI workspace snapshots
 
-The registered image is part of the deployment's trusted computing base. The
-worker launches it through a configured OCI runner or sandbox in a boundary
-separate from the agent runtime and never exposes that runner's control socket
-to setup or model tools. Phase isolation prevents later code from receiving the
-materializer's credentials or mounts, but it cannot make a malicious
-operator-registered image safe from credentials intentionally given to it.
-Operators must review and pin that image. A deployment that will not trust it
-with credentials needs a separately versioned broker or central snapshot
-protocol, which is deferred from the initial architecture.
+Each request selects exactly one closed workspace source variant:
 
-The canonical source request enters caller idempotency. The resolved
-materializer definition digest enters the effective-profile binding, and both
-the definition and output-manifest digests enter terminal provenance. New-claim
-source authorization always runs before cache lookup. Cache metadata and keys
-include the canonical source, materializer-definition digest, authorization
-scope digest and revocation epoch, configured trust domain, and, for GitHub App
-sources, the current installation-entitlement generation. Authenticated App
-lifecycle webhooks and bounded control-plane reconciliation advance that
-generation on uninstall, suspension, or repository-selection change. Unknown
-or stale installation state fails cache authorization rather than reusing an
-entry. Reuse also requires manifest and content revalidation under the current
-authorization scope. Cache metadata preserves the original acquisition
-provider metadata; terminal provenance distinguishes `cache_hit`, that original
-provider, and the provider selected by current policy instead of claiming that
-the current provider performed acquisition. Secret resolution and token minting
-remain cache-miss-only.
+1. `repositories`, which materializes the repositories declared by name in the
+   project workspace and accepts only optional revision overrides; or
+2. `workspaceSnapshot`, which selects a named OCI snapshot repository declared
+   in the project workspace and supplies an immutable OCI manifest digest plus
+   the expected AllAgents workspace-manifest digest.
 
-This keeps Harbor's useful separation between content-addressed task acquisition
-and environment execution without adopting task-owned opaque source. The
-comparison is recorded in
-[Harbor repository materialization lessons](../research/harbor-repository-materialization.md).
+Fields from another variant are invalid. The gateway does not fall back from an
+OCI snapshot to Git repositories, or from Git repositories to a snapshot, after
+a Task selects its source mode.
 
-### Resolve GitHub source credentials from trusted deployment policy
+For direct repositories, callers cannot override repository URLs or destination
+paths. A revision override is keyed by a declared repository name. Branches and
+tags may be accepted for developer convenience, but the gateway resolves and
+records the full commit object ID before provider execution. Reproducibility-
+sensitive callers should supply full commit IDs.
 
-The public source request remains credential-free and does not select a
-credential provider. The trusted acquisition boundary normalizes the repository
-host and resolves a provider from operator configuration. `github.com` selects
-the built-in GitHub source backend; GitHub Enterprise Server hosts require an
-explicit host and API mapping because a custom hostname does not identify its
-provider. The effective profile authorizes the canonical repository and provider
-entitlement before cache lookup.
+For OCI snapshots, the project workspace declares the registry repository:
 
-For GitHub repositories, an ordered policy may prefer a GitHub App and permit a
-local GitHub CLI fallback. The App provider is applicable only when trusted
-operator configuration maps the requested repository to an installation ID;
-`@octokit/auth-app` does not discover that mapping. It mints an installation
-token scoped only to that repository, read-only contents permission, and its
-GitHub expiry. A trusted-local CLI provider is pinned to one configured
-non-secret account, which participates in its entitlement and effective-profile
-digests. It may run only when no App installation mapping applies, as
-`gh auth token --hostname <host> --user <account>`, with `GH_TOKEN`,
-`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` removed
-from its environment. Failure to resolve the configured account fails that
-provider. This is eligibility fallback, not authentication retry: after an App
-provider is selected, configuration, authentication, minting, permission,
-repository, rate-limit, or service failure terminates acquisition and never
-falls through to the broader user identity.
+```yaml
+workspaceSnapshots:
+  evaluation:
+    repository: ghcr.io/entityprocess/allagents-workspaces
+```
 
-When AllAgents owns GitHub App token minting, a trusted control-plane
-credential-provider component uses the focused `@octokit/auth-app` package
-rather than implementing App JWT, clock-skew, expiry, and installation-token
-renewal itself. Every cache-miss acquisition requests a fresh installation token
-with auth-app cache bypass (`refresh: true`). Its remaining lifetime must be
-strictly greater than the acquisition deadline plus the configured clock-skew
-margin, and the delivery lease cannot outlive the token. Readiness rejects an
-acquisition-phase ceiling that can exceed a fresh token's safe lifetime. Git
-remains the repository transport; the full Octokit client is not required.
+The request supplies the name `evaluation`, a `sha256:` OCI manifest digest, and
+a `sha256:` workspace-manifest digest. The gateway constructs the full OCI
+reference server-side. Callers cannot supply a registry host, repository name,
+mutable tag, extraction destination, credential, or external-layer policy.
 
-The initial remote architecture is one central token-minter path. The
-gateway/control-plane credential-lease controller is authoritative: an
-authenticated worker requests credentials only for its active attempt and
-fence; the controller rechecks the current command revision, lease epoch,
-tombstone, and fence in durable dispatch state, then derives the
-effective-profile digest, selected provider, host/API-mapping digest,
-installation ID, canonical repository, operation, worker route and identity,
-and expiry from durable dispatch and policy state. It issues a single-use,
-non-durable grant/response and, when the minter is separate, requires its
-configuration digest to agree with those selected bindings. Replay, worker
-field substitution, stale command state, and configuration disagreement fail
-closed.
+Both modes produce the same versioned workspace manifest. It records requested
+and resolved repository identities, destinations, acquisition kind, relevant
+OCI manifest and layer digests, the workspace-manifest digest, completeness,
+and whether each fact was independently verified or snapshot-attested. A commit
+listed inside an OCI snapshot is not described as independently verified unless
+the gateway separately verifies it against its Git remote.
 
-The authenticated delivery lease and channel bind that derived state to the
-worker identity, attempt, lease epoch, command revision, fence, operation, and
-expiry. Those bindings do not alter the bearer token: after delivery, the token
-is enforceably scoped only by GitHub to the repository, read-only contents
-permission, and token expiry. The remote worker never receives the App private
-key, and only its one-shot acquisition child receives the token. A remote App
-profile fails readiness when the central minter, authoritative lease controller,
-fresh-token lifetime check, or authenticated non-durable delivery capability is
-absent. A versioned central snapshot-delivery protocol is deferred and is not
-an initial readiness alternative.
+Acquisition occurs in a gateway-owned staging directory. The gateway validates
+paths, collisions, file types, symlinks, layer and file counts, individual and
+total sizes, digests, and the workspace manifest before atomically publishing
+the invocation workspace. Absolute paths, traversal, device files, sockets,
+escaping links, foreign or external OCI layers, and cross-origin credential
+forwarding are rejected.
 
-The local GitHub CLI provider and remote lease path expose their resolved tokens
-only to the one-shot acquisition process. Neither exposes credentials to setup,
-the coding-agent runtime, model tools, repository configuration, process
-arguments, logs, evidence, or the published workspace. Public failures use only
-deterministic coarse source-auth code, safe reason, and retryability:
-`source_auth_unavailable/no_eligible_provider`,
-`source_auth_denied/installation_repository_denied`, and
-`source_auth_failed` with `app_configuration_invalid`,
-`app_authentication_failed`, `app_mint_failed`, or
-`trusted_local_cli_failed` are not retryable; `source_auth_failed` with
-`provider_rate_limited` or `provider_unavailable` is retryable. Provider,
-installation, and account identifiers are non-secret but operator-only
-provenance. Cache-hit provenance separately records `cache_hit`, the original
-acquisition provider, and current policy selection.
+### Resolve GitHub credentials with App-first eligibility fallback
 
-A standalone network broker is not required for trusted local execution: the
-CLI provider may be a subprocess and a trusted co-located deployment may host
-the App minter and lease controller inside its control plane. Remote routes
-still use the same authenticated central-minter contract; the minter may be
-split into a standalone service when private-key isolation, independent audit,
-scaling, or blast-radius requirements demand it.
+The source request is credential-free and never selects a credential provider.
+For `github.com`, the gateway supports two trusted providers:
 
-The supporting precedents and trust-boundary analysis are recorded in
-[Source credential broker precedents](../research/source-credential-broker-precedents.md).
+1. a configured GitHub App; and
+2. a configured GitHub CLI account.
+
+The App is preferred when it has an installation covering the configured
+repository. Installation applicability has three outcomes: `eligible`,
+`ineligible`, and `unknown`. The gateway discovers applicability through an
+App-authenticated GitHub API client, or verifies an explicitly configured
+installation ID against the repository. `@octokit/auth-app` handles App JWT and
+installation-token authentication; it is not treated as the repository-
+discovery policy by itself.
+
+For an eligible installation, the gateway requests a fresh repository-scoped
+installation token for each acquisition and grants only required read
+permissions. Acquisition receives at most 900 seconds or the shorter remaining
+Task deadline. The token must remain valid beyond that sub-budget plus a
+60-second clock-skew margin.
+
+GitHub CLI is an eligibility fallback only when the App is not configured or
+applicability is positively `ineligible`. An `unknown` result caused by
+configuration, authentication, rate-limit, permission, or service failure
+terminates acquisition. The CLI provider invokes:
+
+```text
+gh auth token --hostname github.com --user <configured-account>
+```
+
+with `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and
+`GITHUB_ENTERPRISE_TOKEN` removed from its environment. The configured account
+is part of the acquisition-policy digest.
+
+After an App installation is selected, App configuration, authentication,
+token minting, permission, repository-coverage, rate-limit, or service failure
+terminates acquisition. The gateway never retries the same Task through the
+broader GitHub CLI identity.
+
+Git receives credentials only through an invocation-scoped helper under
+hermetic Git configuration. The gateway excludes system, global, and repository
+credential helpers, Git Credential Manager, askpass, SSH agents, repository-
+controlled secondary fetches, and executable Git configuration. Tokens never
+appear in clone URLs, command arguments, Git configuration, logs, Tasks,
+Artifacts, retained workspaces, profile setup, MCP processes, agent processes,
+or model-invoked tools. The helper and token are destroyed before provider
+execution.
+
+OCI credentials come from a configured auth-file or standard credential helper,
+are scoped to snapshot acquisition, and are removed before publication. Public
+registries require no credential configuration.
+
+### Integrate providers through typed adapters
+
+The initial backend registry contains Codex and Pi, delivered in that order.
+Each adapter implements one behavior-focused contract for availability,
+capabilities, invocation, progress, deterministic permission handling, abort,
+terminal output, optional structured result, usage, native evidence, and
+disposal.
+
+The Codex adapter depends directly on `@openai/codex-sdk`, creates one fresh
+thread per Task, passes cancellation and optional output schema through the SDK,
+and consumes structured events.
+
+The Pi adapter uses strict RPC mode with invocation-owned configuration and a
+restricted policy extension. Repository extensions and unrestricted built-ins
+are not loaded merely because they exist in acquired source.
+
+CLI-backed compatibility adapters may be added later when a client has a stable
+machine protocol. Missing controls are reported honestly as capability gaps.
+The gateway never scrapes a TUI or exposes arbitrary installed executables.
+OMP is Pi-derived and is added only for demonstrated OMP-specific value beyond
+direct Pi.
+
+Provider preparation is adapter-owned and typed. The gateway never executes
+project or user `setup` shell entries as part of acquisition or invocation.
+Validated profile settings, plugins, MCP declarations, and deterministic
+workspace projections are applied through existing typed transforms.
+
+Provider control processes, MCP children, and model-invoked tools receive
+distinct allowlisted environments and filesystem views. The provider control
+process sees only its invocation-private auth channel; each MCP child sees only
+its own resolved secrets; shell and other model-invoked tools see neither
+provider nor MCP credentials. Every view excludes gateway state, operator home,
+App keys, GitHub/OCI stores, acquisition helpers, unrelated adapter auth, and
+the parent environment. A target is not ready unless its adapter can enforce
+these separations. This credential/state isolation is required even though
+general hostile-code sandboxing remains deferred.
 
 ### Persist Task truth, not live provider execution
 
-The gateway durably stores Task identity, idempotency claims, terminal status,
-Artifact metadata, and retained evidence. A provider execution itself is
-ephemeral. The initial service does not checkpoint, reattach, resume, or
-automatically replay an interrupted provider session.
+The gateway durably stores Task identity, the canonical request, idempotency
+claim, selected target and source, effective configuration digest, terminal
+status, Artifact metadata, and retained evidence under the configured state
+directory. A provider session is not a durable recovery checkpoint.
 
-Gateway restart invalidates the active attempt fence and settles each
-nonterminal Task failed once. A live worker that loses its lease aborts the
-provider and cleans its invocation. If the worker process crashes, an external
-supervisor terminates the complete execution boundary and the replacement
-worker reaps or quarantines orphaned invocation roots before readiness.
-Termination and filesystem cleanup are recorded separately and become complete
-only when the responsible boundary proves them; otherwise the terminal record
-says unknown. Durable execution and provider-session restoration require a
-later decision backed by public provider guarantees.
+An identical idempotency replay returns the existing Task. Reusing the key with
+a different canonical request conflicts. Because the initial service has no
+caller identity, the idempotency namespace and Task visibility are gateway-wide.
 
-### Integrate providers directly
+Terminal Task records, Artifacts, events, and invocation claims expire
+atomically after the configured TTL. The retained-count limit never evicts an
+unexpired Task; the gateway rejects new admission until expiry frees capacity.
+State-store integrity or durability failure stops admission and prevents the
+gateway from acknowledging creation or reporting terminal success.
 
-The Codex adapter depends directly on `@openai/codex-sdk`; AllAgents does not
-vendor or depend on Promptfoo's provider. Promptfoo's
-[Codex provider](https://github.com/promptfoo/promptfoo/blob/main/src/providers/openai/codex-sdk.ts)
-and
-[tests](https://github.com/promptfoo/promptfoo/blob/main/test/providers/openai-codex-sdk.test.ts)
-are characterization references for strict option mapping, minimal child
-environment, working-directory validation, `AbortSignal`, structured output,
-event normalization, and cleanup edge cases.
+On gateway restart, interrupted nonterminal Tasks settle failed; provider work
+is not resumed or automatically replayed. A new invocation may start fresh.
 
-AllAgents keeps only the gateway-owned subset: one fresh provider session per
-Task, server-owned profile settings, bounded native evidence, typed failures,
-and worker-proven process cleanup. It does not inherit Promptfoo configuration
-layering, caching, pricing, eval retries, thread pools, or `ProviderResponse`.
+### Make cancellation, evidence, and cleanup explicit
 
-The extension defines `allagents.result-schema/v1` as a closed, bounded JSON
-Schema Draft 2020-12 subset shared by admission, Codex, Pi, and terminal
-validation. It requires an object root, requires every object schema to set
-`additionalProperties: false`, lists every declared property in `required`, and
-uses `null` unions for optional values. It allows only `type`, `properties`,
-`required`, `additionalProperties` with the value `false`, `items`, `enum`,
-`const`, `anyOf`, `$defs`, local `$ref`, `title`, and `description`, and rejects
-remote references, format-dependent validation, and unknown keywords. The
-extension version fixes byte, nesting, property, and enum limits. One shared
-validator checks both the schema and the returned value, and the accepted schema
-digest enters idempotency and provenance. Adapters cannot widen or narrow this
-contract.
+The gateway supervises every acquisition and provider process set. Cancellation
+first invokes the provider's native abort or protocol cancellation, then applies
+bounded forced termination to the complete descendant set.
 
-Codex receives that schema through the SDK's per-turn `outputSchema`; Pi
-implements the same terminal contract with an invocation-scoped terminating
-tool. A successful structured request publishes exactly one Artifact named
-`allagents.structured-result` with one A2A `Part` whose `data` field contains
-the validated result object and whose `mediaType` is `application/json`.
-Artifact metadata contains the result-schema version and digest. The Artifact
-exists only for a valid result. The integrity
-kernel always records `not_requested`, `not_produced`, `valid`, or `invalid`;
-an earlier source, setup, provider, cancellation, or deadline outcome remains
-the primary Task classification when no result could be produced.
+Terminal cleanup evidence is recorded only after the supervisor proves the
+complete invocation process set quiescent through an enforceable, invocation-
+owned containment primitive. If the platform cannot provide that guarantee, the
+gateway fails readiness rather than relying on best-effort process enumeration.
+If termination or proof fails, the Task records termination as unknown or
+failed and the gateway rejects new work. An unmanaged foreground gateway stays
+alive with poisoned readiness and continues reaping while printing the stable
+containment identifier and platform recovery command. It may exit with a
+nonempty set only after a validated external manager accepts cleanup ownership.
 
-### Profile A2A 1.0 instead of inventing an invocation API
+On startup the gateway identifies every interrupted invocation's containment
+set and proves it empty before binding or advertising readiness. It may
+quarantine a stale filesystem root only after process quiescence is proven. A
+reaping or proof failure terminalizes the Task with unknown/failed termination,
+keeps readiness false, and enters the same managed or unmanaged recovery path.
 
-The external contract profiles the Linux Foundation
-[Agent2Agent protocol](https://a2a-protocol.org/latest/specification/). The
-initial profile requires the A2A 1.0 HTTP+JSON binding and retains Agent Card,
-Message, Part, Task, Artifact, status, streaming, cancellation, security, and
-error semantics.
+Terminal evidence distinguishes:
 
-The profile narrows A2A for deterministic coding execution:
+- agent output;
+- optional validated structured result;
+- requested and resolved repository or OCI identities;
+- pre- and post-execution Git state where applicable;
+- produced artifacts;
+- usage and bounded provider-native evidence;
+- cancellation and termination outcomes; and
+- workspace cleanup outcome.
 
-- every accepted execution request creates exactly one addressable A2A Task;
-  direct-Message completion is not supported;
-- the gateway implements all mandatory A2A core operations, including
-  `SendMessage`, `GetTask`, `ListTasks`, and `CancelTask`; when its Agent Card
-  advertises streaming, it also implements `SendStreamingMessage` and
-  `SubscribeToTask`; capability-gated operations retain their standard A2A
-  behavior instead of being replaced by bespoke `/v1/invocations`, `/v1/runs`,
-  or `/v1/trials` resources;
-- terminal Task results use Artifacts for output and evidence rather than
-  relying on transient messages or stream events; and
-- each versioned Agent Card advertises one mandatory AllAgents extension version
-  for source and runtime identity, traces, usage and cost, file changes,
-  produced artifacts, typed failures, cancellation and cleanup outcomes,
-  evidence completeness, and provenance.
+Credentials, raw secret-bearing paths, and unrestricted prompt, output, tool,
+source, or file contents are excluded from operational logs.
 
-Generic A2A conformance is insufficient. The AllAgents extension and its
-conformance fixtures define the coding-execution guarantees every backend must
-satisfy.
+### Profile A2A instead of inventing an invocation API
 
-Breaking extension changes use a new extension URI and a versioned Agent Card
-or service endpoint. During migration, the gateway keeps the old card, endpoint,
-and required extension serviceable while consumers move to the new profile.
-Each card requires exactly one extension version. Clients pin the card they
-support; the gateway never silently falls back across incompatible versions.
-Retiring an old profile is a separate coordinated compatibility decision, not a
-lockstep deployment requirement.
+The gateway uses A2A Agent Cards, Messages, Tasks, Artifacts, operations, errors,
+streaming, and cancellation. The Agent Card declares the AllAgents coding-
+execution extension as required. Every operation that creates, returns, lists,
+subscribes to, or mutates profiled Tasks or Artifacts activates
+`https://allagents.dev/a2a/extensions/coding-execution/v1` through the
+`A2A-Extensions` header. Unsupported calls receive the standard A2A extension-
+support error, and responses echo the activated URI.
 
-The AAIF
-[agentgateway](https://github.com/agentgateway/agentgateway) project may be used
-as traffic-policy infrastructure for A2A, MCP, or model calls. It is not the
-AllAgents execution service or evidence schema. Documentation uses **AllAgents
-execution gateway** where the distinction matters.
+The versioned extension carries the invocation key, execution target, closed
+workspace source, bounded deadline, and optional bounded result schema in its
+own strict `Message.metadata` member without rejecting unrelated A2A metadata.
+Every terminal Task has one fixed-name, versioned integrity Artifact plus zero
+or more produced Artifacts. Breaking extension versions receive versioned cards
+and endpoints rather than silent fallback.
 
-### Keep adjacent protocols at their proper boundaries
+The Agent Card advertises built-in and explicitly exposed launcher-backed
+targets through an allowlisted capability projection. It does not publish local
+paths, commands, arguments, environment selectors, credentials, exact source
+authorization details, or transient worker state.
 
-The [Agent Client Protocol](https://agentclientprotocol.com/) may be used behind
-a backend adapter when a coding agent supports it. Its session, progress, tool,
-permission, terminal, diff, usage, and cancellation semantics are useful
-internally, but its stdio editor-to-agent protocol is not the external gateway
-API.
-
-The [Agent Host Protocol](https://microsoft.github.io/agent-host-protocol/)
-may be used behind a backend adapter when a host exposes it, or beside the
-gateway if AllAgents later adds a collaborative multi-client session surface.
-Its host-authoritative snapshots, actions, reconnection, tools, permissions,
-and changesets solve live session synchronization; they do not replace A2A
-Task identity, idempotency, authorization, terminal evidence, or retention.
-The supporting research and implementation consequences are captured in the
-[AHP decision inputs](../research/agent-host-protocol-decision-inputs.md).
-
-[Model Context Protocol](https://modelcontextprotocol.io/) remains a tool and
-resource protocol inside an execution backend. It does not represent the whole
-coding-agent execution.
-
-[Agent Format](https://agentformat.org/) may provide an optional static agent
-manifest and vocabulary. It does not define the execution transport or prove
-observed execution evidence.
-
-The archived IBM/BeeAI Agent Communication Protocol is superseded by A2A and
-will not be adopted.
-
-### Separate trace propagation, span semantics, and durable evidence
-
-Gateway calls propagate
-[W3C Trace Context](https://www.w3.org/TR/trace-context/) across HTTP and process
-boundaries. AllAgents uses OpenTelemetry and OTLP for metadata-only operational
-telemetry by default. An explicit allowlist limits structured logs and spans to
-non-content operational metadata. Prompts and model outputs, tool arguments and
-results, file bodies and source fragments, and secret-bearing attributes are
-prohibited before export. A bounded filtering and redaction step must run before
-any structured log or span processor so disallowed content cannot enter the
-telemetry pipeline.
-
-AllAgents-managed agent, model, and tool spans use
-[OpenInference](https://arize-ai.github.io/openinference/) semantic conventions
-only for attributes that pass this allowlist. Backend-native attributes must
-pass the same allowlist. Owner correlation is limited to an opaque identifier
-appropriate for the telemetry operators' access; it does not expose caller
-identity or grant access to a Task or Artifact. Telemetry access and retention
-are governed separately from Task and Artifact access and retention.
-Consumer-owned evaluator spans may join the propagated trace without becoming
-gateway-owned.
-
-These standards are complementary:
-
-- W3C Trace Context propagates causal trace identity;
-- OpenTelemetry and OTLP represent and transport live operational telemetry;
-- OpenInference describes AI operations on OpenTelemetry spans; and
-- the AllAgents A2A extension returns durable coding evidence and provenance.
-
-An external trace backend is not the sole durable result. Sampling, redaction,
-transport loss, or retention policy must not erase the terminal facts needed by
-a consumer.
-
-### Trial ATIF only as an optional trajectory Artifact
-
-The Harbor
-[Agent Trajectory Interchange Format](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
-may be returned as an optional, explicitly versioned A2A Artifact when a backend
-can produce or truthfully normalize an ordered agent trajectory. It is not the
-A2A transport, the OpenTelemetry trace, or the AllAgents evidence envelope.
-Backend-native trajectories remain available when conversion would lose
-information.
-
-An ATIF Artifact must declare its exact schema version and correlate its A2A
-Task, OpenTelemetry trace, AllAgents invocation, and backend session identities
-through the versioned AllAgents extension. Reasoning content is excluded by
-default. Tool arguments, observations, and media follow explicit redaction,
-size, and disclosure policy. Truncation or conversion loss is reported rather
-than hidden.
-
-ATIF remains optional until its compatibility policy, specification, tooling,
-and non-Harbor conformance mature enough for a required public-contract
-capability.
-
-Harbor's task package, Job configuration, Job/Trial result models, hosted API,
-artifact manifest, registry formats, and trial-directory layout will not become
-the gateway contract. They remain Harbor-native formats that a future adapter
-may preserve. Harbor's ASP `.asp.json` is a draft v0 sandbox proposal and is not
-adopted by this decision.
-
-### Make execution provenance and cleanup explicit
-
-The gateway and selected worker are collectively responsible for:
-
-1. validating one canonical immutable workspace request and the selected
-   profile's exact source-resource or materializer authorization;
-2. acquiring direct repositories, restoring a digest-pinned OCI snapshot, or
-   running the registered materializer in a phase-scoped boundary;
-3. producing and validating the standard workspace manifest;
-4. transferring the validated staging tree to worker ownership, destroying the
-   acquisition process/mount/credential boundary, and proving it gone;
-5. atomically publishing the host-owned tree on the same filesystem;
-6. running profile-owned setup before the evaluated agent action;
-7. applying permissions and execution isolation;
-8. invoking the agent and propagating cancellation and deadlines;
-9. capturing bounded output, usage, cost, file changes, checks, artifact
-   references, workspace identity, and materializer provenance;
-10. returning terminal status, evidence completeness, and provenance; and
-11. terminating processes and releasing or retaining resources according to
-    the documented lifecycle.
-
-Source transport, materializer image, workspace snapshot, and harness runtime
-are independent identities. A backend may use one immutable runtime image plus
-a separately digest-addressed workspace artifact; the contract does not require
-source code to be baked into the runtime image.
-
-Credentials remain deployment policy. Requests must not embed deployment
-credentials. The gateway authenticates callers, and the selected worker scopes
-source credentials to materialization and model credentials to provider
-execution without returning secret-bearing paths or values. Materialization
-credentials are absent from profile setup, the harness, model-initiated command
-environments, tool output, retained evidence, and the published workspace.
-Provider and worker-control credentials must likewise be absent from
-model-initiated command environments, tool output, retained evidence, and
-repository-visible configuration.
-
-Retries must not multiply non-idempotent agent execution. Every request carries
-a caller-scoped stable invocation key through the AllAgents extension. The
-gateway binds the authenticated caller, invocation key, effective execution
-profile, and request digest to the created Task for a documented retry-retention
-window. An identical replay returns the original Task. Reusing the key with a
-different request is rejected. Backend retry suppression remains an additional
-safeguard; it does not replace gateway deduplication.
+ACP, app-server, SDK, and RPC protocols remain backend implementation details.
+W3C Trace Context may propagate correlation through HTTP and child-process
+boundaries. OpenTelemetry and provider-native evidence remain optional,
+separate layers; neither replaces durable Task evidence.
 
 ### Keep evaluation commands out of scope
 
 This decision does not add `allagents eval`, benchmark authoring, assertions,
-scoring, datasets, or experiment scheduling. A community evaluation wrapper and
-an enterprise AI Evals wrapper may share this execution service in the future,
-but their product and ownership model requires a separate decision.
+scoring, datasets, repetitions, experiment scheduling, or automatic execution
+retry. Consumers own those concerns.
 
 ## Consequences
 
-- AllAgents becomes a service boundary in addition to a local CLI, but retains a
-  narrow coding-execution responsibility.
-- Consumers depend on A2A 1.0 plus a versioned AllAgents extension, not
-  AllAgents TypeScript modules, CLI behavior, or workspace internals.
-- Codex and Pi are the initial execution backends behind one conformance suite;
-  Codex lands first and OpenCode is deferred.
-- Durable Task and evidence records do not imply durable provider execution;
-  interrupted attempts fail rather than resume or replay.
-- The result-schema subset, structured-result Artifact, and non-success result
-  states are public compatibility surface rather than adapter conventions.
-- Reliable worker-crash cleanup requires an external execution supervisor and a
-  pre-readiness orphan-root reaper in addition to leases.
-- Gateway and execution workers scale and fail independently.
-- The gateway can remain lightweight; physical isolation and resource policy
-  belong to the selected execution backend.
-- Custom acquisition remains available without making caller-supplied code part
-  of the trust boundary: operators register digest-pinned materializers and
-  profiles decide which callers may select them.
-- Direct Git, OCI snapshots, and registered materializers converge on one
-  validated workspace manifest and provenance contract.
-- GitHub source credentials are selected by trusted host/profile policy rather
-  than caller input. GitHub App is preferred when applicable; GitHub CLI is a
-  local-only eligibility fallback and never masks an App authentication or
-  authorization failure.
-- Deployments that enable external materializers must operate their image,
-  schema, credential, network, resource, and cache policies as worker
-  configuration.
-- A2A supplies discovery and lifecycle semantics. AllAgents supplies the
-  coding-specific evidence contract.
-- W3C Trace Context, OpenTelemetry/OTLP, OpenInference, optional ATIF, and the
-  terminal evidence extension remain distinct layers rather than competing
-  universal formats.
-- Implementations must preserve bounded native evidence whenever normalization
-  would lose information.
+- Developers can start one endpoint with `allagents gateway serve` and use
+  loopback, `0.0.0.0`, a specific interface, Tailscale, or firewall policy.
+- There is no application authentication, per-caller authorization, tenant
+  isolation, `gateway.yaml`, `worker.yaml`, remote worker protocol, or required
+  Kubernetes deployment in the initial product.
+- Project and user workspace files remain the sole declaration authority for
+  source identities and exposed profile launchers.
+- Network reachability grants access to every exposed target and retained Task.
+  Operators must treat network policy as the authorization boundary.
+- GitHub App credentials support private repositories without forcing every
+  developer to use one identity; GitHub CLI remains a local eligibility
+  fallback when no App installation applies.
+- Direct repositories and digest-pinned OCI snapshots converge on one validated
+  workspace manifest and evidence contract.
+- The gateway process remains a meaningful API and lifecycle boundary, but not
+  a hostile-code sandbox. Strong multi-tenant isolation remains future work.
+- Codex and Pi share one conformance suite while retaining bounded native
+  evidence and honest capability differences.
+- A future deployment configuration becomes justified only when the product
+  needs multiple worker routes, tenants, credential policies, custom
+  materializers, centralized storage, or other operator-selected variants.
 
 ## Rejected alternatives
 
-### Invent a bespoke invocation, run, or trial API
+### Define a second profile registry in `gateway.yaml`
 
-Rejected because A2A already defines remote-agent discovery, Task lifecycle,
-streaming, artifacts, cancellation, errors, and web security. Coding-specific
-evidence belongs in a versioned A2A extension rather than a parallel transport.
+Rejected because global profiles and launcher identities already belong to
+`~/.allagents/workspace.yaml`. A second profile map would drift in client,
+model, plugin, MCP, and launcher configuration.
 
-### Run agents in the gateway Pod
+### Require application authentication for every deployment
 
-Rejected because it couples control-plane availability and credentials to
-mutable repository execution, prevents independent scaling, and mistakes a
-service boundary for per-invocation isolation.
+Rejected for the initial trusted-network product. It would add caller identity,
+tenant scoping, token lifecycle, and ingress configuration before the expected
+users need those boundaries. Tailscale ACLs and firewalls are the initial access
+control.
 
-### Use OpenInference instead of W3C Trace Context
+### Restrict the listener to loopback
 
-Rejected as a category error. W3C Trace Context propagates trace identity;
-OpenInference supplies AI semantic conventions on OpenTelemetry spans. The
-gateway uses both.
+Rejected because developers need to expose the endpoint through Tailscale,
+containers, VMs, and private networks. Explicit `0.0.0.0` binding is supported;
+the operator owns the surrounding network policy.
 
-### Use ATIF as the complete gateway result
+### Execute generated launcher files as the remote protocol
 
-Rejected because ATIF represents an ordered agent trajectory, not remote Task
-lifecycle, repository provenance, workspace changes, produced artifacts,
-cleanup, authorization, or evidence completeness.
+Rejected because local launchers intentionally preserve cwd and append local
+caller arguments. Remote requests must resolve a typed profile adapter and can
+never control commands or argv.
 
-### Adopt Harbor's Job or Trial API
+### Let callers provide repository URLs or OCI repositories
 
-Rejected because Harbor's formats own benchmark orchestration, verification,
-and persisted runner state. The AllAgents gateway executes one coding-agent
-request and does not become an evaluation harness.
+Rejected because workspace configuration already defines trusted source
+identities and destinations. Requests may select declared names and immutable
+revisions or digests, not introduce new origins.
 
-### Let callers provide repository-acquisition code
+### Fall back from a selected GitHub App after runtime failure
 
-Rejected because a caller-selected image, Dockerfile, Compose file, or shell
-script would turn request parsing into privileged code execution and would make
-credential, network, provenance, and cache policy unreviewable. Callers may
-select only source modes and materializer IDs explicitly registered and allowed
-by the effective execution profile.
+Rejected because it would silently change identity and authorization scope after
+selection. GitHub CLI fallback applies only when the App is ineligible.
 
-### Replace A2A with the Agent Host Protocol
+### Use mutable OCI tags
 
-Rejected because AHP explicitly targets synchronization of independent clients
-around host-owned sessions, not agent-to-agent Task execution. Its reconnect
-and changeset models do not supply caller-scoped idempotency, immutable source
-handling, cleanup, complete terminal evidence, or bounded Task retention.
+Rejected because the same request could produce different workspaces. Snapshot
+selection requires an OCI manifest digest and expected workspace-manifest
+digest.
 
-### Vendor Promptfoo's Codex provider
-
-Rejected because that provider includes Promptfoo-specific configuration
-layering, caching, pricing, tracing, retry metadata, thread pooling, and result
-mapping. AllAgents needs a smaller worker adapter against the Codex SDK and can
-reuse Promptfoo's observable behavior as characterization evidence without
-copying its implementation.
-
-### Treat provider session persistence as durable execution
+### Treat provider sessions as durable execution
 
 Rejected because a resumable provider thread does not prove workspace,
-process, cancellation, evidence, or cleanup continuity across gateway or worker
-failure. The initial service durably records failure and cleanup truth but does
-not resume interrupted work.
+process, cancellation, evidence, or cleanup continuity across gateway restart.
+
+### Invent a bespoke invocation API
+
+Rejected because A2A already supplies discovery, Task lifecycle, streaming,
+Artifacts, cancellation, and errors. Coding-specific evidence belongs in a
+versioned extension.
+
+### Adopt an evaluator's Job or Trial API
+
+Rejected because benchmark orchestration, verification, and persisted evaluation
+state remain consumer concerns. The gateway executes one coding-agent Task.
 
 ## Reconsider when
 
-Revisit this decision if A2A standardizes the required coding-execution evidence
-without an extension, if a stable cross-vendor execution protocol subsumes the
-same lifecycle and provenance guarantees, or if operational evidence shows that
-the gateway and backend boundary prevents required cancellation, isolation, or
-result integrity.
+Revisit this decision when any of these become requirements:
+
+- callers outside one trusted network must share the endpoint;
+- per-caller Task privacy, authorization, or audit identity is required;
+- multiple gateway replicas need transactional shared storage;
+- execution must route among remote worker pools or hostile-code sandboxes;
+- custom materializers are needed beyond direct Git and OCI snapshots;
+- multiple GitHub hosts, Apps, CLI accounts, or ordered credential policies need
+  declarative configuration;
+- A2A standardizes the required coding-execution evidence without an extension;
+  or
+- a stable cross-vendor automation protocol subsumes the backend adapter seam.

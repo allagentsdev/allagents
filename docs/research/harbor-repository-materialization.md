@@ -13,10 +13,10 @@ repository the agent edits is therefore benchmark- and task-owned: it may be bak
 an image, cloned by a Dockerfile, copied as task content, or otherwise prepared by the
 task author.
 
-For AllAgents, repository and workspace provenance must remain explicit in the public
-execution request and terminal evidence. Custom acquisition should be an
-operator-registered, digest-pinned materializer behind the worker protocol, not an
-arbitrary caller-supplied image or setup script.
+For AllAgents, repository and workspace provenance must remain explicit in the
+public execution request and terminal evidence. The initial gateway supports
+only declared Git repositories and named digest-pinned OCI workspace snapshots;
+custom materializers remain deferred.
 
 ## What Harbor fetches
 
@@ -34,9 +34,11 @@ This is efficient for a large repository containing many independent Harbor task
 is not a mechanism for assembling several application repositories into one agent
 workspace.
 
-Harbor also accepts an omitted commit or a mutable ref and resolves it to a commit.
-That is convenient for an interactive local benchmark CLI, but it is weaker than the
-AllAgents gateway requirement that an accepted request already name immutable source.
+Harbor also accepts an omitted commit or a mutable ref and resolves it to a
+commit. AllAgents permits a caller to override a declared repository with a
+branch, tag, or commit for developer convenience, but resolves and records the
+full commit before provider execution. Reproducibility-sensitive callers use a
+full commit; OCI snapshots remain digest-pinned at admission.
 
 ### Task packages from the package registry
 
@@ -77,10 +79,10 @@ sets that as `WORKDIR`; Harbor itself never clones that application repository.
 
 1. **Separate descriptor acquisition from execution.** Resolve and validate immutable
    inputs before starting the coding-agent runtime.
-2. **Use content-addressed caches.** Key reusable workspace snapshots by a digest of
-   normalized source identities, materializer version/digest, setup policy, current
-   authorization scope, and revocation epoch rather than a mutable name. Reauthorize
-   before lookup and make an old epoch ineligible after revocation.
+2. **Use content-addressed snapshot caches.** Key reusable OCI workspace
+   snapshots by their immutable OCI and workspace-manifest digests. Direct Git
+   mode resolves revisions independently and records the resulting commits.
+   Reauthorize every remote acquisition.
 3. **Avoid downloading irrelevant content.** For Git-backed descriptor catalogs,
    Harbor's tree-only discovery and sparse checkout are sound optimizations. For an
    application repository, use partial/shallow acquisition only when it preserves the
@@ -93,43 +95,40 @@ sets that as `WORKDIR`; Harbor itself never clones that application repository.
 
 ### Adapt
 
-Keep a first-class workspace manifest instead of hiding source inside an environment
-image. Each materialized repository should retain at least:
+Keep a first-class workspace manifest instead of hiding source inside an
+environment image. Each materialized repository or snapshot should retain at
+least:
 
-- canonical source URL or snapshot identity;
-- requested and resolved immutable commit or OCI digest;
+- canonical source URL or configured snapshot identity;
+- requested revision and resolved commit, or OCI manifest digest;
 - destination path and optional source subdirectory;
-- materializer identity and version/digest;
-- resulting tree/content identity;
-- cache hit/miss and completeness facts.
+- acquisition implementation identity;
+- resulting tree/content identity; and
+- completeness and verification-versus-attestation facts.
 
-Use three explicit source modes:
+Use exactly two initial source modes:
 
-1. **Direct Git repositories** for the normal case, each with an exact commit and
-   collision-free destination.
-2. **OCI workspace snapshots** for large, preassembled workspaces, referenced by digest
-   rather than tag and accompanied by a signed/validated workspace manifest.
-3. **Operator-registered materializers** for JFrog, unusual monorepos, generated source,
-   or organization-specific setup. A request selects a configured materializer ID,
-   pins the expected workspace-manifest digest, and supplies validated,
-   resource-authorized structured inputs. The operator configuration pins the builder
-   image by digest, the worker derives the non-secret definition digest, credentials are
-   scoped only to materialization, and the builder must produce the standard workspace
-   manifest before the agent starts. The builder is operator-trusted deployment code;
-   deployments that cannot grant that trust need a broker or stronger acquisition
-   service.
+1. **Direct declared Git repositories** for the normal case. A request selects
+   configured repository names and may override only their revisions. The
+   gateway resolves and records full commits and enforces collision-free
+   destinations.
+2. **Named OCI workspace snapshots** for large, preassembled workspaces. The
+   project workspace declares the repository; the request supplies immutable
+   OCI and workspace-manifest digests.
 
-This retains Harbor's useful task-owned flexibility without allowing a caller to choose
-an arbitrary executable image or shell script inside the trusted worker.
+Both modes produce the same standard workspace manifest. Neither mode falls
+through to the other after admission.
 
 ### Do not copy
 
-- Mutable Git refs, `HEAD`, image tags, or package `latest` as accepted execution
-  identities.
-- Harbor's broad Git transport set (`http`, `ssh`, and `git` as well as HTTPS) at a
-  remote service boundary. The gateway should keep canonical credential-free HTTPS,
-  destination-policy revalidation, disabled redirects/helpers/filters/hooks/submodules,
-  and exact commit verification.
+- Unresolved mutable Git refs as terminal execution identities. Branch and tag
+  overrides are valid only when the gateway resolves and records a full commit
+  before provider execution.
+- Mutable OCI tags or package `latest` as accepted snapshot identities.
+- Harbor's broad Git transport set (`http`, `ssh`, and `git` as well as HTTPS) at
+  a service boundary. The gateway keeps canonical credential-free HTTPS,
+  destination-policy revalidation, disabled redirects/helpers/filters/hooks/
+  submodules, and full-commit verification.
 - A non-fatal Git LFS miss. If declared workspace content cannot be materialized,
   preparation must fail before provider execution.
 - Hashing a prebuilt image reference string as environment identity. Resolve and pin
@@ -143,25 +142,31 @@ an arbitrary executable image or shell script inside the trusted worker.
 
 ## Recommended boundary
 
-The worker should execute a dedicated materialization phase before any harness starts:
+The gateway supervisor executes a dedicated acquisition phase before any
+provider starts:
 
-1. Validate the normalized workspace request, exact source-resource authorization,
-   configured materializer, and current authorization scope before any cache lookup.
-2. Resolve phase-scoped source credentials without exposing them to setup, the model,
-   or later evidence.
-3. Populate a worker-owned staging directory on the final publication filesystem or
-   pull and unpack a digest-pinned workspace snapshot there.
-4. Verify repository commits, paths, limits, content, the expected manifest digest,
-   and the standard workspace manifest; distinguish worker-verified identities from
-   materializer-attested claims.
-5. Stop the acquisition process, revoke credentials, remove its mounts and runner
-   resource, and retain only the validated host-owned staging tree.
+1. Validate the normalized source request and its declared repository or
+   snapshot identities before any network access.
+2. Resolve phase-scoped source credentials without exposing them to typed
+   provider preparation, the model, or later evidence collection.
+3. Populate a gateway-owned staging directory on the final publication
+   filesystem, or pull and unpack a digest-pinned workspace snapshot there.
+4. Verify repository commits, paths, limits, content, the expected manifest
+   digest, and the standard workspace manifest; distinguish gateway-verified
+   identities from snapshot-attested claims.
+5. Stop acquisition processes, revoke credentials, remove helpers and mounts,
+   and retain only the validated credential-free staging tree.
 6. Atomically rename that tree into the final workspace, record provenance, run
-   operator-owned setup, record the post-setup baseline, and only then launch the
-   harness-specific worker runtime.
+   adapter-owned typed preparation, record the baseline, and only then launch
+   the provider runtime. Project or user `setup` shell commands are not run.
 
-The practical conclusion is narrow: Harbor is strong evidence for content-addressed
-input bundles and environment-provider indirection. It is not evidence for making
+Operator-registered materializers, custom builders, and third source variants
+are deferred until direct Git and OCI snapshots cannot satisfy a demonstrated
+deployment need. Adding one requires a new decision for trust, configuration,
+credential, provenance, and isolation boundaries.
+
+The practical conclusion is narrow: Harbor is strong evidence for content-
+addressed input bundles and staged publication. It is not evidence for making
 repository acquisition opaque or task-defined in the AllAgents public contract.
 
 ## Primary sources

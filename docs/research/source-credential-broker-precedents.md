@@ -2,29 +2,29 @@
 
 ## Decision
 
-The execution gateway does **not** need a mandatory standalone Git credential
-broker for trusted local use. The settled local provider is an explicit,
-account-pinned `gh auth token --hostname <host> --user <account>` helper invoked
-only when no App installation mapping applies. Its environment removes
-`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and
-`GITHUB_ENTERPRISE_TOKEN`, and its token is exposed only to the one-shot
-acquisition process. Git credential helpers and Git Credential Manager (GCM)
-establish the process-boundary precedent, but arbitrary configured helpers are
-not part of the selected implementation. A local helper is a broker in the
-security sense; it is not a separately deployed network service.
+The execution gateway does **not** need a standalone Git credential broker for
+the initial trusted-network deployment. It supports two in-process trusted
+providers for `github.com`: a configured GitHub App and a configured,
+account-pinned `gh auth token --hostname github.com --user <account>` fallback.
 
-Remote or multi-tenant workers use one initial path: an authoritative
-gateway/control-plane lease controller and trusted central token minter deliver
-a fresh GitHub token over an authenticated, single-use, non-durable lease. The
-GitHub bearer token is scoped only to the repository, read-only contents
-permission, and GitHub expiry. Worker identity, attempt, lease epoch, command
-revision, fence, operation, and delivery expiry are properties of the lease and
-channel, not the token. Workers never inherit a person's credential helper,
-credential store, SSH agent, or the App private key. A versioned central
-snapshot-delivery protocol is deferred; it is not an alternative initial
-readiness path. The minter may live inside the trusted control plane unless
-private-key isolation, audit, scaling, or blast-radius requirements justify a
-separate service process.
+The App is preferred whenever an App-authenticated repository-coverage check
+proves an installation eligible. `gh` is considered only when the App is absent
+or coverage is positively ineligible; unknown discovery, authentication,
+permission, rate-limit, or service failures fail closed. Ambient `GH_TOKEN`,
+`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` are removed
+from the CLI helper environment.
+
+Either token is exposed only to the one-shot acquisition process through an
+invocation-scoped Git credential helper. The helper, token, and acquisition
+process are gone before adapter preparation or provider execution. Git
+credential helpers and Git Credential Manager establish the process-boundary
+precedent, but arbitrary configured helpers are not part of the selected
+implementation. A local helper is a broker in the security sense; it is not a
+separately deployed network service.
+
+Central token minters, authenticated delivery leases, remote workers, and
+multi-tenant credential policy are deferred until ADR 0002's deployment
+boundary is reconsidered.
 
 ## Precedents
 
@@ -65,12 +65,13 @@ local process/socket boundary, not a remotely reachable credential service.
 **Relevance.** Git helpers and GCM prove that a local credential provider can
 be an on-demand process rather than a network service. AllAgents does not,
 however, inherit or invoke an arbitrary configured helper chain. Its closed
-provider registry permits only an explicit GitHub CLI provider pinned to a
-configured non-secret account in a trusted-local profile, and only when no
-configured GitHub App installation mapping applies. The helper invokes
-`gh auth token --hostname <host> --user <account>` without ambient GitHub token
-variables. Its output reaches only the one-shot acquisition child; setup and
-the coding harness inherit neither helper configuration nor the token.
+provider registry permits only the selected GitHub App token or an explicit
+GitHub CLI provider pinned to a configured non-secret account when App
+eligibility is positively absent. The CLI invokes
+`gh auth token --hostname github.com --user <account>` without ambient GitHub
+token variables. Its output reaches only the one-shot acquisition child;
+adapter preparation and the coding runtime inherit neither helper configuration
+nor token.
 
 ### SSH agent forwarding
 
@@ -136,11 +137,11 @@ long-term credential store, and its post-job deletion is defense in depth rather
 than the token's revocation mechanism.
 
 **Relevance.** This is the closest production precedent for AllAgents: keep the
-App private key at a trusted central minter, issue one fresh least-privilege
+App private key in the trusted gateway process, issue one fresh least-privilege
 token for a particular repository acquisition, expose it only during that
 phase, and remove its local material afterward. GitHub enforces repository,
-read-only contents permission, and expiry; AllAgents separately enforces
-attempt and operation bindings through its authenticated delivery lease.
+read-only contents permission, and expiry; the gateway separately binds the
+acquisition to the retained Task and effective configuration digest.
 
 ### BuildKit secret and SSH mounts
 
@@ -179,82 +180,39 @@ credentials and does not eliminate the need for a central issuer in production.
 
 ## Recommendation for AllAgents
 
-### Local mode
+### Initial trusted-network gateway
 
-1. Resolve `github.com` through the built-in GitHub backend and require explicit
-   host/API mappings for GitHub Enterprise Server hostnames.
-2. Prefer a configured GitHub App installation that trusted operator policy
-   maps to the authorized repository. Do not use `@octokit/auth-app` to discover
-   installations. If no installation mapping applies, a trusted-local profile
-   may invoke the explicit
-   `gh auth token --hostname <host> --user <account>` provider pinned to a
-   configured non-secret account. Include that account in the entitlement and
-   effective-profile digests, remove `GH_TOKEN`, `GITHUB_TOKEN`,
-   `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` from the helper
-   environment, and fail if the configured account cannot be resolved. Do not
-   inherit an arbitrary Git helper/GCM chain or forward an SSH agent.
-3. Treat provider order as eligibility, not retry. Once the App provider is
-   selected, configuration, authentication, minting, authorization, rate-limit,
-   or service failure terminates acquisition without falling through to the
-   user identity.
-4. Give the resolved token only to the dedicated acquisition subprocess through
-   a temporary helper channel, remove that channel, terminate the child, and
-   publish only a credential-free verified workspace before setup or the coding
-   harness starts.
-5. Do **not** require or auto-start an AllAgents network credential service for
-   trusted local execution. The explicit account-pinned provider subprocess is
-   sufficient.
+1. Resolve only canonical `github.com` HTTPS origins in the initial delivery.
+2. Determine App applicability through an App-authenticated GitHub API client,
+   or verify an explicitly configured installation ID against the repository.
+   Model the result as `eligible`, `ineligible`, or `unknown`.
+3. For `eligible`, use focused
+   [`@octokit/auth-app`](https://github.com/octokit/auth-app.js) authentication
+   and mint a fresh token narrowed to the repository and read-only contents.
+   Require remaining lifetime greater than the gateway's at-most-900-second
+   acquisition sub-budget plus a 60-second clock-skew margin.
+4. For a missing App or proven `ineligible`, a trusted local deployment may use
+   the configured `gh auth token --hostname github.com --user <account>`
+   provider. Include the account in the acquisition-policy digest and strip
+   ambient token variables. An `unknown` App result never falls through.
+5. Treat provider order as eligibility, not retry. Once App is selected,
+   configuration, authentication, minting, authorization, repository coverage,
+   rate-limit, or service failure terminates acquisition.
+6. Give the resolved token only to the dedicated acquisition subprocess through
+   a temporary helper channel. Remove the channel and terminate the process
+   before atomically publishing the credential-free verified workspace.
+7. Do not require or auto-start a network credential service. Keep App issuer
+   material and GitHub/OCI auth stores inaccessible to the adapter process and
+   model-invoked tools.
 
-### Production remote or multi-tenant workers
+### Deferred remote or multi-tenant deployment
 
-1. Put GitHub App issuer material in a trusted central token-minter component.
-   Trusted operator configuration, not auth-app discovery, maps the repository
-   to an installation ID. For every cache-miss acquisition, use focused
-   [`@octokit/auth-app`](https://github.com/octokit/auth-app.js) with
-   `refresh: true` to bypass its installation-token cache and mint a fresh token
-   narrowed to that repository and read-only contents permission. Require
-   remaining lifetime strictly greater than the acquisition deadline plus
-   clock-skew margin, expire the delivery lease no later than the token, and
-   fail readiness when the configured acquisition ceiling can exceed a fresh
-   token's safe lifetime.
-2. Make the gateway/control-plane credential-lease controller authoritative.
-   The authenticated worker requests only by active attempt and fence. From
-   durable dispatch and policy state, the controller derives the
-   effective-profile digest, selected provider, host/API-mapping digest,
-   installation ID, repository, operation, worker route and identity, lease
-   epoch, command revision, and expiry. Immediately before issuance it rechecks
-   active command revision, tombstone, fence, and lease state.
-3. Deliver one single-use, non-durable grant/response over the authenticated
-   acquisition channel. A separate minter must agree with the controller's
-   configuration digest and consume the grant atomically. Reject replay,
-   substituted fields or providers, stale command state, and configuration
-   disagreement. The bearer token itself remains scoped only by GitHub to the
-   repository, read-only contents permission, and expiry; worker, attempt,
-   fence, and operation bindings belong to the lease.
-4. Advance a GitHub App entitlement generation from authenticated lifecycle
-   webhooks plus bounded reconciliation whenever an installation is uninstalled,
-   suspended, or changes repository selection. Unknown or stale installation
-   state fails cache authorization. Mint only on a cache miss. On a miss, record
-   the acquiring provider in operator provenance; on a hit, record `cache_hit`,
-   the cached original acquisition-provider metadata, and current policy
-   selection/entitlement binding separately.
-5. Publish deterministic coarse failures: `source_auth_unavailable` /
-   `no_eligible_provider` (not retryable); `source_auth_denied` /
-   `installation_repository_denied` (not retryable);
-   `source_auth_failed` with `app_configuration_invalid`,
-   `app_authentication_failed`, or `app_mint_failed` (not retryable),
-   `provider_rate_limited` or `provider_unavailable` (retryable), or
-   `trusted_local_cli_failed` (not retryable). Keep provider, installation, and
-   account identifiers in operator-only provenance.
-6. Never forward an operator's general SSH agent or reuse their desktop GCM
-   store in a remote worker. Those capabilities represent the person, not the
-   individual execution request.
-7. Keep minting logically central even if it initially lives inside the trusted
-   gateway process. Split the minter into a standalone network service when
-   remote trust boundaries, private-key isolation, audit, scaling, or
-   blast-radius controls require it. A versioned central snapshot-delivery
-   protocol may be designed later, but is not part of the initial architecture.
+A future deployment may require a central token minter, authenticated single-use
+delivery leases, entitlement generations, revocation reconciliation, worker
+identity, fencing, and a snapshot-delivery protocol. Those mechanisms are not
+part of the selected single-process architecture. They require a separate
+decision when remote workers or tenant isolation become product requirements.
 
-The resulting rule is: **local reuse may be subprocess-mediated; production
-issuance must be centrally policy-mediated.** A process boundary is required in
-both cases, but a standalone credential service is not.
+The resulting initial rule is: **credential reuse is acquisition-subprocess-
+mediated and ends before provider execution.** Remote or multi-tenant issuance
+policy remains deferred; a standalone credential service is not required now.

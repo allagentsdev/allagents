@@ -165,12 +165,14 @@ a `sha256:` workspace-manifest digest. The gateway constructs the full OCI
 reference server-side. Callers cannot supply a registry host, repository name,
 mutable tag, extraction destination, credential, or external-layer policy.
 
-Both modes produce the same versioned workspace manifest. It records requested
-and resolved repository identities, destinations, acquisition kind, relevant
-OCI manifest and layer digests, the workspace-manifest digest, completeness,
-and whether each fact was independently verified or snapshot-attested. A commit
-listed inside an OCI snapshot is not described as independently verified unless
-the gateway separately verifies it against its Git remote.
+Both modes produce the same versioned, wire-visible workspace manifest. It
+records declared logical repository names, requested revisions, resolved
+commits, acquisition kind, relevant OCI manifest and layer digests, the
+workspace-manifest digest, completeness, and whether each fact was independently
+verified or snapshot-attested. It omits Git URLs, OCI repository origins, and
+destination paths. A commit listed inside an OCI snapshot is not described as
+independently verified unless the gateway separately verifies it against its
+Git remote.
 
 Acquisition occurs in a gateway-owned staging directory. The gateway validates
 paths, collisions, file types, symlinks, layer and file counts, individual and
@@ -178,6 +180,76 @@ total sizes, digests, and the workspace manifest before atomically publishing
 the invocation workspace. Absolute paths, traversal, device files, sockets,
 escaping links, foreign or external OCI layers, and cross-origin credential
 forwarding are rejected.
+
+### Consume the gateway from Promptfoo through an AI Evals provider
+
+Rejecting caller-supplied origins does not prevent AI Evals from selecting a
+workspace in Promptfoo YAML. The two files have different ownership:
+
+- the AllAgents project workspace is the operator-controlled catalog that maps
+  repository and snapshot names to Git URLs, destinations, and OCI repositories;
+- the Promptfoo configuration selects a target and source mode. Repository mode
+  materializes the complete configured repository set and may override
+  revisions by declared repository name. Snapshot mode selects one declared
+  snapshot name and supplies immutable digests.
+
+AI Evals owns a Promptfoo
+[custom JavaScript/TypeScript provider](https://www.promptfoo.dev/docs/providers/custom-api/).
+It implements `ApiProvider`: its constructor receives `ProviderOptions`, retains
+`options.id`, validates `options.config`, and exposes `id()`.
+`callApi(prompt, context, options)` reads bounded test variables from
+`context.vars` and cancellation from `options?.abortSignal`. The provider
+translates one `callApi` into one A2A Task: it creates an invocation key, puts
+the prompt in the single `TextPart`, puts the target and closed source union in
+the required extension metadata, waits or streams to terminal, and returns
+output, normalized token usage, and logical provenance in Promptfoo's
+`ProviderResponse`.
+
+For example, AI Evals can define two provider instances without sending either
+origin over the wire:
+
+```yaml
+providers:
+  - id: file://./providers/allagents-a2a.ts
+    label: codex-direct
+    config:
+      endpoint: http://allagents-gateway.tailnet:4732
+      target: codex
+      source:
+        kind: repositories
+        revisions:
+          allagents: 0123456789abcdef0123456789abcdef01234567
+
+  - id: file://./providers/allagents-a2a.ts
+    label: codex-evaluation-snapshot
+    config:
+      endpoint: http://allagents-gateway.tailnet:4732
+      target: codex
+      source:
+        kind: workspaceSnapshot
+        snapshot: evaluation
+        digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        workspaceManifestDigest: sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+```
+
+The first provider materializes the complete configured repository set and uses
+the `allagents` key only to override that repository's revision. The second
+provider's `evaluation` key resolves to the declared
+`ghcr.io/entityprocess/allagents-workspaces` repository.
+
+Static provider config fixes the source kind and logical names. The only
+per-test object is `context.vars.allagentsSource`: repository mode accepts
+revision overrides only for statically listed names and only as full lowercase
+40-hex commits; snapshot mode accepts only replacement OCI and workspace-
+manifest `sha256:` digests. Missing leaves retain static values. A URL,
+destination, mutable revision, credential, command, unknown member, or changed
+source kind/name fails before submission. After Task acceptance, the provider's
+bounded deadline or `options?.abortSignal` sends `CancelTask`. It maps gateway
+input, output, cached-input, and total token counts to Promptfoo's `prompt`,
+`completion`, `cached`, and `total` fields respectively; other usage and Task/
+Artifact evidence stays in metadata without origins. The provider belongs in AI
+Evals. AllAgents exposes the A2A contract and consumer documentation without
+taking a runtime dependency on Promptfoo.
 
 ### Resolve GitHub credentials with App-first eligibility fallback
 
@@ -315,7 +387,8 @@ Terminal evidence distinguishes:
 
 - agent output;
 - optional validated structured result;
-- requested and resolved repository or OCI identities;
+- logical repository names, requested revisions, resolved commits, or snapshot
+  names and digests, never source origins or destinations;
 - pre- and post-execution Git state where applicable;
 - produced artifacts;
 - usage and bounded provider-native evidence;
@@ -367,6 +440,10 @@ retry. Consumers own those concerns.
   Kubernetes deployment in the initial product.
 - Project and user workspace files remain the sole declaration authority for
   source identities and exposed profile launchers.
+- AI Evals can express the configured repository set with named revision
+  overrides, or select a prebuilt image through a snapshot handle, in Promptfoo
+  YAML. Its custom provider translates that closed source choice to A2A and
+  keeps raw origins under AllAgents operator control.
 - Network reachability grants access to every exposed target and retained Task.
   Operators must treat network policy as the authorization boundary.
 - GitHub App credentials support private repositories without forcing every
@@ -412,8 +489,9 @@ never control commands or argv.
 ### Let callers provide repository URLs or OCI repositories
 
 Rejected because workspace configuration already defines trusted source
-identities and destinations. Requests may select declared names and immutable
-revisions or digests, not introduce new origins.
+identities and destinations. Repository requests materialize the configured set
+and may override revisions by declared name; snapshot requests select a declared
+name and immutable digests. Neither variant introduces a new origin.
 
 ### Fall back from a selected GitHub App after runtime failure
 

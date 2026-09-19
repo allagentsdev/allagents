@@ -40,8 +40,8 @@ entry point. It is separate from the interactive CLI command lifecycle but may
 run as a single local service process that supervises acquisition and provider
 child processes.
 
-The gateway implements A2A 1.0 HTTP+JSON plus a required versioned AllAgents
-coding-execution extension. It owns:
+The gateway implements A2A protocol version `1.0` over the `HTTP+JSON` binding
+plus a required versioned AllAgents coding-execution extension. It owns:
 
 - stable Task and idempotency identity;
 - execution-target selection;
@@ -59,18 +59,31 @@ or durable evaluation Run ledger.
 The initial gateway has no application-level authentication or per-caller
 authorization. It may bind to loopback, a specific interface, or `0.0.0.0`.
 Loopback remains the default when no listen address is supplied, but an explicit
-`0.0.0.0` binding is valid and requires no unsafe-mode flag.
+`0.0.0.0` binding is valid and requires no unsafe-mode flag. The Agent Card
+advertises a separate absolute interface URL; non-loopback listeners require
+that value explicitly because a wildcard bind address is not routable.
+Production interfaces use HTTPS; direct HTTP is limited to loopback development.
 
-Every host able to reach the listener is equally trusted. Any reachable caller
-may invoke every exposed target, list and retrieve retained Tasks and Artifacts,
-and request cancellation. Task lookup and idempotency are deployment-wide, not
+Every external host able to reach the listener is equally trusted. Any reachable
+caller may invoke every available target, including built-in and gateway-enabled
+profile targets; list or retrieve retained Tasks and their Artifacts; and
+request cancellation. Task lookup and idempotency are deployment-wide, not
 scoped to a caller identity. Operators must use Tailscale ACLs, host firewalls,
 container networking, or equivalent network controls when the listener is not
 loopback-only.
 
-TLS termination, OIDC, static bearer tokens, per-tenant ownership, and
-multi-tenant information-hiding are deferred. They require a separate decision
-when the service is exposed outside one trusted network boundary.
+Invocation descendants are not network peers. Provider, MCP, and model-tool
+processes run in role-specific network namespaces that cannot route to host
+loopback, any gateway bind or advertised address, ingress proxies, or operator
+management networks. Provider and MCP egress is default-deny except for
+destinations compiled from adapter and MCP configuration; model tools receive no
+network unless an explicit adapter policy grants the same constrained egress.
+
+Gateway-managed TLS termination, OIDC, static bearer tokens, per-tenant
+ownership, and multi-tenant information-hiding are deferred. Production clients
+reach the advertised HTTPS interface through operator-managed termination or an
+encrypted private overlay. Application authentication requires a separate
+decision when the service leaves one trusted network boundary.
 
 ### Use existing workspace files as the configuration authority
 
@@ -82,8 +95,8 @@ canonical for repository identities, remote sources, destination paths,
 default revisions, workspace files, plugins, and named OCI snapshot sources.
 
 The user `~/.allagents/workspace.yaml` remains canonical for global profiles and
-launcher-backed execution targets. A launcher-bearing profile client is exposed
-only when it explicitly declares:
+launcher-backed execution targets. A launcher-bearing profile client is gateway-
+enabled only when it explicitly declares:
 
 ```yaml
 profiles:
@@ -92,15 +105,15 @@ profiles:
       - name: codex
         launcher: codex-review
         gateway:
-          expose: true
+          enabled: true
 ```
 
 The public target ID is the launcher basename. Launcher names are already
 portable and collision-checked across every user profile, while one profile may
 contain several clients and therefore several launchers. Internally the target
 resolves to exactly one `(profile, client)` pair. The gateway reserves built-in
-target IDs, initially `codex` and `pi`; an exposed launcher whose portable
-collision key matches a built-in ID is invalid.
+target IDs, initially `codex` and `pi`; a gateway-enabled launcher whose
+portable collision key matches a built-in ID is invalid.
 
 The built-in `codex` and `pi` targets remain available when their adapters are
 ready. Explicit launcher-backed targets add configured variants such as
@@ -116,21 +129,25 @@ its typed adapter and invokes the provider's supported automation surface.
 
 Process-level options use exact flags and environment variables for:
 
-- listener and workspace selection;
+- listener, advertised-interface URL, and workspace selection;
 - a project-specific state-directory override;
 - terminal Task retention and bounded Artifact/event storage;
 - GitHub App identifiers and private-key file references;
 - the configured GitHub CLI account;
-- an OCI credential file or fixed credential-helper executable; and
+- a strict Docker-auth file or fixed Docker credential-helper executable; and
 - Codex and Pi auth-file handles.
 
 By default the state root is a deterministic child of
 `~/.allagents/gateway/` keyed by the canonical project-workspace identity. The
-store persists and verifies that identity and holds an exclusive lock for the
-process lifetime. The root is current-user owned, private, symlink- and hard-
-link-resistant, and disjoint from project, profile, and invocation roots.
-
-Secret values never belong in either workspace file.
+packaged Rust helper owns a private SQLite store in WAL/full-synchronization mode
+through a descriptor-rooted VFS. Every database, WAL, SHM, journal, and temporary
+file open uses `openat2` beneath/no-symlink resolution and rejects hard links.
+The store persists claims, Tasks, one execution lease, internal outcome intent,
+events, bounded Artifact bytes, containment identity, and expiry transactions.
+It verifies workspace identity and holds an exclusive process-lifetime lock.
+The root is current-user owned, private, link-resistant, and disjoint from
+project, profile, and invocation roots. The listener exposes metadata-only
+`/healthz` and `/readyz`; readiness is false whenever admission is unsafe.
 
 ### Support direct repositories and OCI workspace snapshots
 
@@ -152,18 +169,43 @@ tags may be accepted for developer convenience, but the gateway resolves and
 records the full commit object ID before provider execution. Reproducibility-
 sensitive callers should supply full commit IDs.
 
-For OCI snapshots, the project workspace declares the registry repository:
+For OCI snapshots, the project workspace declares the registry repository and
+any exact cross-origin layer-blob redirect hosts:
 
 ```yaml
 workspaceSnapshots:
   evaluation:
     repository: ghcr.io/entityprocess/allagents-workspaces
+    layerRedirectHosts:
+      - pkg-containers.githubusercontent.com
 ```
 
-The request supplies the name `evaluation`, a `sha256:` OCI manifest digest, and
-a `sha256:` workspace-manifest digest. The gateway constructs the full OCI
-reference server-side. Callers cannot supply a registry host, repository name,
-mutable tag, extraction destination, credential, or external-layer policy.
+The request supplies the name `evaluation`, a `sha256:` OCI image-manifest
+digest, and a `sha256:` workspace-manifest digest. The gateway constructs the
+full OCI reference server-side. Callers cannot supply a registry host,
+repository name, mutable tag, extraction destination, credential, platform
+selector, redirect host, or external-layer policy.
+
+V1 accepts only an OCI Image Manifest directly at the requested digest; image
+indexes, descriptor URLs or embedded data, non-distributable layers, and
+unknown media types are rejected. Its config is the RFC 8785 canonical
+`application/vnd.allagents.workspace-manifest.v1+json` object and must match the
+requested workspace-manifest digest. The gateway verifies the manifest body,
+config, and every distributable tar/gzip/zstd layer descriptor before decoding,
+then applies layers in manifest order with OCI whiteout and opaque-whiteout
+semantics.
+
+Registry metadata remains same-origin. A cross-origin redirect is allowed only
+for a layer-blob `GET` or `HEAD` to an exact operator-declared
+`layerRedirectHosts` entry; an absent allowlist rejects it. Every bounded HTTPS
+hop strips authorization, cookies, and client credentials, rejects URL
+credentials, resolves and validates every address at connection time, and
+rejects mixed answers, rebinding, downgrade, and unapproved destinations.
+Loopback, link-local, private, reserved, or other non-global addresses are
+permitted only when their exact host is the source's operator-declared
+repository host or layer-redirect host. Token, manifest, and config redirects
+remain same-origin. Descriptor size and digest verification remains mandatory
+after redirects.
 
 Both modes produce the same versioned, wire-visible workspace manifest. It
 records declared logical repository names, requested revisions, resolved
@@ -176,10 +218,10 @@ Git remote.
 
 Acquisition occurs in a gateway-owned staging directory. The gateway validates
 paths, collisions, file types, symlinks, layer and file counts, individual and
-total sizes, digests, and the workspace manifest before atomically publishing
-the invocation workspace. Absolute paths, traversal, device files, sockets,
-escaping links, foreign or external OCI layers, and cross-origin credential
-forwarding are rejected.
+total compressed and expanded sizes, digests, and the workspace manifest before
+atomically publishing the invocation workspace. Absolute paths, traversal,
+device files, sockets, escaping links, foreign or external OCI layers, and
+unapproved cross-origin access are rejected.
 
 ### Consume the gateway from Promptfoo through an AI Evals provider
 
@@ -195,25 +237,40 @@ workspace in Promptfoo YAML. The two files have different ownership:
 
 AI Evals owns a Promptfoo
 [custom JavaScript/TypeScript provider](https://www.promptfoo.dev/docs/providers/custom-api/).
-It implements `ApiProvider`: its constructor receives `ProviderOptions`, retains
-`options.id`, validates `options.config`, and exposes `id()`.
-`callApi(prompt, context, options)` reads bounded test variables from
-`context.vars` and cancellation from `options?.abortSignal`. The provider
-translates one `callApi` into one A2A Task: it creates an invocation key, puts
-the prompt in the single `TextPart`, puts the target and closed source union in
-the required extension metadata, waits or streams to terminal, and returns
-output, normalized token usage, and logical provenance in Promptfoo's
-`ProviderResponse`.
+It implements `ApiProvider`: its constructor receives `ProviderOptions`,
+requires and retains a nonempty `options.id`, validates `options.config`, and
+exposes `id()`.
+`callApi(prompt, context?, options?)` reads bounded test variables from
+`context?.vars` when present and cancellation from `options?.abortSignal`. The
+provider translates one `callApi` into one A2A Task: it creates and retains a
+high-entropy invocation key, sends one Message whose sole Part has `text` set,
+declares the extension in `Message.extensions`, puts the target and closed source
+union in the matching metadata member, and calls `SendMessage` with
+`returnImmediately: true`. It captures the Task ID and follows terminal state
+through `SubscribeToTask`, with `GetTask` and bounded resubscription for races or
+disconnects. It returns output, normalized token usage, stable failure metadata,
+and logical provenance in Promptfoo's `ProviderResponse`.
 
 For example, AI Evals can define two provider instances without sending either
 origin over the wire:
 
 ```yaml
+prompts:
+  - file://./prompts/coding-task.txt
+
+sharing: false
+evaluateOptions:
+  maxConcurrency: 1
+  cache: false
+commandLineOptions:
+  write: false
+  share: false
+
 providers:
   - id: file://./providers/allagents-a2a.ts
     label: codex-direct
     config:
-      endpoint: http://allagents-gateway.tailnet:4732
+      endpoint: https://allagents-gateway.example.internal
       target: codex
       source:
         kind: repositories
@@ -223,7 +280,7 @@ providers:
   - id: file://./providers/allagents-a2a.ts
     label: codex-evaluation-snapshot
     config:
-      endpoint: http://allagents-gateway.tailnet:4732
+      endpoint: https://allagents-gateway.example.internal
       target: codex
       source:
         kind: workspaceSnapshot
@@ -235,21 +292,32 @@ providers:
 The first provider materializes the complete configured repository set and uses
 the `allagents` key only to override that repository's revision. The second
 provider's `evaluation` key resolves to the declared
-`ghcr.io/entityprocess/allagents-workspaces` repository.
+`ghcr.io/entityprocess/allagents-workspaces` repository. The gateway enforces
+one active invocation transactionally. Promptfoo keeps `maxConcurrency: 1` to
+avoid predictably creating failed capacity Tasks; other trusted callers need no
+external queue for correctness. The no-cache/no-write/no-share values are secure
+defaults for confidential prompts and outputs; consumers may enable persistence
+or sharing only after applying their own retention, access, destination, and
+redaction policy.
 
 Static provider config fixes the source kind and logical names. The only
-per-test object is `context.vars.allagentsSource`: repository mode accepts
+per-test object is `context?.vars?.allagentsSource`: repository mode accepts
 revision overrides only for statically listed names and only as full lowercase
 40-hex commits; snapshot mode accepts only replacement OCI and workspace-
-manifest `sha256:` digests. Missing leaves retain static values. A URL,
-destination, mutable revision, credential, command, unknown member, or changed
-source kind/name fails before submission. After Task acceptance, the provider's
-bounded deadline or `options?.abortSignal` sends `CancelTask`. It maps gateway
-input, output, cached-input, and total token counts to Promptfoo's `prompt`,
-`completion`, `cached`, and `total` fields respectively; other usage and Task/
-Artifact evidence stays in metadata without origins. The provider belongs in AI
-Evals. AllAgents exposes the A2A contract and consumer documentation without
-taking a runtime dependency on Promptfoo.
+manifest `sha256:` digests. Missing context or leaves retain static values. A
+URL, destination, mutable revision, credential, command, unknown member, or
+changed source kind/name fails before submission. After Task acceptance, the
+provider's bounded deadline or `options?.abortSignal` sends one `CancelTask`
+using a fresh cleanup signal rather than the already aborted request signal.
+It maps gateway input, output, cached-input, and total token counts to
+Promptfoo's `prompt`, `completion`, `cached`, and `total` fields respectively.
+Safe stable failure
+code, retryability, accepted Task ID, other usage, and logical Task/Artifact
+evidence stay in metadata without origins. Opaque prompts, terminal output,
+structured results, native evidence, and produced-Artifact payloads remain
+unredacted sensitive data. The provider belongs in AI Evals. AllAgents exposes
+the A2A contract and consumer documentation without taking a runtime dependency
+on Promptfoo.
 
 ### Resolve GitHub credentials with App-first eligibility fallback
 
@@ -261,17 +329,20 @@ For `github.com`, the gateway supports two trusted providers:
 
 The App is preferred when it has an installation covering the configured
 repository. Installation applicability has three outcomes: `eligible`,
-`ineligible`, and `unknown`. The gateway discovers applicability through an
-App-authenticated GitHub API client, or verifies an explicitly configured
-installation ID against the repository. `@octokit/auth-app` handles App JWT and
-installation-token authentication; it is not treated as the repository-
-discovery policy by itself.
+`ineligible`, and `unknown`. An App-authenticated lookup that returns coverage
+is eligible. A 404 is ineligible only after the configured GitHub CLI identity
+independently proves that the repository exists; an uncorroborated 404 or any
+authentication, permission, rate-limit, timeout, or service ambiguity is
+unknown. An explicitly configured installation ID must positively verify
+repository coverage.
 
-For an eligible installation, the gateway requests a fresh repository-scoped
-installation token for each acquisition and grants only required read
-permissions. Acquisition receives at most 900 seconds or the shorter remaining
-Task deadline. The token must remain valid beyond that sub-budget plus a
-60-second clock-skew margin.
+For an eligible installation, the gateway bypasses the SDK token cache and
+requests a fresh repository-scoped, read-only token for each acquisition. It
+validates repository selection, permissions, creation time, and expiry.
+Acquisition receives at most 900 seconds or the shorter remaining Task deadline,
+and the token must remain valid beyond that sub-budget plus a 60-second clock-
+skew margin. The gateway revokes the token after acquisition; unconfirmed
+revocation fails before provider execution.
 
 GitHub CLI is an eligibility fallback only when the App is not configured or
 applicability is positively `ineligible`. An `unknown` result caused by
@@ -287,9 +358,9 @@ with `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and
 is part of the acquisition-policy digest.
 
 After an App installation is selected, App configuration, authentication,
-token minting, permission, repository-coverage, rate-limit, or service failure
-terminates acquisition. The gateway never retries the same Task through the
-broader GitHub CLI identity.
+token minting or validation, permission, repository coverage, revocation,
+rate-limit, or service failure terminates acquisition. The gateway never retries
+the same Task through the broader GitHub CLI identity.
 
 Git receives credentials only through an invocation-scoped helper under
 hermetic Git configuration. The gateway excludes system, global, and repository
@@ -300,9 +371,10 @@ Artifacts, retained workspaces, profile setup, MCP processes, agent processes,
 or model-invoked tools. The helper and token are destroyed before provider
 execution.
 
-OCI credentials come from a configured auth-file or standard credential helper,
-are scoped to snapshot acquisition, and are removed before publication. Public
-registries require no credential configuration.
+OCI credentials come from either a strict Docker-auth subset that cannot name
+executables or a fixed Docker credential helper using its standard `get`
+protocol. They are scoped to snapshot acquisition and removed before
+publication. Public registries require no credential configuration.
 
 ### Integrate providers through typed adapters
 
@@ -312,9 +384,11 @@ capabilities, invocation, progress, deterministic permission handling, abort,
 terminal output, optional structured result, usage, native evidence, and
 disposal.
 
-The Codex adapter depends directly on `@openai/codex-sdk`, creates one fresh
-thread per Task, passes cancellation and optional output schema through the SDK,
-and consumes structured events.
+The Codex adapter depends directly on pinned `@openai/codex-sdk`, creates one
+fresh thread per Task, passes cancellation, and consumes structured events. It
+uses native `outputSchema` only for schemas supported by the pinned Structured
+Outputs contract; other valid public schemas use explicit JSON guidance and the
+same gateway-side validator used by every backend.
 
 The Pi adapter uses strict RPC mode with invocation-owned configuration and a
 restricted policy extension. Repository extensions and unrestricted built-ins
@@ -332,56 +406,88 @@ Validated profile settings, plugins, MCP declarations, and deterministic
 workspace projections are applied through existing typed transforms.
 
 Provider control processes, MCP children, and model-invoked tools receive
-distinct allowlisted environments and filesystem views. The provider control
-process sees only its invocation-private auth channel; each MCP child sees only
-its own resolved secrets; shell and other model-invoked tools see neither
-provider nor MCP credentials. Every view excludes gateway state, operator home,
-App keys, GitHub/OCI stores, acquisition helpers, unrelated adapter auth, and
-the parent environment. A target is not ready unless its adapter can enforce
-these separations. This credential/state isolation is required even though
-general hostile-code sandboxing remains deferred.
+distinct allowlisted filesystem, environment, descriptor, secret, and network
+views. The provider control process sees only its invocation-private auth
+channel; each MCP child sees only its own resolved secrets; shell and other
+model-invoked tools see neither provider nor MCP credentials. Every view excludes
+gateway state, operator home, App keys, GitHub/OCI stores, acquisition helpers,
+unrelated adapter auth, the parent environment, gateway endpoints, host
+loopback, and management networks.
+
+The pinned backend must expose a non-bypassable synchronous hook that delegates
+every MCP and model-tool spawn to the Rust helper. The helper enters the role's
+mount and network namespaces, replaces the environment, closes every
+non-allowlisted descriptor, and only then executes untrusted code. Codex or Pi
+is unavailable when its pinned surface can bypass that hook. This enforced
+credential/state/network boundary is required even though general hostile-code
+sandboxing remains deferred.
 
 ### Persist Task truth, not live provider execution
 
 The gateway durably stores Task identity, the canonical request, idempotency
-claim, selected target and source, effective configuration digest, terminal
-status, Artifact metadata, and retained evidence under the configured state
-directory. A provider session is not a durable recovery checkpoint.
+claim, selected target and source, effective configuration digest, one execution
+lease, internal outcome intent, Artifact bytes, retained evidence, and
+containment identity under the configured state directory. The official A2A
+HTTP+JSON transport wraps an AllAgents-owned request handler; typed transactions
+execute in the Rust helper's descriptor-rooted SQLite VFS. One transaction
+arbitrates `createOrReplay`, UUIDv7 Task creation, execution-lease acquisition,
+and containment binding; another atomically settles terminal status, result or
+failure, evidence, Artifacts, cleanup, and lease release. A provider session is
+not a durable recovery checkpoint.
 
-An identical idempotency replay returns the existing Task. Reusing the key with
-a different canonical request conflicts. Because the initial service has no
-caller identity, the idempotency namespace and Task visibility are gateway-wide.
+At most one Task holds the execution lease from acquisition through final
+evidence collection. A second otherwise-valid request settles failed with
+`execution_capacity_unavailable`. Its transient empty containment set is
+destroyed after settlement without releasing the start gate or launching a
+helper child. An identical idempotency replay returns the existing Task. Reusing
+the key with a different canonical request conflicts. Clients generate at least
+128 bits of randomness
+once per logical invocation and reuse the same key plus request after an
+ambiguous transport failure. Because the initial service has no caller identity,
+the idempotency namespace and Task visibility are gateway-wide.
 
-Terminal Task records, Artifacts, events, and invocation claims expire
-atomically after the configured TTL. The retained-count limit never evicts an
+Terminal Task records, Artifacts, events, and invocation claims expire in one
+transaction after the configured TTL. The retained-count limit never evicts an
 unexpired Task; the gateway rejects new admission until expiry frees capacity.
-State-store integrity or durability failure stops admission and prevents the
-gateway from acknowledging creation or reporting terminal success.
+State-store integrity, VFS, helper protocol, or durability failure stops
+admission and prevents the gateway from acknowledging creation or reporting
+terminal success.
 
-On gateway restart, interrupted nonterminal Tasks settle failed; provider work
-is not resumed or automatically replayed. A new invocation may start fresh.
+On gateway restart, interrupted nonterminal Tasks settle failed only after
+containment reconciliation; provider work is not resumed or automatically
+replayed. A new invocation may start fresh.
 
 ### Make cancellation, evidence, and cleanup explicit
 
-The gateway supervises every acquisition and provider process set. Cancellation
-first invokes the provider's native abort or protocol cancellation, then applies
-bounded forced termination to the complete descendant set.
+The gateway supervises every acquisition and provider process set. The helper
+allocates a stable empty containment set behind a start gate. The Task,
+execution lease, and containment identifier commit durably before the helper may
+release that gate or execute any child; a failed commit destroys the empty set.
 
-Terminal cleanup evidence is recorded only after the supervisor proves the
-complete invocation process set quiescent through an enforceable, invocation-
-owned containment primitive. If the platform cannot provide that guarantee, the
-gateway fails readiness rather than relying on best-effort process enumeration.
-If termination or proof fails, the Task records termination as unknown or
-failed and the gateway rejects new work. An unmanaged foreground gateway stays
-alive with poisoned readiness and continues reaping while printing the stable
-containment identifier and platform recovery command. It may exit with a
-nonempty set only after a validated external manager accepts cleanup ownership.
+One durable compare-and-set arbitrates provider terminal outcome, caller
+cancellation, deadline, and shutdown as an internal outcome intent while the
+externally visible Task remains nonterminal. The winning intent owns the stable
+result or failure code and drives one idempotent abort and quiescence path.
+Cancellation first invokes the provider's native abort or protocol cancellation,
+then applies bounded forced termination to the complete descendant set.
 
-On startup the gateway identifies every interrupted invocation's containment
-set and proves it empty before binding or advertising readiness. It may
-quarantine a stale filesystem root only after process quiescence is proven. A
-reaping or proof failure terminalizes the Task with unknown/failed termination,
-keeps readiness false, and enters the same managed or unmanaged recovery path.
+Live provider events are bounded while execution runs. Filesystem, Git, and
+produced-Artifact evidence is read only after the supervisor proves the complete
+invocation process set quiescent through its invocation-owned containment.
+Only then does one transaction atomically publish terminal status, the integrity
+Artifact, bounded evidence, result or failure, produced Artifacts, termination,
+cleanup, and lease release. If quiescence cannot be proven, that transaction
+settles `execution_quiescence_unknown` without verified filesystem evidence.
+The gateway rejects new work and stays alive with poisoned readiness while
+continuing to reap; later recovery changes only internal recovery/readiness
+state, never the settled Task.
+
+On startup the helper enumerates the entire project-owned containment namespace,
+including unknown identifiers, and proves every set empty before binding,
+releasing a retained lease, quarantining stale roots, or advertising readiness.
+It prints the stable containment identifier and platform recovery command for
+any nonempty set. An unsupported platform fails before binding rather than
+relying on process enumeration.
 
 Terminal evidence distinguishes:
 
@@ -401,24 +507,33 @@ source, or file contents are excluded from operational logs.
 ### Profile A2A instead of inventing an invocation API
 
 The gateway uses A2A Agent Cards, Messages, Tasks, Artifacts, operations, errors,
-streaming, and cancellation. The Agent Card declares the AllAgents coding-
-execution extension as required. Every operation that creates, returns, lists,
-subscribes to, or mutates profiled Tasks or Artifacts activates
-`https://allagents.dev/a2a/extensions/coding-execution/v1` through the
-`A2A-Extensions` header. Unsupported calls receive the standard A2A extension-
-support error, and responses echo the activated URI.
+streaming, and cancellation. Its Agent Card advertises one interface with
+`protocolBinding: "HTTP+JSON"`, `protocolVersion: "1.0"`, and
+`capabilities.streaming: true`. The coding-
+execution `AgentExtension` is required and has strict
+`params: { targets: TargetId[] }`, populated from ready built-in and explicitly
+gateway-enabled launcher-backed targets. It does not publish paths, commands,
+arguments, environment selectors, credentials, exact source authorization
+details, or transient worker state.
 
-The versioned extension carries the invocation key, execution target, closed
+Every A2A HTTP+JSON request carries `A2A-Version: 1.0`. Every operation that
+creates, returns, lists, subscribes to, or mutates profiled Tasks or Artifacts
+also activates `https://allagents.dev/a2a/extensions/coding-execution/v1`
+through `A2A-Extensions`. Missing activation receives
+`ExtensionSupportRequiredError`; an unsupported protocol version receives
+`VersionNotSupportedError`. Unsuccessful HTTP responses use the A2A
+`google.rpc.Status` JSON envelope with typed `google.rpc.ErrorInfo` details;
+validation also uses `google.rpc.BadRequest`, never JSON-RPC error carriers.
+
+The published versioned extension specification defines Agent Card params,
+activation, request/idempotency/replay, errors, and terminal Task/Artifact
+schemas. Its request carries the invocation key, execution target, closed
 workspace source, bounded deadline, and optional bounded result schema in its
 own strict `Message.metadata` member without rejecting unrelated A2A metadata.
-Every terminal Task has one fixed-name, versioned integrity Artifact plus zero
-or more produced Artifacts. Breaking extension versions receive versioned cards
-and endpoints rather than silent fallback.
-
-The Agent Card advertises built-in and explicitly exposed launcher-backed
-targets through an allowlisted capability projection. It does not publish local
-paths, commands, arguments, environment selectors, credentials, exact source
-authorization details, or transient worker state.
+The request Message lists the URI in `Message.extensions`. Every terminal Task
+has one fixed-name, versioned integrity Artifact whose `Artifact.extensions`
+lists the URI, plus zero or more produced Artifacts. Breaking extension versions
+receive versioned cards and endpoints rather than silent fallback.
 
 ACP, app-server, SDK, and RPC protocols remain backend implementation details.
 W3C Trace Context may propagate correlation through HTTP and child-process
@@ -439,22 +554,33 @@ retry. Consumers own those concerns.
   isolation, `gateway.yaml`, `worker.yaml`, remote worker protocol, or required
   Kubernetes deployment in the initial product.
 - Project and user workspace files remain the sole declaration authority for
-  source identities and exposed profile launchers.
+  source identities and gateway-enabled profile launchers.
 - AI Evals can express the configured repository set with named revision
   overrides, or select a prebuilt image through a snapshot handle, in Promptfoo
   YAML. Its custom provider translates that closed source choice to A2A and
   keeps raw origins under AllAgents operator control.
-- Network reachability grants access to every exposed target and retained Task.
-  Operators must treat network policy as the authorization boundary.
+- External network reachability grants access to every available target,
+  including built-in and gateway-enabled profile targets, plus every retained
+  Task. Operators treat network policy as the authorization boundary; invocation
+  descendants are isolated from that boundary and host-management networks.
+- One durable execution lease enforces one active invocation independent of
+  consumer concurrency settings.
 - GitHub App credentials support private repositories without forcing every
-  developer to use one identity; GitHub CLI remains a local eligibility
-  fallback when no App installation applies.
+  developer to use one identity; GitHub CLI remains a local eligibility fallback
+  only when no App installation applies.
 - Direct repositories and digest-pinned OCI snapshots converge on one validated
-  workspace manifest and evidence contract.
-- The gateway process remains a meaningful API and lifecycle boundary, but not
-  a hostile-code sandbox. Strong multi-tenant isolation remains future work.
+  workspace manifest and evidence contract. OCI metadata remains same-origin;
+  only layer blobs may redirect to exact operator-approved hosts.
+- Gateway v1 execution is supported on Linux x64/arm64 with the packaged state/
+  security helper, descriptor-rooted SQLite VFS, cgroup v2, mount/network
+  namespaces, nftables, pidfds, and safe-file operations. Matching helper
+  packages publish and verify before the root package; unsupported hosts or
+  missing capabilities fail before binding rather than degrading containment.
+- The gateway process remains a meaningful API and lifecycle boundary, but not a
+  hostile-code sandbox. Strong multi-tenant isolation remains future work.
 - Codex and Pi share one conformance suite while retaining bounded native
-  evidence and honest capability differences.
+  evidence and honest capability differences. A backend is unavailable unless
+  its pinned surface can delegate every MCP/tool spawn through the helper.
 - A future deployment configuration becomes justified only when the product
   needs multiple worker routes, tenants, credential policies, custom
   materializers, centralized storage, or other operator-selected variants.

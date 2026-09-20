@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createThirdPartyNotices } from '../../../scripts/build-package';
-import { assertPackageSizeBudgets } from '../../../scripts/check-package-size';
+import {
+  assertPackageSizeBudgets,
+  parsePackument,
+} from '../../../scripts/check-package-size';
 
 const metafile = {
   inputs: {},
@@ -129,6 +132,21 @@ describe('packed artifact contracts', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test('parses npm pack JSON after prepare-script output', () => {
+    const artifact = {
+      filename: 'allagents-1.16.0.tgz',
+      size: 123,
+      unpackedSize: 456,
+      files: [{ path: 'dist/index.js' }],
+    };
+
+    expect(
+      parsePackument(
+        `Built self-contained production bundle.\n${JSON.stringify([artifact])}`,
+      ),
+    ).toEqual(artifact);
   });
 
   test('reports every exceeded package-size budget with actual and limit bytes', () => {

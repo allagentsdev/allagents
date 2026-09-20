@@ -61,8 +61,10 @@ export function assertPackageSizeBudgets(
   }
 }
 
-function parsePackument(stdout: string): Packument {
-  const [artifact] = JSON.parse(stdout) as Packument[];
+export function parsePackument(stdout: string): Packument {
+  // npm 10 can prepend prepare-script output even with --ignore-scripts.
+  const jsonStart = stdout.lastIndexOf('\n[') + 1;
+  const [artifact] = JSON.parse(stdout.slice(jsonStart)) as Packument[];
   if (!artifact) throw new Error('npm pack did not report a package artifact');
   return artifact;
 }

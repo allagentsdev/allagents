@@ -1,5 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type {
+  CompatibilityCallToolResult,
+  Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from '../models/workspace-config.js';
 import {
   connectMcpHttpClient,
@@ -14,6 +18,17 @@ import {
 const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 const DEFAULT_HTTP_CLEANUP_TIMEOUT_MS = 2_000;
 const DEFAULT_STDIO_EXIT_TIMEOUT_MS = 1_000;
+const MAX_MCP_TOOL_PAGES = 100;
+const MAX_MCP_TOOLS = 10_000;
+const MAX_MCP_TOOL_METADATA_BYTES = 16 * 1024 * 1024;
+const MAX_MCP_SCHEMA_DEPTH = 64;
+const MAX_MCP_SCHEMA_NODES = 100_000;
+
+export type McpToolCatalog = readonly Tool[];
+
+export interface McpRuntimeRequestOptions {
+  signal?: AbortSignal;
+}
 
 export type ManagedMcpOperationOutcome<T> =
   | { status: 'fulfilled'; value: T }
@@ -74,6 +89,132 @@ export class McpRuntimeCancelledError extends Error {
     super('MCP operation was cancelled');
     this.name = 'McpRuntimeCancelledError';
   }
+}
+function assertBoundedMcpSchema(schema: object, toolName: string): void {
+  const stack: { value: unknown; depth: number }[] = [
+    { value: schema, depth: 1 },
+  ];
+  const visited = new Set<object>();
+  let nodes = 0;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) break;
+    nodes += 1;
+    if (nodes > MAX_MCP_SCHEMA_NODES) {
+      throw new Error(
+        `MCP tool '${toolName}' schema exceeds ${MAX_MCP_SCHEMA_NODES} nodes`,
+      );
+    }
+    if (current.depth > MAX_MCP_SCHEMA_DEPTH) {
+      throw new Error(
+        `MCP tool '${toolName}' schema exceeds depth ${MAX_MCP_SCHEMA_DEPTH}`,
+      );
+    }
+    if (typeof current.value !== 'object' || current.value === null) continue;
+    if (visited.has(current.value)) {
+      throw new Error(`MCP tool '${toolName}' schema contains a cycle`);
+    }
+    visited.add(current.value);
+    const children = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push({ value: children[index], depth: current.depth + 1 });
+    }
+  }
+}
+
+export async function listAllMcpTools(
+  client: Client,
+  options: McpRuntimeRequestOptions = {},
+): Promise<McpToolCatalog> {
+  const tools: Tool[] = [];
+  const names = new Set<string>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  let pages = 0;
+  let metadataBytes = 2;
+  let hasMore = true;
+
+  while (hasMore) {
+    if (pages >= MAX_MCP_TOOL_PAGES) {
+      throw new Error(
+        `MCP tool catalog exceeds ${MAX_MCP_TOOL_PAGES} pages`,
+      );
+    }
+    const page = await client.listTools(
+      cursor === undefined ? undefined : { cursor },
+      options,
+    );
+    pages += 1;
+    for (const tool of page.tools) {
+      if (names.has(tool.name)) {
+        throw new Error(`MCP tool catalog contains duplicate tool '${tool.name}'`);
+      }
+      if (tools.length >= MAX_MCP_TOOLS) {
+        throw new Error(
+          `MCP tool catalog exceeds ${MAX_MCP_TOOLS} tools`,
+        );
+      }
+      assertBoundedMcpSchema(tool.inputSchema, tool.name);
+      if (tool.outputSchema) assertBoundedMcpSchema(tool.outputSchema, tool.name);
+      const serialized = JSON.stringify(tool);
+      const candidateBytes =
+        metadataBytes +
+        (tools.length === 0 ? 0 : 1) +
+        Buffer.byteLength(serialized, 'utf8');
+      if (candidateBytes > MAX_MCP_TOOL_METADATA_BYTES) {
+        throw new Error(
+          `MCP tool catalog exceeds ${MAX_MCP_TOOL_METADATA_BYTES} serialized bytes`,
+        );
+      }
+      metadataBytes = candidateBytes;
+      names.add(tool.name);
+      tools.push(tool);
+    }
+
+    const nextCursor = page.nextCursor;
+    if (nextCursor === undefined) {
+      hasMore = false;
+      continue;
+    }
+    if (cursors.has(nextCursor)) {
+      throw new Error(`MCP tool catalog repeated cursor '${nextCursor}'`);
+    }
+    cursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  return tools;
+}
+
+export function findMcpTool(
+  catalog: McpToolCatalog,
+  toolName: string,
+): Tool {
+  const tool = catalog.find((candidate) => candidate.name === toolName);
+  if (!tool) throw new Error(`MCP tool '${toolName}' was not found`);
+  return tool;
+}
+
+export async function callMcpTool(
+  client: Client,
+  catalog: McpToolCatalog,
+  toolName: string,
+  args: Record<string, unknown>,
+  options: McpRuntimeRequestOptions = {},
+): Promise<CompatibilityCallToolResult> {
+  const tool = findMcpTool(catalog, toolName);
+  if (tool.execution?.taskSupport === 'required') {
+    throw new Error(
+      `MCP tool '${toolName}' requires task-based execution and cannot be called synchronously`,
+    );
+  }
+  return client.callTool(
+    { name: tool.name, arguments: args },
+    undefined,
+    options,
+  );
 }
 
 class ObservedStdioClientTransport extends StdioClientTransport {

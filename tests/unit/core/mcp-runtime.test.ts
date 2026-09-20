@@ -10,7 +10,10 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createMcpCredentialGuard } from '../../../src/core/mcp-http-client.js';
 import {
+  callMcpTool,
   connectManagedMcpServer,
+  findMcpTool,
+  listAllMcpTools,
   resolveConfiguredMcpServer,
   runManagedMcpSession,
   type ManagedMcpSession,
@@ -339,5 +342,229 @@ describe('finite managed lifecycle', () => {
     );
     expect(deleteRequests).toBe(1);
     expect(deleteClosed).toBe(true);
+  });
+});
+
+describe('bounded MCP tool catalog', () => {
+  test('aggregates empty and non-empty pages in order and forwards opaque cursors', async () => {
+    const cursors: (string | undefined)[] = [];
+    const pages = [
+      { tools: [], nextCursor: ' opaque cursor ' },
+      {
+        tools: [
+          { name: 'first', inputSchema: { type: 'object' as const } },
+          { name: 'Second', inputSchema: { type: 'object' as const } },
+        ],
+        nextCursor: '',
+      },
+      {
+        tools: [{ name: 'last', inputSchema: { type: 'object' as const } }],
+      },
+    ];
+    const client = {
+      async listTools(params?: { cursor?: string }) {
+        cursors.push(params?.cursor);
+        const page = pages[cursors.length - 1];
+        if (!page) throw new Error('unexpected page');
+        return page;
+      },
+    } as unknown as Client;
+
+    const catalog = await listAllMcpTools(client);
+
+    expect(catalog.map(({ name }) => name)).toEqual(['first', 'Second', 'last']);
+    expect(cursors).toEqual([undefined, ' opaque cursor ', '']);
+    expect(findMcpTool(catalog, 'Second').name).toBe('Second');
+    expect(() => findMcpTool(catalog, 'second')).toThrow(
+      "MCP tool 'second' was not found",
+    );
+  });
+
+  test('rejects repeated cursors and duplicate names across pages', async () => {
+    let repeatedPage = 0;
+    const repeatedCursorClient = {
+      async listTools() {
+        repeatedPage += 1;
+        return { tools: [], nextCursor: 'same' };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(repeatedCursorClient)).rejects.toThrow(
+      "repeated cursor 'same'",
+    );
+    expect(repeatedPage).toBe(2);
+
+    let duplicatePage = 0;
+    const duplicateClient = {
+      async listTools() {
+        duplicatePage += 1;
+        return {
+          tools: [{ name: 'duplicate', inputSchema: { type: 'object' as const } }],
+          ...(duplicatePage === 1 ? { nextCursor: 'next' } : {}),
+        };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(duplicateClient)).rejects.toThrow(
+      "duplicate tool 'duplicate'",
+    );
+  });
+
+  test('accepts exactly 100 pages and rejects a page beyond the limit', async () => {
+    let exactCalls = 0;
+    const exactClient = {
+      async listTools() {
+        exactCalls += 1;
+        return {
+          tools: [],
+          ...(exactCalls < 100 ? { nextCursor: String(exactCalls) } : {}),
+        };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(exactClient)).resolves.toEqual([]);
+    expect(exactCalls).toBe(100);
+
+    let overflowCalls = 0;
+    const overflowClient = {
+      async listTools() {
+        overflowCalls += 1;
+        return { tools: [], nextCursor: String(overflowCalls) };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(overflowClient)).rejects.toThrow(
+      'exceeds 100 pages',
+    );
+    expect(overflowCalls).toBe(100);
+  });
+
+  test('accepts exactly 10,000 tools and rejects the first tool above the limit', async () => {
+    const makeTools = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        name: `tool-${index}`,
+        inputSchema: { type: 'object' as const },
+      }));
+    const exactClient = {
+      async listTools() {
+        return { tools: makeTools(10_000) };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(exactClient)).resolves.toHaveLength(10_000);
+
+    const overflowClient = {
+      async listTools() {
+        return { tools: makeTools(10_001) };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(overflowClient)).rejects.toThrow(
+      'exceeds 10000 tools',
+    );
+  });
+
+  test('accepts the exact aggregate byte budget and rejects one byte above it', async () => {
+    const budget = 16 * 1024 * 1024;
+    const baseTool = {
+      name: 'sized',
+      description: '',
+      inputSchema: { type: 'object' as const },
+    };
+    const fixedBytes = Buffer.byteLength(JSON.stringify([baseTool]), 'utf8');
+    const exactTool = {
+      ...baseTool,
+      description: 'x'.repeat(budget - fixedBytes),
+    };
+    const exactClient = {
+      async listTools() {
+        return { tools: [exactTool] };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(exactClient)).resolves.toHaveLength(1);
+
+    const overflowClient = {
+      async listTools() {
+        return {
+          tools: [{ ...exactTool, description: `${exactTool.description}x` }],
+        };
+      },
+    } as unknown as Client;
+    await expect(listAllMcpTools(overflowClient)).rejects.toThrow(
+      'exceeds 16777216 serialized bytes',
+    );
+  });
+
+  test('accepts exact schema depth and node limits and rejects the first value above each', async () => {
+    const schemaAtDepth = (depth: number) => {
+      const root: Record<string, unknown> = {};
+      let current = root;
+      for (let index = 1; index < depth; index += 1) {
+        const child: Record<string, unknown> = {};
+        current.child = child;
+        current = child;
+      }
+      return root;
+    };
+    const clientForSchema = (schema: Record<string, unknown>) =>
+      ({
+        async listTools() {
+          return {
+            tools: [
+              {
+                name: 'bounded',
+                inputSchema: schema as { type: 'object' },
+              },
+            ],
+          };
+        },
+      }) as unknown as Client;
+
+    await expect(
+      listAllMcpTools(clientForSchema(schemaAtDepth(64))),
+    ).resolves.toHaveLength(1);
+    await expect(
+      listAllMcpTools(clientForSchema(schemaAtDepth(65))),
+    ).rejects.toThrow('exceeds depth 64');
+
+    const exactNodes = {
+      type: 'object',
+      nodes: Array.from({ length: 99_997 }, () => null),
+    };
+    await expect(
+      listAllMcpTools(clientForSchema(exactNodes)),
+    ).resolves.toHaveLength(1);
+    await expect(
+      listAllMcpTools(
+        clientForSchema({
+          type: 'object',
+          nodes: Array.from({ length: 99_998 }, () => null),
+        }),
+      ),
+    ).rejects.toThrow('exceeds 100000 nodes');
+  });
+
+  test('rejects required-task tools before calling and invokes ordinary tools from the aggregate', async () => {
+    const calls: unknown[] = [];
+    const client = {
+      async callTool(params: unknown) {
+        calls.push(params);
+        return { content: [{ type: 'text' as const, text: 'ok' }] };
+      },
+    } as unknown as Client;
+    const catalog = [
+      {
+        name: 'required-task',
+        inputSchema: { type: 'object' as const },
+        execution: { taskSupport: 'required' as const },
+      },
+      { name: 'ordinary', inputSchema: { type: 'object' as const } },
+    ];
+
+    await expect(
+      callMcpTool(client, catalog, 'required-task', {}),
+    ).rejects.toThrow('requires task-based execution');
+    expect(calls).toEqual([]);
+
+    await expect(
+      callMcpTool(client, catalog, 'ordinary', { exact: true }),
+    ).resolves.toEqual({ content: [{ type: 'text', text: 'ok' }] });
+    expect(calls).toEqual([
+      { name: 'ordinary', arguments: { exact: true } },
+    ]);
   });
 });

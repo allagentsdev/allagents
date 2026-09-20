@@ -41,8 +41,7 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run schema:check
       - run: bun run build
-      - run: node dist/index.js --help
-      - run: node scripts/smoke-node-cli.mjs
+      - run: bun run package:smoke
 
   node-24-smoke:
     name: Node 24 smoke
@@ -58,8 +57,7 @@ jobs:
           node-version: "24.x"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run build
-      - run: node dist/index.js --help
-      - run: node scripts/smoke-node-cli.mjs
+      - run: bun run package:smoke
 
   typecheck:
     name: Typecheck

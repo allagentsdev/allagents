@@ -11,7 +11,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "shx rm -rf dist && bun build ./src/cli/index.ts --outdir ./dist --target node && shx cp -r src/templates dist/",
+    "build": "bun run scripts/build-package.ts",
+    "package:check": "bun run scripts/check-package-size.ts",
+    "package:smoke": "bun run scripts/smoke-packed-package.mjs",
     "docs:install": "bun install --cwd docs --frozen-lockfile",
     "docs:build": "bun run docs:install && bun run --cwd docs build",
     "dev": "bun run src/cli/index.ts",
@@ -57,9 +59,15 @@
     "url": "git+https://github.com/allagentsdev/allagents.git"
   },
   "homepage": "https://allagents.dev",
-  "dependencies": {
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.13",
     "@clack/prompts": "^1.8.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/bun": "1.4.2",
+    "@types/js-yaml": "^4.0.9",
+    "@types/micromatch": "^4.0.10",
+    "@types/node": "^22.0.0",
+    "ajv": "8.20.0",
     "chalk": "^6.0.0",
     "cmd-ts": "^0.15.0",
     "execa": "^8.0.1",
@@ -70,17 +78,8 @@
     "micromatch": "^4.0.8",
     "read-cmd-shim": "^4.0.0",
     "simple-git": "^3.36.0",
-    "zod": "^3.25.76"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.13",
-    "@types/bun": "1.4.2",
-    "@types/js-yaml": "^4.0.9",
-    "@types/micromatch": "^4.0.10",
-    "@types/node": "^22.0.0",
-    "ajv": "8.20.0",
-    "shx": "^0.4.0",
     "typescript": "^7.0.2",
+    "zod": "^3.25.76",
     "zod-to-json-schema": "3.25.2"
   },
   "engines": {

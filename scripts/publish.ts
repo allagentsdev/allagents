@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { $ } from "bun";
+import { createCheckedPackageTarball } from "./check-package-size";
 
 type NpmTag = "next" | "latest";
 type DistTags = Record<string, string | undefined>;
@@ -110,7 +111,15 @@ async function main() {
     console.log(`   ✓ ${name}@${version} is already published`);
     await assertDistTagMatches(name, version, npmTag);
   } else {
-    await $`npm publish --tag ${npmTag}`.env({ ...process.env, ALLOW_PUBLISH: "1" });
+    const packedPackage = await createCheckedPackageTarball(process.cwd());
+    try {
+      await $`npm publish ${packedPackage.tarballPath} --tag ${npmTag}`.env({
+        ...process.env,
+        ALLOW_PUBLISH: "1",
+      });
+    } finally {
+      await packedPackage.cleanup();
+    }
   }
   console.log("\n✅ Package published.");
 }

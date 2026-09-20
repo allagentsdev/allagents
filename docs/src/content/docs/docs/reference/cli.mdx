@@ -464,6 +464,8 @@ allagents mcp remove <name> [--scope project|user | --profile <name>]
 allagents mcp list [--scope project|user | --profile <name>]
 allagents mcp get <name> [--scope project|user | --profile <name>]
 allagents mcp update [--offline] [--scope project|user | --profile <name>]
+allagents mcp tools <server> [--search <text>] [--scope project|user | --profile <name>]
+allagents mcp call <server> <tool> [tool options | --input <json>] [--scope project|user | --profile <name>]
 ```
 
 Every MCP command selects one declaration destination. With no selector,
@@ -562,6 +564,134 @@ the waiting terminal prompt.
 
 The HTTP-to-stdio bridge written into generated client configs is an internal
 implementation detail; users do not need to run it directly.
+
+### mcp tools
+
+Discover the complete live tool catalog from one configured server:
+
+```bash
+# Current project
+allagents mcp tools deepwiki
+
+# Case-insensitive search over tool name, title, and description
+allagents mcp tools deepwiki --search docs
+
+# Ordinary user declaration as a complete JSON record
+allagents --json mcp tools deepwiki --scope user
+
+# Named-profile declaration, reduced for automation
+allagents --json --jq '.data.tools[] | {name, description}' \
+  mcp tools trading --profile markets
+```
+
+`mcp tools` reads only the inline declaration from the selected destination; it
+does not merge declarations from other destinations or plugins. It connects
+directly to that declaration, consumes every `tools/list` page, closes the
+connection, and then renders the filtered or unfiltered result in discovery
+order. An empty catalog and a search with no matches are both successful.
+
+HTTP declarations connect directly to their configured endpoint rather than
+through the generated AI-client bridge. They reuse the same destination-owned
+headers and OAuth cache as managed client connections, including valid cached
+tokens and refreshable expired tokens. Runtime commands never start fresh OAuth
+consent. If authorization is required, run the destination-specific recovery
+command reported by the error:
+
+```bash
+allagents mcp reauth deepwiki
+allagents mcp reauth deepwiki --scope user
+allagents mcp reauth trading --profile markets
+```
+
+For a stdio declaration, the command starts the configured executable directly
+with its literal arguments and configured environment. Environment references
+in configured environment values are resolved at launch; references in
+arguments are rejected because their resolved values would be visible in the
+host process list. Treat a stdio declaration as executable code you trust.
+
+Human output prints one block per matching tool with its exact name, optional
+title and description, and a fully qualified `mcp call ... --help` command.
+`--json` returns the AllAgents envelope plus complete parsed tool records,
+including input and output schemas, annotations, execution metadata, icons, and
+`_meta` when the server supplies them. Exit status is 0 for a catalog, empty
+catalog, or no matches; 1 for an operational or cleanup failure; and 2 for
+invalid usage.
+
+### mcp call
+
+Inspect or synchronously invoke one exact, case-sensitive tool name. The command
+discovers the current catalog and uses the same direct connection for the call:
+
+```bash
+# Connect and inspect the current contract without invoking the tool
+allagents mcp call deepwiki ask_question --help
+allagents mcp call deepwiki ask_question --help --json
+
+# Generated flags for a wholly safe primitive schema
+allagents mcp call remote primitive_echo \
+  --text hello \
+  --number 1.25 \
+  --integer 7 \
+  --enabled=false \
+  --mode safe \
+  --tags first \
+  --tags second
+
+# Exact JSON object fallback for a complex schema
+allagents mcp call remote complex_echo \
+  --input '{"payload":{"nested":["λ",null,""]},"unusual key":null}'
+
+# User destination and structured output
+allagents --json mcp call catalog search \
+  --scope user \
+  --query docs \
+  --limit 5
+
+# Profile destination and jq extraction
+allagents --json --jq '.data.result.structuredContent' \
+  mcp call trading quote --profile markets --symbol AAPL
+```
+
+Fully qualified help is live: `mcp call <server> <tool> --help` connects to the
+selected HTTP server or starts the configured stdio process, discovers the
+current descriptor, and closes the connection without invoking the tool. Human
+help shows the description, exact input schema, required fields, and either the
+generated flags or the reason the tool requires `--input`. Add `--json` for the
+same live contract as structured data. Root help, `mcp --help`, and bare `mcp
+call --help` remain static and do not connect.
+
+Generated flags are all-or-nothing. AllAgents creates them only when the entire
+input schema is a straightforward top-level object whose property names are
+portable, non-reserved long-option names and whose properties are strings,
+finite numbers, safe integers, booleans, homogeneous primitive enums, or
+homogeneous primitive arrays. Required properties are enforced locally;
+omitted optional properties remain absent. Booleans take explicit `true` or
+`false`, and an array flag is repeatable with occurrence order preserved. If
+any property is nested, ambiguous, colliding, nullable, referenced, composed,
+or otherwise unsafe, no generated subset is exposed and the whole tool remains
+callable through `--input`.
+
+`--input <json>` accepts exactly one JSON object. AllAgents passes its keys and
+values without flattening, inserting defaults, normalizing names, or rebuilding
+the object from the schema; integer literals must remain within the JavaScript
+safe-integer range. It cannot be combined with generated tool flags, although
+destination selectors, `--json`, and `--json --jq` output remain compatible. If
+a generated flag's value begins with `-`, attach it with `=` so
+it cannot be mistaken for another flag:
+
+```bash
+allagents mcp call catalog echo --value=--json
+```
+
+Human call output preserves `content` order, prints sanitized text items
+directly, prints each non-text item as JSON, and prints `structuredContent` once
+under a separate label. `--json` preserves the complete parsed result under
+`data.result`, including `content`, `structuredContent`, `isError`, `_meta`, and
+top-level extension fields; `--jq` filters that envelope. A completed result
+with `isError: true` is still emitted but exits with status 1. Successful calls
+exit 0, operational, tool, authorization, or cleanup failures exit 1, and
+invalid usage exits 2. Calls are synchronous; a tool that requires the deferred
+MCP task lifecycle is rejected before invocation.
 
 ### mcp remove
 

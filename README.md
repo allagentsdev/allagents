@@ -111,6 +111,8 @@ clients:
 | `allagents mcp add <name> <commandOrUrl> [--scope user \| --profile <name>]` | Add, authenticate, and sync an MCP server |
 | `allagents mcp reauth <name> [--scope user \| --profile <name>]` | Reauthenticate an HTTP MCP server in one destination |
 | `allagents mcp list [--scope user \| --profile <name>]` | List MCP declarations in one destination |
+| `allagents mcp tools <server> [--search <text>] [--scope user \| --profile <name>]` | Discover a configured server's live tools |
+| `allagents mcp call <server> <tool> [options] [--scope user \| --profile <name>]` | Inspect or call a live MCP tool |
 | `allagents workspace status` | Show workspace state |
 | `allagents self update` | Update AllAgents CLI |
 

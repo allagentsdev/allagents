@@ -37,6 +37,10 @@
 - Added progressive machine-readable CLI help: concise root and group indexes
   lead to leaf contracts with usage guidance, interaction requirements,
   expected output, options, examples, and output schemas.
+- Added `mcp tools` discovery and synchronous `mcp call` execution for project,
+  user, and profile declarations, with direct HTTP/stdio connections, live
+  input help, safe generated flags or exact JSON input, and complete
+  human/JSON automation output with nonzero tool-error status.
 
 - Added the official TradingView MCP plugin with OAuth-backed access to market
   data, analytics, watchlists, alerts, news, and screeners.

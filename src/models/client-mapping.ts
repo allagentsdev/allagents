@@ -313,7 +313,7 @@ const AGENT_HOST_DEFINITIONS = [
   skillsOnlyHost('firebender', 'Firebender', '.agents/skills/', '.firebender/skills/'),
   skillsOnlyHost('forgecode', 'ForgeCode', '.forge/skills/', '.forge/skills/'),
   skillsOnlyHost('fx', 'fx', '.fx/skills/', '.fx/skills/'),
-  skillsOnlyHost('goose', 'Goose', '.goose/skills/', '.config/goose/skills/'),
+  skillsOnlyHost('goose', 'Goose', '.agents/skills/', '.agents/skills/'),
   skillsOnlyHost('grok', 'Grok Build', '.grok/skills/', '.grok/skills/'),
   skillsOnlyHost('hermes-agent', 'Hermes Agent', '.hermes/skills/', '.hermes/skills/'),
   skillsOnlyHost('inference-sh', 'inference.sh', '.inferencesh/skills/', '.inferencesh/skills/'),

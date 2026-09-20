@@ -206,8 +206,14 @@ describe('capability-aware mappings', () => {
     expect(getMapping('aider-desk', 'user')).toEqual({
       skillsPath: '.aider-desk/skills/',
     });
+    expect(getMapping('goose', 'project')).toEqual({
+      skillsPath: '.agents/skills/',
+    });
+    expect(getMapping('goose', 'user')).toEqual({
+      skillsPath: '.agents/skills/',
+    });
 
-    for (const client of ['warp', 'aider-desk'] as const) {
+    for (const client of ['warp', 'aider-desk', 'goose'] as const) {
       const host = findHostById(client);
       expect(host?.project.agentFile).toBeUndefined();
       expect(host?.project.commandsPath).toBeUndefined();

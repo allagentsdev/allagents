@@ -1,7 +1,7 @@
 ---
 title: "Coding-Agent Execution Gateway - Plan"
 date: 2026-09-18
-updated: 2026-09-19
+updated: 2026-09-20
 type: feat
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -13,31 +13,49 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** A developer can run one trusted-network A2A endpoint for one
-  AllAgents workspace and invoke built-in or explicitly gateway-enabled profile
-  targets against either the complete configured Git repository set, with optional
-  named revision overrides, or a digest-pinned OCI workspace snapshot. AI Evals
-  can configure either source mode in Promptfoo YAML through a custom provider
-  without sending origins.
-- **Means:** Add `allagents gateway serve`, a private execution-service package,
-  a bounded durable Task store, direct Codex and Pi adapters, GitHub App and
-  GitHub CLI acquisition providers, OCI snapshot acquisition, one supervised
-  invocation lifecycle, and a documented Promptfoo provider contract.
+- **Objective:** A developer can install and run one trusted-network A2A
+  endpoint for one AllAgents workspace and invoke built-in or explicitly
+  gateway-enabled profile targets against either the complete configured Git
+  repository set, with optional named revision overrides, or a digest-pinned
+  OCI workspace snapshot. AI Evals can configure either source mode in
+  Promptfoo YAML through a custom provider without sending origins.
+- **Means:** Convert the repository to a private Bun workspace monorepo with
+  independently released `allagents` and `allagents-gateway` applications,
+  versioned workspace/execution/acquisition contract packages, generated
+  portable fixtures under `contracts/`, a bounded SQLite Task store, direct
+  Codex and Pi host-process adapters, and one digest-pinned acquisition image
+  used only when no reusable validated base exists. Read-only Tasks share a
+  reusable base or own a non-reusable base for mutable revisions; read-write
+  Tasks receive disposable writable views through an automatic block-clone/
+  OverlayFS materializer with an explicit portable copy backend.
+  Providers still run bare metal on the trusted Linux CI runner.
 - **Authority:** [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md)
-  owns the public and trust boundaries. Project and user `workspace.yaml` files
-  own source and profile declarations. A2A 1.0 owns core wire semantics.
-- **Execution order:** Capture a red built-CLI E2E for the missing gateway;
-  freeze schemas and configuration projection; implement the Task store, A2A
-  server, supervisor/helper, acquisition, Codex, and Pi; run a final
-  implementation review and fix important findings; then run the green built-
-  CLI E2E, repository gates, and documentation validation.
-- **Stop conditions:** Do not add application authentication, `gateway.yaml`,
-  `worker.yaml`, remote worker routing, caller-supplied URLs or commands,
-  mutable OCI tags, selected-provider failure fallback, evaluation behavior, or
-  automatic execution retry.
-- **Tail ownership:** The implementing workflow runs focused contract and
-  lifecycle tests, provider fixture tests, the repository quality gates, a
-  built-CLI trusted-network smoke test, and documentation validation.
+  owns the public, trust, runtime, and packaging boundaries. Project and user
+  `workspace.yaml` files own source and profile declarations. A2A 1.0 owns core
+  wire semantics. The CI job, VM, or deployment container is the only
+  operational execution and isolation boundary. AllAgents does not claim that
+  boundary contains hostile code or hides job secrets from model-invoked tools;
+  it owns process lifecycle and truthful evidence only.
+- **Execution order:** Capture red CLI-only and standalone-gateway package
+  smokes; complete the Bun monorepo, A2A SDK, provider-surface, process-group,
+  Docker-acquirer, package, and release feasibility gate; freeze schemas,
+  generated fixtures, configuration projection, SQLite ownership, and release
+  binding; implement the Task store and A2A server, host supervisor, Docker-only
+  acquisition, Codex, and Pi; run final review; then run green packed-package,
+  exact-image, registry-conformance, repository, and documentation gates.
+- **Stop conditions:** Stop dependent production work if the pinned A2A surface
+  cannot implement the required public protocol or if the acquisition-container
+  boundary and exact image/package release binding are infeasible. A missing
+  Codex or Pi capability makes that target unavailable rather than changing the
+  A2A, trust, source, or Task contracts. Do not add application authentication,
+  deployment YAML, remote workers, caller-supplied origins/commands, mutable OCI
+  tags, provider fallback, evaluation behavior, automatic retries, per-provider
+  Docker, or containment claims.
+- **Tail ownership:** The implementing workflow runs focused contract,
+  lifecycle, provider-environment, process-group, acquisition-boundary, and
+  release-binding tests; repository quality gates; packed CLI/gateway and exact
+  acquisition-image smoke tests; registry conformance; and documentation
+  validation.
 
 ---
 
@@ -49,11 +67,13 @@ AllAgents gains a single-workspace coding-execution service without becoming an
 evaluation framework or multi-tenant platform. Callers use A2A Tasks and one
 required AllAgents extension. Network reachability is authorization. The
 service resolves configured targets and sources from existing workspace files,
-acquires a fresh invocation workspace, invokes Codex or Pi through a typed
-adapter, and retains bounded terminal evidence. AI Evals consumes that boundary
-through its own Promptfoo custom provider: evaluation YAML supplies named
-revision overrides for the configured repository set, or one snapshot handle
-and immutable digests, while AllAgents retains origin and credential authority.
+acquires or reuses an immutable base, shares it for read-only Tasks, creates an
+independent disposable view for read-write Tasks, invokes Codex or Pi through a
+typed adapter, and retains bounded terminal evidence. AI Evals consumes that
+boundary through its own Promptfoo custom provider: evaluation YAML supplies
+named revision overrides for the configured repository set, or one snapshot
+handle and immutable digests, while AllAgents retains origin and credential
+authority.
 
 ### Problem Frame
 
@@ -97,13 +117,21 @@ registry, or another profile configuration file for the initial use case.
 - **Support two acquisition modes.** Direct declared repositories and named,
   digest-pinned OCI workspace snapshots converge on one manifest and evidence
   contract. (session-settled: user-directed.) Governs R9-R11.
+- **Share immutable bases; isolate writes.** `workspaceAccess` defaults to
+  `readWrite`. Read-only Tasks may reuse one validated physical base and cwd
+  with Task-private runtime state; read-write Tasks receive unique disposable
+  writable views. Reflink/block clone is preferred, rootless OverlayFS is the
+  Linux fallback, and an explicit copy backend preserves portability.
+  (session-settled: user-directed.) Governs R2-R3, R5, R8-R11, R15-R16, R18-R19.
 - **Use App-first GitHub credential eligibility.** Prefer an applicable GitHub
   App; use a configured `gh` account only when no App installation applies;
   never fall back after selected-App failure. (session-settled: user-directed.)
   Governs R12.
-- **Keep a typed backend seam.** Codex SDK and Pi RPC are the complete initial
-  backend set. Launcher-backed profiles resolve through those adapters rather
-  than executing generated wrapper files. Governs R7-R8, R13-R15.
+- **Keep a narrow typed backend seam.** Pinned supported Codex and Pi package or
+  RPC surfaces are the complete initial backend set. Launcher-backed profiles
+  resolve through AllAgents-owned adapters and execute on the gateway host
+  rather than through generated wrapper files or the acquisition container.
+  Governs R7-R8, R13-R15.
 - **Persist Task truth, not provider sessions.** Restart settles interrupted
   work failed; it never resumes or automatically replays provider execution.
   Governs R5, R13-R16.
@@ -139,20 +167,27 @@ registry, or another profile configuration file for the initial use case.
   `nextPageToken` is present and empty on the final page. With the default
   `includeArtifacts: false`, each returned Task omits `artifacts`; `true`
   includes the field.
-- R2. Generate a strict versioned request schema from Zod and place it only at
-  `Message.metadata[extensionUri]`; the Message also lists `extensionUri` in
-  `Message.extensions`. Strict objects reject every unlisted member. V1 uses
-  these wire scalars:
+- R2. Generate a strict versioned request schema from the canonical domain type
+  and place it only at `Message.metadata[extensionUri]`; the Message also lists
+  `extensionUri` in `Message.extensions`. Strict objects reject every unlisted
+  member. V1 uses these wire scalars:
   - `InvocationKey` matches `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`.
   - `ConfigName` and `TargetId` match
     `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
   - `RevisionText` is NFC UTF-8, 1-255 bytes, with no U+0000-U+001F or U+007F.
   - `Digest` matches `^sha256:[0-9a-f]{64}$`.
+  - `RelativeDirectory` is NFC UTF-8 of 1-1024 bytes containing 1-32
+    slash-separated segments. Each segment is 1-255 bytes, is neither `.` nor
+    `..`, and contains no slash, backslash, U+0000-U+001F, or U+007F.
   The request object is exactly:
   `version: "1"`; `invocationKey: InvocationKey`; `target: TargetId`; `source`,
   one of `{ kind: "repositories", revisions?: Record<ConfigName,
   RevisionText> }` or `{ kind: "workspaceSnapshot", snapshot: ConfigName,
   digest: Digest, workspaceManifestDigest: Digest }`; optional
+  `workingDirectory`, one of `{ kind: "workspaceRoot" }` or
+  `{ kind: "repository", repository: ConfigName, path?: RelativeDirectory }`,
+  defaulting to `{ kind: "workspaceRoot" }`; optional `workspaceAccess`, one of
+  `"readOnly" | "readWrite"`, defaulting to `"readWrite"`; optional
   `deadlineSeconds` (integer 1-3600, default 1800); and optional
   `resultSchema: { version: "1", schema: SchemaNode }`.
 
@@ -210,6 +245,14 @@ registry, or another profile configuration file for the initial use case.
   media type of at most 255 ASCII bytes.
   - `version` is the literal `"1"`; `taskId` is a lowercase canonical UUIDv7;
     and `target` is `TargetId`.
+  - `workingDirectory` is the effective logical selector from the request:
+    `{ kind: "workspaceRoot" }` or
+    `{ kind: "repository", repository: ConfigName,
+    path?: RelativeDirectory }`. It never contains a physical path or configured
+    repository destination.
+  - `workspaceAccess` is the effective `"readOnly" | "readWrite"` value.
+    `readOnly` is a consumer-selected cooperative contract with best-effort
+    provider-policy enforcement, not hostile-code containment.
   - `sourceIdentity` is either
     `{ kind: "repositories", complete, repositories }` or
     `{ kind: "workspaceSnapshot", snapshot: ConfigName, digest: Digest,
@@ -246,9 +289,17 @@ registry, or another profile configuration file for the initial use case.
     termination | cleanup`; `artifactId` and `digest` use the aliases above,
     `summary` is `ShortText`, and at least one of those three optional members
     is present.
+    `complete` means every configured bounded evidence category was attempted
+    after the direct provider process settled; it never means every descendant
+    was enumerated or quiescent.
   - `termination` is `{ status: "clean" | "failed" | "unknown",
-    reason?: ShortText }`; `cleanup` is
-    `{ workspace: "removed" | "retained" | "failed", reason?: ShortText }`.
+    reason?: ShortText }` and reports the direct provider/process-group
+    observation only.
+  - `cleanup` is
+    `{ workspace: "shared" | "removed" | "retained" | "failed",
+    reason?: ShortText }`. `shared` means a read-only Task removed its private
+    runtime state while retaining a reusable cached base; `removed` means every
+    Task-owned runtime, writable view, and non-reusable base was removed.
   - optional `failure` is `{ code, message, retryable, cause }`, where `code`
     is one stable code from the error table below, `cause` is one member of the
     closed cause union defined below that table, `message` is `ShortText`, and
@@ -281,22 +332,33 @@ registry, or another profile configuration file for the initial use case.
   equivalent network controls as the authorization boundary.
 - R5. Idempotency and Task visibility are deployment-wide. Atomically and
   durably bind an invocation key to the canonical request, selected target,
-  source identity, optional result-schema digest, deadline, and effective
-  configuration digest before acknowledging Task creation. One transactional
+  source identity, effective logical working directory, effective workspace
+  access, optional result-schema digest, deadline, and effective configuration
+  digest before acknowledging Task creation. One transactional
   `createOrReplay` operation arbitrates competing requests. Identical replay
   returns the existing Task; a changed request conflicts. Status and terminal
   settlement are monotonic. The project-specific state root persists the
-  canonical workspace identity and holds an exclusive process lock. The root
-  and all state files must be current-user owned, use `0700`/`0600`-equivalent
-  permissions, be disjoint from project, profile, and invocation roots, and be
-  opened descriptor-relatively without following symlinks or accepting hard-
-  linked files. Startup verifies those invariants, store integrity, and
-  workspace identity; terminalizes interrupted Tasks failed; and never resumes
-  provider work. A durable commit fsyncs every changed file and affected
-  containing directory before acknowledgment. Store open, corruption, write,
-  transaction, rename, or fsync failure stops admission, aborts and contains
-  active work, prevents terminal success, and keeps the process alive with
-  poisoned readiness until the containment set is proven empty.
+  canonical workspace identity and holds an exclusive process lock.
+
+  The Bun gateway privately owns one SQLite database through `bun:sqlite`.
+  Claims, Tasks, events, bounded Artifact bytes, the single execution lease,
+  internal outcome intent, acquisition-container identity, staging and
+  transient-base identity, direct provider process-group identity, and expiry
+  live in ordinary transactional tables. Enable foreign keys, use WAL where
+  supported, set `synchronous=FULL`, and acknowledge only committed
+  transactions. The current user owns the state root and database with
+  `0700`/`0600`-equivalent permissions; the root is disjoint from project,
+  staging, publication, profile, and provider-auth roots. No custom SQLite VFS
+  or native file primitive is introduced. Startup verifies the root, lock,
+  schema/integrity, and workspace identity; terminalizes interrupted Tasks
+  failed; removes recorded acquisition containers and orphan staging; and
+  attempts to terminate recorded provider process groups. It releases a stale
+  or termination-poisoned lease only after the container is gone, the recorded
+  process group is confirmed absent, and recorded Task-owned runtime, view, and
+  transient-base cleanup has completed. Otherwise readiness remains false and
+  admission stays stopped. Provider work is never resumed.
+  Store open, corruption, write, transaction, or synchronization failure stops
+  admission and prevents terminal success.
 
 **Workspace and target configuration**
 
@@ -317,29 +379,63 @@ registry, or another profile configuration file for the initial use case.
   one `(profile, client)` pair. Built-in IDs are reserved under the same portable
   collision key; colliding enablement is a configuration error. Initially only
   Codex and Pi profile clients are executable.
-- R8. A request selects a declared target, may set the bounded
-  `deadlineSeconds`, and may provide one bounded result schema. The gateway owns
-  one durable execution lease covering acquisition through final evidence
-  collection. Admission claims that lease transactionally before launching any
-  helper child; at most one Task may hold it. A second otherwise-valid request
-  is accepted as a Task and settles failed with
-  `execution_capacity_unavailable`. It may transiently allocate one empty,
-  start-gated containment set, but never releases the gate, starts acquisition,
-  or executes a child and must destroy that set after the failure settlement.
-  Lease identity is stored with the Task, survives restart, and is released only
-  by the final settlement transaction or startup reconciliation after the
-  recorded containment set is proven empty.
+- R8. A request selects a declared target, may select one logical
+  `workingDirectory`, may select `workspaceAccess`, may set the bounded
+  `deadlineSeconds`, and may provide one bounded result schema. `workspaceAccess`
+  defaults to `readWrite`; it is never inferred from prompt text.
 
-  The overall deadline covers acquisition, publication, typed preparation,
-  provider execution, and evidence collection. Acquisition receives
+  A read-only Task resolves its cwd directly inside its validated base. An exact
+  immutable request may share a reusable cached base; a mutable branch or tag
+  request owns a non-reusable base for the Task lifetime. The Task receives a
+  private `<invocation-root>/<task-id>/runtime` for temporary, home,
+  provider-state, and evidence files. Provider environments disable optional
+  Git locks, and adapters request native read-only policy when available. The
+  gateway does not inspect prompts or add a per-Task mount, chmod pass, or full-
+  tree verification. The consumer remains responsible for assigning work that
+  does not require project mutation.
+
+  A read-write Task receives a unique writable view at
+  `<invocation-root>/<task-id>/workspace`. The configured host materializer
+  prefers a filesystem block clone, falls back to rootless OverlayFS on
+  supported Linux hosts, and supports an explicit ordinary-copy backend for
+  portability. Writable files never use hard links. Normal settlement removes
+  the writable view and any non-reusable base after evidence collection; non-
+  settling execution retains them with the poisoned lease until verified
+  reconciliation.
+
+  `{ kind: "workspaceRoot" }` selects the effective base or Task view. A
+  repository selector maps its declared name through the compiled catalog,
+  appends only the validated `RelativeDirectory`, resolves links without escape,
+  and must name an existing directory beneath that repository. Absolute paths,
+  configured destinations, undeclared repositories, non-directories, and
+  escaping resolutions fail before provider start. Gateway-generated requests,
+  structured Task/Artifact metadata, and operational logs never contain the
+  physical path. Opaque terminal output, native evidence, and produced-Artifact
+  payloads are not sanitized and may contain it.
+
+  The gateway owns one durable execution lease covering base acquisition or
+  lookup through final evidence collection. Admission claims that lease
+  transactionally before starting an acquisition container or provider process;
+  at most one Task may hold it. A second otherwise-valid request is accepted as
+  a Task and settles failed with `execution_capacity_unavailable` without
+  creating a container or process. Lease identity is stored with the Task and
+  survives gateway restart. Normal final settlement releases it; a provider-
+  termination failure retains it until verified startup reconciliation confirms
+  the recorded process group is absent.
+
+  The overall deadline covers cache lookup, Docker acquisition on miss,
+  publication, optional materialization, typed preparation, bare-metal provider
+  execution, and evidence collection. Acquisition receives
   `min(900 seconds, remaining overall deadline)`; exceeding that sub-budget
-  fails before provider execution. Overall expiry initiates abort and bounded
-  forced termination. Cleanup then uses its own fixed bounded budget and the
-  R16 fail-closed quiescence rule. A request cannot provide or override backend,
-  executable path, command, argv, environment, profile settings, plugins, MCP
-  servers, repository URLs, destination paths, credential provider, setup
-  behavior, or permission policy. Readiness rejects missing, partial, drifted,
-  unsupported, or declaration-missing gateway-enabled profiles.
+  removes the acquisition container and fails before provider execution.
+  Overall expiry initiates adapter abort and Linux process-group escalation.
+  Cleanup then uses its own fixed bounded budget. A request cannot provide or
+  override backend, executable path, command, argv, environment, provider home,
+  profile settings, plugins, MCP servers, repository URLs, destination paths,
+  credential provider, setup behavior, provider permission policy, materializer,
+  cache key, Docker options, image reference, or mounts. Readiness rejects
+  missing, partial, drifted, unsupported, or declaration-missing gateway-enabled
+  profiles.
 
 **Workspace acquisition**
 
@@ -356,7 +452,10 @@ registry, or another profile configuration file for the initial use case.
   repository-controlled secondary fetch/exec features, verify checkout
   identities, and reject path collisions or escapes.
 - R11. Snapshot mode maps `snapshot` to a declared OCI repository and constructs
-  `<repository>@<digest>` server-side. V1 accepts only
+  `<repository>@<digest>` server-side. The same digest-pull contract must
+  interoperate with Docker Hub, GHCR, JFrog Artifactory/JFrog Container
+  Registry, and compatible private OCI Distribution registries; registry choice
+  does not alter the accepted snapshot format. V1 accepts only
   `application/vnd.oci.image.manifest.v1+json` with `schemaVersion: 2` directly
   at the requested digest. Reject image indexes, nested indexes, descriptor
   `urls` or embedded `data`, non-distributable layers, unknown media types, and
@@ -368,24 +467,38 @@ registry, or another profile configuration file for the initial use case.
   while streaming, before decoding. Apply layers base-to-top with OCI whiteout
   and opaque-whiteout semantics.
 
-  The workspace manifest must contain every compiled project repository exactly
-  once at its operator-declared destination; reject missing, extra, renamed,
-  misplaced, or duplicate repositories and undeclared generated content. Apply
-  these fixed v1 ceilings across all processed layers, including overwritten or
-  whiteouted content: 4 MiB manifest, 4 MiB config, 2 GiB total compressed
-  layer bytes, 8 GiB total expanded bytes, 250,000 entries, 1 GiB per regular
-  file, 4096 UTF-8 bytes and 128 components per path, and 1 MiB per PAX or other
-  extended header. Abort before crossing a limit. Validate paths, collisions,
-  file types, modes, links, and manifest completeness in staging before atomic
-  publication. Reject absolute or traversing paths, devices, sockets, sparse
-  files, escaping links, credentials in redirect URLs, unapproved cross-origin
-  redirects, and external layers. Cross-origin redirects are limited to
-  layer-blob `GET`/`HEAD` requests and exact operator-declared
-  `layerRedirectHosts`; token, manifest, and config requests remain same-origin.
-  Private or otherwise non-global destinations are permitted only when the exact
-  host is the source's declared repository host or a declared layer-redirect
-  host, with per-hop rebinding checks. The common workspace manifest
-  distinguishes independently verified Git facts from snapshot-attested facts.
+  The wire-visible workspace manifest contains every compiled project
+  repository exactly once by logical name and omits destination paths. After
+  applying layers, the gateway uses the compiled operator catalog to verify that
+  each listed repository exists at its configured destination and that no
+  repository is missing, extra, renamed, misplaced, duplicated, or accompanied
+  by undeclared generated content. Apply these fixed v1 ceilings across all
+  processed layers, including overwritten or whiteouted content: 4 MiB manifest,
+  4 MiB config, 8 GiB total compressed layer bytes, 32 GiB total expanded bytes,
+  500,000 entries, 4 GiB per regular file, 4096 UTF-8 bytes and 128 components
+  per path, and 1 MiB per PAX or other extended header. Abort before crossing a
+  limit. Validate paths, collisions, file types, modes, links, and the compiled
+  filesystem layout in staging before atomic publication. Reject absolute or
+  traversing paths, devices, sockets, sparse files, escaping links, credentials
+  in redirect URLs, unapproved cross-origin redirects, and external layers.
+  Cross-origin redirects are limited to layer-blob `GET`/`HEAD` requests and
+  exact operator-declared `layerRedirectHosts`; token, manifest, and config
+  requests remain same-origin. Private or otherwise non-global destinations are
+  permitted only when the exact host is the source's declared repository host
+  or a declared layer-redirect host, with per-hop rebinding checks. The common
+  path-free workspace manifest distinguishes independently verified Git facts
+  from snapshot-attested facts; compiled destinations remain private validation
+  inputs.
+
+  After host validation, atomically promote staging to a validated base. An OCI
+  identity is reusable under a gateway-owned cache key containing its manifest
+  and workspace-manifest digests. A repository identity is reusable only when
+  every effective revision is a full commit ID. Its cache key also binds the
+  acquisition-contract version, compiled catalog/layout digest, and every
+  commit. Branch and tag requests instead receive a non-reusable Task-owned base
+  and never populate or reuse a cache entry. A valid cache hit starts no
+  acquisition container and resolves no source credential. Active Tasks pin a
+  reusable base; bounded eviction removes only unpinned cache entries.
 
 **Credential selection and containment**
 
@@ -395,119 +508,148 @@ registry, or another profile configuration file for the initial use case.
   independently proven through the configured GitHub CLI identity; an
   uncorroborated 404, 401, 403, 429, timeout, or 5xx is `unknown`. An explicit
   installation ID is eligible only after positive repository-coverage
-  verification. For `eligible`, call `@octokit/auth-app` with `refresh: true`
-  and the exact repository selection to mint a new read-only installation token
-  for every acquisition. Validate its repository selection, permissions,
-  creation time, and expiry, and require remaining lifetime greater than the R8
-  acquisition sub-budget plus a 60-second clock-skew margin.
+  verification. For `eligible`, the host gateway creates the App JWT from the
+  configured private key, discovers and verifies installation coverage, and
+  mints a new repository-scoped read-only installation token for every cache-
+  miss acquisition. Credentials are never cached. Validate the token's
+  repository selection,
+  permissions, creation time, and expiry, and require remaining lifetime greater
+  than the R8 acquisition sub-budget plus a 60-second clock-skew margin. Only
+  the resulting installation token enters the acquisition container; the App
+  private key remains on the host.
 
   Use the configured GitHub CLI account only when the App is absent or
   applicability is positively `ineligible`. An `unknown` result or any
   selected-App configuration, authentication, minting, permission, repository,
   rate-limit, or service failure terminates acquisition without `gh` fallback.
-  Run `gh auth token --hostname github.com --user <account>` with ambient token
-  variables removed. Deliver either token only through an invocation-scoped Git
-  credential helper. Revoke an App token after acquisition and fail before
-  provider execution if revocation cannot be confirmed; destroy all local token
-  material before typed preparation. OCI credentials likewise exist only during
-  snapshot acquisition.
+  Resolve `gh auth token --hostname github.com --user <account>` on the host
+  with ambient token variables removed, then inject only the selected
+  invocation-scoped source credential into the acquisition container. Revoke an
+  App token after acquisition and fail before provider execution if revocation
+  cannot be confirmed. OCI acquisition accepts anonymous pulls or exact-
+  registry credentials from the strict Docker-auth/helper boundary and supports
+  same-origin Basic and Distribution Bearer challenges, the documented Docker
+  Hub token service, and an operator-supplied exact-host CA-bundle map. The
+  acquisition container receives source-only credentials and trust material;
+  they are destroyed with the container before provider preparation.
 
 **Execution, evidence, and cleanup**
 
-- R13. Keep one closed `codex | pi` backend registry and one behavior-focused
-  interface covering availability, capabilities, invocation, progress,
-  deterministic permission handling, abort, terminal output, optional structured
-  result, usage, bounded native evidence, and disposal. Profile targets resolve
+- R13. Keep one closed `codex | pi` backend registry behind a narrow
+  AllAgents-owned TypeScript interface covering availability, capabilities,
+  invocation, progress, deterministic permission handling, abort, direct
+  process settlement, terminal output, optional structured result, usage,
+  bounded native evidence, and disposal. The gateway owns contract
+  normalization rather than adopting AI SDK Harnesses. Profile targets resolve
   adapter-owned configuration directly; never execute generated launchers,
-  discover executables as targets from `PATH`, scrape a TUI, or append public
-  input to argv.
-- R14. Codex uses pinned `@openai/codex-sdk`, one fresh thread per Task,
-  `AbortSignal`, streamed events, and an operator-selected Codex auth-file
-  handle. It passes native `outputSchema` only when the public schema has an
-  object root, every object's `required` set equals its property set, nesting is
-  at most 10 levels, and every keyword is supported by the pinned model/API.
-  Other valid public schemas use explicit JSON prompt guidance plus the common
-  gateway-side validator without a native schema. Pi uses strict RPC,
-  invocation-owned configuration, an operator-selected Pi auth-file handle, and
-  one restricted policy extension; repository extensions and unrestricted
-  built-ins do not auto-load. The gateway copies only the selected adapter's
-  required auth material into an invocation-private, read-only control-process
-  view and removes it during cleanup.
-- R15. Acquire into a private staging root and atomically publish the invocation
-  workspace. Run only adapter-owned typed preparation that projects validated
-  project/profile settings, plugins, and MCP declarations through existing
-  deterministic transforms; never execute project or user `setup` entries or
-  other configured shell commands.
+  discover arbitrary executables as targets from `PATH`, scrape a TUI, append
+  public input to argv, or download a provider runtime per request. A configured
+  globally installed binary override is eligible only after an exact version
+  and protocol compatibility probe.
+- R14. Codex uses a pinned `@openai/codex-sdk` directly from the Bun gateway.
+  Codex app-server is allowed only if U0 demonstrates a required capability
+  absent from that pinned SDK; the reason and tested protocol version must then
+  be recorded. Each Task receives one fresh SDK execution context, streamed
+  events, native cancellation, and an explicitly constructed child environment.
+  When API credentials are absent, preserve the existing host `CODEX_HOME` and
+  ChatGPT login in place; do not copy, mount, parse, or import OAuth files.
+  Pass native `outputSchema` only when the public schema has an object root,
+  every object's `required` set equals its property set, nesting is at most 10
+  levels, and every keyword is supported by the pinned SDK/model. Other valid
+  public schemas use explicit JSON guidance plus the common gateway-side
+  validator.
 
-  Enforce distinct process views:
-  - the provider control process receives only its invocation workspace,
-    minimum non-secret profile configuration, and adapter auth channel;
-  - each MCP child receives only its own resolved secret references; and
-  - model-invoked shell/tools receive the workspace and no provider or MCP
-    credentials.
+  Pi uses a pinned supported package/RPC surface, invocation-owned
+  configuration, one restricted policy extension, and the existing host Pi
+  authentication location. Repository extensions and unrestricted built-ins do
+  not auto-load. Do not copy, mount, parse, or import Pi authentication files.
+  Both adapters preserve only required host identity, authentication paths,
+  executable lookup, locale, certificate, and proxy settings in an explicit
+  environment allowlist. This reduces accidental environment leakage; it is
+  not a secret-isolation guarantee because model-invoked tools run with the same
+  CI-job authority.
+- R15. Start a fresh Docker container only when a request has no reusable
+  validated base, including a cache miss or a non-reusable branch/tag request.
+  Probe Docker and the exact digest-pinned `apps/acquirer` image at that point.
+  A repository-mode probe failure is `source_git_unavailable`; a snapshot-mode
+  probe failure is `source_snapshot_unavailable`. The gateway creates private
+  staging and starts the image with that directory as its only writable bind
+  mount. The container receives the canonical acquisition request, compiled
+  catalog, strict network/size/archive policy, source-only GitHub or OCI
+  credentials, and only required exact-host CA material. It receives no GitHub
+  App private key, host home, provider home, Docker socket, gateway database,
+  published base, unrelated credential, Codex, Pi, or other coding harness. It
+  never downloads a coding harness. Docker network access is limited to source
+  endpoints required by the selected Git or OCI mode.
 
-  The pinned backend must expose one non-bypassable synchronous spawn hook for
-  every MCP and model-tool process. The hook delegates execution to the security
-  helper, which enters the role-specific mount and network namespaces, replaces
-  the environment, closes every non-allowlisted descriptor, and only then
-  executes untrusted code. A backend that can spawn any tool without this hook
-  is not a v1 target and fails readiness; conformance fixtures alone cannot waive
-  that requirement. All views exclude gateway state, operator home, App keys,
-  GitHub/OCI stores, source helpers, unrelated adapter credentials, and the
-  parent environment.
+  The acquirer writes content beneath staging and emits one typed manifest
+  through the bind mount, then exits. The host gateway waits for exit, removes
+  the container, destroys source credentials, validates the manifest and tree
+  against the compiled catalog and fixed limits, and atomically promotes staging
+  to a reusable cache entry or non-reusable Task-owned base. Every cancellation,
+  deadline, validation failure, or other non-publication path removes staging
+  idempotently; cleanup uncertainty fails `source_cleanup_failed` and stops
+  admission. Source-mode failure never falls through.
 
-  Invocation network namespaces cannot route to host loopback, any gateway bind
-  or advertised address, operator management networks, or ingress proxies.
-  Provider and MCP egress is default-deny except for role-specific destinations
-  compiled from adapter and MCP configuration; every resolved address is checked
-  at connection time, and gateway/host-management destinations remain denied
-  even when a hostname resolves to them. Model tools receive no network unless
-  the adapter's explicit policy grants similarly constrained egress. Fail target
-  readiness unless all filesystem, credential, descriptor, and network
-  separations are enforceable.
+  A read-only Task uses the base directly plus Task-private runtime state.
+  Adapter-owned preparation for that mode must keep project files unchanged and
+  place invocation configuration outside the base. A read-write Task first
+  receives a unique block-cloned, overlaid, or copied view; typed preparation
+  may then project validated project/profile settings, plugins, and MCP
+  declarations into that view. Project or user `setup` entries and other
+  configured shell commands never run automatically.
 
-  Acquisition credentials and mounts are absent first. Capture bounded provider
-  events while the process is live. After the provider reports terminal, abort
-  and terminate its complete containment set and prove it empty before reading
-  Git state, hashing or copying files, or describing produced Artifacts as
-  verified. Treat the mutated workspace as untrusted: use descriptor-relative
-  no-follow reads; revalidate identity and size after open; reject hard links,
-  special/sparse files, path replacement, out-of-root targets, and `.git`
-  gitdir/core.worktree/alternates escapes; and run Git inspection with hermetic
-  configuration that disables hooks, filters, drivers, fsmonitor, pagers,
-  helpers, and external commands. If quiescence cannot be proven, retain only
-  truthful partial process evidence; do not publish filesystem evidence or
-  produced Artifacts as verified.
-- R16. Supervise the complete acquisition/provider descendant set inside an
-  invocation-owned OS containment primitive whose membership children cannot
-  escape. Allocate its stable identifier and empty set first, then commit that
-  identity with the Task and execution lease before the helper may release its
-  start gate or execute any child. A failed commit destroys the still-empty set.
-  Startup enumerates the entire project-owned containment namespace, reconciles
-  both recorded and unknown identifiers, and refuses readiness while any
-  unknown or nonempty set remains.
-
-  One durable compare-and-set arbitrates provider terminal outcome, caller
+  Codex and Pi execute as direct host processes on the same trusted Linux CI
+  runner as the gateway. The adapter receives the access-appropriate resolved
+  cwd selected by the logical `workingDirectory`, Task-private runtime paths,
+  and the effective access mode; it never receives a caller-supplied physical
+  path or materializer choice. Provider execution never reuses the acquisition
+  container and never creates a per-invocation provider container. The CI job,
+  VM, or deployment container is the isolation boundary. AllAgents does not
+  claim containment of hostile repository code, network access by model tools,
+  or provider/MCP/operator secrets from those tools. Capture bounded provider
+  events while the direct provider process is live. Collect filesystem/Git
+  evidence only after that direct process settles and process-group termination
+  attempts finish; phrase the evidence as observed after direct-process
+  settlement, never as proof that every descendant is quiescent. Run Git
+  inspection with hermetic configuration that disables hooks, filters, drivers,
+  fsmonitor, pagers, helpers, optional locks, and external commands.
+- R16. On trusted Linux runners, start each direct provider in a new process
+  group and persist its leader PID plus Linux process-start marker with the Task
+  and execution lease before recording provider execution as started. One
+  durable compare-and-set arbitrates provider terminal outcome, caller
   cancellation, overall deadline, and shutdown as an internal `outcomeIntent`
-  while the externally visible Task remains nonterminal. The winning intent
-  owns the stable result or failure code and drives one idempotent abort and
-  quiescence path. Only after quiescence, safe evidence collection, produced-
-  Artifact verification, and cleanup does one settlement transaction atomically
-  write terminal Task status, result/failure, bounded evidence, exactly one
-  integrity Artifact, produced Artifacts, termination outcome, lease release,
-  and cleanup outcome.
+  while the external Task remains nonterminal. The winning intent owns the
+  stable result or failure code and drives one idempotent abort path: request
+  graceful adapter abort, wait the configured grace period, send `SIGTERM` to
+  the process group, then `SIGKILL` after the forced-termination period.
 
-  Cancellation intent persists before native abort, followed by bounded forced
-  termination. If quiescence cannot be proven, settle once with
-  `execution_quiescence_unknown`, no verified filesystem evidence, and immutable
-  unknown/failed termination; reject admission, keep readiness false, and leave
-  the process alive to continue reaping. Later recovery changes only internal
-  recovery/readiness state, never the settled Task. Print the stable containment
-  identifier and platform recovery command. Startup proves every interrupted set
-  empty before it may quarantine stale roots or advertise readiness. Graceful
-  shutdown stops admission atomically, commits shutdown intent, drains or aborts
-  active work within a bounded grace period, follows the same settlement path,
-  and only then exits.
+  After the direct provider process has settled and bounded evidence collection
+  finishes, cleanup removes a read-only Task's private runtime state, unmounts
+  and removes a read-write Task's writable view, and removes any non-reusable
+  base. One transaction then writes terminal Task status, result/failure,
+  bounded evidence, exactly one integrity Artifact, produced Artifacts, observed
+  termination, cleanup outcome, and lease release. Any Task-owned cleanup
+  failure settles `workspace_cleanup_failed` with
+  `cleanup.workspace: "failed"` and retains its internal cleanup record for
+  startup or operator repair; admission stops when an active mount or uncertain
+  writable view remains. If the direct process does not settle after `SIGKILL`,
+  one transaction instead writes a failed Task with
+  `execution_termination_failed`, live provider evidence, and observed
+  termination, but no filesystem, Git, or produced-Artifact evidence. It retains
+  the Task runtime, any writable view or non-reusable base, and the lease; makes
+  readiness false; and stops admission. Startup may release that poisoned lease
+  only after the recorded process group is confirmed absent following runner
+  teardown and retained Task-owned state is reconciled; otherwise it remains
+  unready.
+
+  Repeated cancellation while intent is pending does not re-signal work.
+  Startup never resumes a session. Gateway shutdown stops admission, commits
+  shutdown intent, performs the same escalation and settlement rules, and
+  exits. CI runner teardown is the final orphan boundary. AllAgents does not use
+  cgroups, pidfds, namespaces, nftables, `openat2`, a native platform layer, or
+  non-bypassable spawn mediation, and does not claim complete descendant
+  enumeration or hostile-code containment.
 
 **Scope and configuration**
 
@@ -515,33 +657,40 @@ registry, or another profile configuration file for the initial use case.
   repetitions, experiment scheduling, or automatic Task retry.
 - R18. Do not add `gateway.yaml` or `worker.yaml`. Process configuration uses
   the exact CLI flags and environment variables in the Configuration Contract
-  for listener, advertised interface URL, workspace, state/retention, GitHub,
-  OCI, and Codex/Pi auth-file handles. The listener also exposes unauthenticated
-  metadata-only `/healthz` and `/readyz` endpoints outside A2A: liveness returns
-  200 while the process can serve; readiness returns 200 only while new
-  admission is safe and otherwise 503. They reveal no targets, sources, paths,
-  or failure details and do not require A2A headers. Gateway code never copies
-  acquisition or provider credential values into generated workspace files,
-  requests, logs, Task/Artifact metadata, retained workspaces, or model-tool
-  environments. This is not a redaction guarantee for opaque prompts, provider
-  output, structured results, native evidence, or produced-Artifact payloads.
+  for listener, advertised interface URL, workspace, state/retention,
+  immutable-base cache, workspace materializer, acquisition image and Docker
+  access, GitHub/OCI source credentials, provider executable overrides, provider
+  home/auth paths, and process-group timeouts. The listener also exposes
+  unauthenticated metadata-only `/healthz` and `/readyz` endpoints outside A2A:
+  liveness returns 200 while the process can serve; readiness returns 200 only
+  while new admission is safe and otherwise 503. They reveal no targets,
+  sources, paths, or failure details and do not require A2A headers. Gateway code
+  never copies acquisition credential values into generated workspace files,
+  requests, logs, Task/Artifact metadata, retained Task views, cache entries, or
+  provider environments. This is not a redaction or isolation guarantee for
+  opaque prompts, provider/tool output, structured results, inherited host
+  authentication, native evidence, or produced-Artifact payloads.
 - R19. Document AI Evals consumption through a Promptfoo custom
   JavaScript/TypeScript provider implementing Promptfoo's `ApiProvider`.
   `constructor(options: ProviderOptions)` requires and retains a nonempty
   `options.id`, validates `options.config`, and `id()` returns that ID. Static
-  config contains the
-  gateway endpoint, target ID, and exactly one closed source mode: repository
-  mode materializes the complete configured repository set and carries only an
-  optional revision map keyed by declared repository name; snapshot mode carries
-  one declared snapshot name with OCI and workspace-manifest digests.
+  config contains the gateway endpoint, target ID, optional default logical
+  `workingDirectory`, optional `workspaceAccess` defaulting to `readWrite`, and
+  exactly one closed source mode: repository mode materializes the complete
+  configured repository set and carries only an optional revision map keyed by
+  declared repository name; snapshot mode carries one declared snapshot name
+  with OCI and workspace-manifest digests.
   `callApi(prompt, context?, options?)` may apply the exact
-  `context?.vars?.allagentsSource` leaf overrides defined below; missing context
-  means no override. Dynamic repository revisions must be full lowercase
-  40-hex commit IDs; dynamic snapshot values must be full lowercase `sha256:`
-  digests. Source kind, snapshot name, and repository origins never vary per
-  test. Unknown members, revision names absent from static config, URLs,
-  destinations, tags, credentials, commands, and permission policy fail before
-  submission.
+  `context?.vars?.allagentsSource` leaf overrides, may replace the default
+  selector through `context?.vars?.allagentsWorkingDirectory`, and may replace
+  access through `context?.vars?.allagentsWorkspaceAccess`; missing context
+  retains static values. Dynamic source values remain limited as defined below.
+  The working-directory variable is exactly `{ kind: "workspaceRoot" }` or
+  `{ kind: "repository", repository: ConfigName,
+  path?: RelativeDirectory }`; access is exactly `readOnly` or `readWrite`.
+  Unknown members, invalid relative paths, URLs, physical or configured
+  destination paths, credentials, commands, Docker options, materializer
+  choices, and provider permission policy fail before provider execution.
 
   The provider sends `SendMessage` with `configuration.returnImmediately: true`,
   captures the accepted Task ID, and calls `SubscribeToTask`; a terminal-before-
@@ -560,78 +709,112 @@ registry, or another profile configuration file for the initial use case.
 
 - F1. **Start and advertise**
   1. Resolve cwd or `--workspace`, user workspace, project-specific state root,
-     retention limits, listen address, advertised interface URL, source
-     credentials, and provider auth handles.
-  2. Validate state-root ownership, permissions, links, disjointness, workspace
-     identity, compiled repository catalog, snapshots, target namespace, backend
-     availability, profile state, Linux containment/helper availability,
-     provider/MCP/tool mount, descriptor, and network views, and credential
-     handles.
-  3. Enumerate the entire project-owned containment namespace. Reconcile
-     recorded and unknown identifiers and prove every set empty before
-     quarantining filesystem roots or releasing a retained execution lease.
+     disjoint immutable-base cache and invocation roots, cache/task retention,
+     workspace materializer, listener, advertised URL, digest-pinned acquisition
+     image, Docker endpoint, source credentials, provider homes, and configured
+     provider executable overrides.
+  2. Validate the SQLite state root, cache/invocation roots, workspace identity,
+     materializer policy, and static acquisition-image reference; compile
+     repository, snapshot, and target catalogs; verify Codex SDK and Pi RPC/
+     package compatibility; and check any global binary override exactly. Do not
+     contact Docker or the acquisition registry at startup.
+  3. Reconcile interrupted Tasks by removing any recorded acquisition container
+     and orphan staging, terminating any recorded Linux provider process group,
+     and marking the Task failed without resuming it. Release the durable lease
+     only after container removal, confirmed process-group absence, and cleanup
+     of recorded Task-owned runtime, view, and non-reusable base; otherwise keep
+     readiness false and the lease poisoned.
   4. Bind the requested address, including `0.0.0.0` when explicit; serve
      metadata-only health/readiness probes; and publish one Agent Card whose
      absolute interface URL, required extension, and target allowlist match the
      validated configuration.
 
-- F2. **Acquire repositories and execute**
+- F2. **Acquire or reuse repositories and execute**
   1. Negotiate A2A version and the required extension, then validate the strict
-     request, one text Part, target, repository-name/revision map, result schema,
-     deadline, and deployment-wide idempotency claim.
-  2. Ask the helper to allocate a stable empty containment set behind a start
-     gate. In one transaction, create or replay the claim and Task, acquire the
-     execution lease, and bind the containment identifier before acknowledgment.
-     Capacity failure settles the Task with `execution_capacity_unavailable`,
-     then destroys the empty set without releasing the gate or launching a
-     child. Commit failure likewise destroys the empty set.
-  3. Release the start gate. For each declared repository, classify App
-     applicability, select App or `gh` only by eligibility, resolve the revision,
-     fetch hermetically, verify the commit, revoke an App token, and remove every
-     acquisition credential.
-  4. Publish the complete workspace, run typed preparation, invoke the isolated
-     adapter, and validate any structured result while capturing live events.
-     Terminate and prove the containment set empty before safe filesystem/Git
-     evidence reads and produced-Artifact verification. Atomically settle the
-     terminal Task, evidence, Artifacts, cleanup, and lease release.
+     request, one text Part, target, repository-name/revision map, logical
+     working-directory selector, workspace access, result schema, deadline, and
+     deployment-wide idempotency claim.
+  2. In one SQLite transaction, create or replay the claim and Task and acquire
+     the execution lease before starting work. Capacity failure settles the Task
+     with `execution_capacity_unavailable` and launches neither Docker nor a
+     provider.
+  3. When every effective revision is a full commit, derive the immutable-base
+     key and pin a matching validated cache entry. On a miss or for mutable
+     branch/tag revisions, classify App applicability and mint a fresh
+     installation token or resolve the configured `gh` token only according to
+     eligibility. Probe Docker and the exact digest-pinned acquisition image,
+     then start it with only private staging, compiled request/policy, and the
+     selected token. The container fetches hermetically, verifies full commits,
+     writes the typed manifest, exits, and is removed.
+  4. On acquisition, revoke any App token, destroy source credentials, validate
+     the manifest/staging on the host, and atomically promote it to either a
+     reusable cache entry or a non-reusable Task-owned base. A cache hit performs
+     none of those acquisition, Docker, or credential operations. Every
+     non-publication path removes staging.
+  5. For `readOnly`, resolve the logical cwd directly in the base and create only
+     Task-private runtime state. For `readWrite`, create the unique writable view
+     through the selected materializer, then resolve cwd in that view. Run
+     access-appropriate typed preparation and start the adapter there as a direct
+     host process group with explicit environment and existing host auth.
+     Validate structured results while capturing bounded live events.
+  6. After the direct provider process settles and cancellation escalation
+     finishes, collect bounded truthful evidence; remove private runtime, any
+     writable view, and any non-reusable base; unpin a reusable base; and
+     atomically settle the Task, Artifacts, observed termination, cleanup, and
+     lease. If the process does not settle after `SIGKILL`, publish
+     `execution_termination_failed` without filesystem/Git evidence, retain
+     Task-owned state and the lease for runner teardown, make readiness false,
+     and stop admission until startup reconciliation confirms the process group
+     absent and cleans retained state.
 
-- F3. **Acquire an OCI snapshot and execute**
-  1. Perform the same version/extension validation, gated empty-containment
-     allocation, and atomic claim+Task+lease+containment commit as F2.
-  2. Resolve the named snapshot repository and digest-pinned reference.
-     Authenticate if required; pull and verify the direct image manifest,
-     workspace-manifest config blob, and distributable layers; apply changesets
-     in order; enforce all limits; and validate the exact project catalog.
-  3. Remove registry credentials, publish atomically, run typed preparation,
-     invoke the isolated adapter, and capture live events. Terminate and prove
-     quiescence before safe filesystem evidence and verified produced Artifacts,
-     then perform the same atomic settlement and lease release as F2.
+- F3. **Acquire or reuse an OCI snapshot and execute**
+  1. Perform the same version/extension validation and atomic
+     claim+Task+lease transaction as F2.
+  2. Pin a cache entry matching the named snapshot, manifest digest, workspace-
+     manifest digest, catalog/layout digest, and acquisition-contract version.
+     On a miss, probe Docker and the exact digest-pinned acquisition image, then
+     start it with the digest-pinned reference, staging mount, exact-host
+     registry credentials/CA material, and frozen network/archive policy. Pull
+     and verify the direct image manifest, workspace-manifest config, and
+     distributable layers; apply changesets in order; enforce all limits; and
+     emit the typed manifest.
+  3. On a miss, remove the container and registry material, validate and publish
+     the immutable base on the host, or remove staging on every non-publication
+     path. Then select the read-only shared base or read-write Task view and
+     settle through the same bare-metal and cleanup path as F2. Provider
+     execution never occurs in the acquisition container.
 
 - F4. **Cancel**
   1. Atomically persist cancellation intent if the Task remains cancelable.
-  2. Abort acquisition or provider work, escalate within the bounded termination
-     budget, prove containment quiescence, preserve truthful partial evidence,
-     clean up, and settle canceled.
+  2. For acquisition, stop and remove the Docker container, source material, and
+     unpublished staging. For provider work, request graceful adapter abort,
+     then escalate to process-group `SIGTERM` and `SIGKILL` within bounded
+     periods. Preserve only observed, bounded evidence; clean up and settle
+     canceled or failed according to the durable winning intent.
   3. Repeated cancellation while intent is pending does not re-signal work.
      Cancellation after any terminal state returns A2A
      `TaskNotCancelableError`.
 
 - F5. **Shut down**
   1. Stop new admission before signaling active work.
-  2. Persist shutdown intent, abort and escalate, drain live process evidence,
-     prove quiescence, and settle the accepted Task once.
-  3. Exit only after durable settlement and empty containment. If proof fails,
-     remain alive, not ready, and continue reaping while printing the stable
-     containment identifier and platform recovery command.
+  2. Persist shutdown intent, remove active acquisition Docker work or escalate
+     the direct provider process group, collect evidence only after the direct
+     provider settles, and settle the accepted Task once.
+  3. Exit after the bounded settlement and cleanup path. Document that CI runner
+     teardown is the final orphan boundary and that gateway shutdown does not
+     prove every model-tool descendant is gone.
 
 - F6. **Invoke from Promptfoo**
   1. Promptfoo constructs the AI Evals-owned TypeScript provider with
      `ProviderOptions`; the provider retains the ID and validates
-     `options.config` containing the private-network endpoint, target, and one
-     closed source-mode object.
+     `options.config` containing the private-network endpoint, target, optional
+     default logical working directory, optional default workspace access, and
+     one closed source-mode object.
   2. `callApi(prompt, context?, options?)` applies only valid
-     `context?.vars?.allagentsSource` leaf overrides, creates and retains one
-     high-entropy invocation key, and sends one A2A Message with
+     `context?.vars?.allagentsSource` leaves and optional strict
+     `context?.vars?.allagentsWorkingDirectory` and
+     `context?.vars?.allagentsWorkspaceAccess` replacements, creates and retains
+     one high-entropy invocation key, and sends one A2A Message with
      `configuration.returnImmediately: true`.
   3. After receiving the Task ID, subscribe to terminal updates. Resolve a
      terminal-before-subscribe or disconnected-stream race through `GetTask`
@@ -662,12 +845,14 @@ registry, or another profile configuration file for the initial use case.
   executed.
 - AE5. Repository mode accepts declared names and revision overrides, rejects an
   undeclared name or URL override, and records the resolved full commits.
-- AE6. An applicable GitHub App bypasses its token cache, mints a new
-  repository-scoped read-only token with adequate lifetime, validates the token,
-  and revokes it after acquisition. A corroborated existing repository with no
-  applicable installation uses the configured `gh` account. An uncorroborated
-  404, unknown applicability, auth, mint, validation, or revocation failure does
-  not fall through to `gh` or start the provider.
+- AE6. On a base-acquisition miss, including a mutable branch/tag request, an
+  applicable GitHub App bypasses its token cache, mints a repository-scoped
+  read-only token with adequate lifetime, validates and revokes it after
+  acquisition. A cache hit resolves no source credential.
+  A corroborated existing repository with no applicable installation uses the
+  configured `gh` account. An uncorroborated 404, unknown applicability, auth,
+  mint, validation, or revocation failure does not fall through to `gh` or start
+  the provider.
 - AE7. Snapshot mode accepts a direct image manifest with matching manifest,
   config/workspace, and layer digests; applies gzip/zstd layers and whiteouts in
   order; and enforces every fixed limit. Same-origin metadata redirects work;
@@ -677,22 +862,38 @@ registry, or another profile configuration file for the initial use case.
   foreign layers, digest/size mismatch, malformed whiteouts, undeclared
   repositories, redirect loops/rebinding, non-global destinations not declared
   for that source, and unapproved origins fail.
-- AE8. Repository and snapshot modes produce the same workspace-manifest shape
-  and exact compiled repository set/layout. OCI-contained commit identities are
-  snapshot-attested unless independently verified; source identity includes
-  completeness and ordered layer digests without origins.
+- AE8. Repository and snapshot modes produce the same path-free wire-visible
+  workspace-manifest shape and logical repository set. The gateway separately
+  validates the acquired base against the exact compiled private destinations.
+  OCI-contained commit identities are snapshot-attested unless independently
+  verified; source identity includes completeness and ordered layer digests
+  without origins. One hundred Tasks using the same immutable identity perform
+  one full acquisition while the entry remains cached and pinned correctly.
+  A branch or tag request acquires a non-reusable Task-owned base, never enters
+  the reusable cache, and removes that base during settlement or reconciliation.
 - AE9. Identical invocation-key replay, including after a lost response, returns
-  the original Task. Reusing the key with a changed target, source, prompt, or
-  result schema conflicts; separate high-entropy keys create separate Tasks.
-- AE10. Cancellation during Git, OCI pull, Codex, or Pi terminates the complete
-  process set and records cleanup. Unproved quiescence poisons readiness; the
-  gateway stays alive, rejects admission, and continues reaping until empty.
-- AE11. Kill fixtures before and after empty-containment creation, durable
-  Task/lease/containment binding, child clone, start-gate release, and response
-  acknowledgment leave no unrecorded live set. Restart enumerates the full
-  project-owned namespace, refuses unknown/nonempty sets, turns interrupted
-  Tasks into one terminal failure, never resumes a provider session, and keeps
-  terminal Tasks and embedded Artifacts retrievable until expiry.
+  the original Task. Reusing the key with changed target, source, prompt, logical
+  working directory, workspace access, or result schema conflicts. Separate
+  read-only Tasks may share one physical base and cwd while keeping private
+  runtime state. Separate read-write Tasks receive independent writable views
+  even when their logical working-directory selectors are equal.
+- AE10. Cancellation during a Git or OCI base acquisition stops and removes the
+  acquisition container and unpublished staging. Cancellation during Codex or
+  Pi requests graceful abort, then sends process-group `SIGTERM` and `SIGKILL`
+  on schedule.
+  The Task records observed termination and cleanup without claiming complete
+  descendant quiescence. If the direct process does not settle, the gateway
+  retains the Task's runtime and any writable view plus the lease, omits
+  filesystem/Git evidence, stops admission, and remains unready until post-
+  teardown startup reconciliation confirms the group absent.
+- AE11. Kill fixtures before and after durable Task/lease creation, acquisition-
+  container start, provider process-group recording, and response
+  acknowledgment leave one recoverable SQLite truth. Restart removes the
+  recorded acquisition container, orphan staging, and safe Task-owned state;
+  best-effort terminates the recorded process group; and turns the interrupted
+  Task into one terminal failure without resuming a provider session. It retains
+  the lease and stays unready unless provider absence and required cleanup are
+  confirmed. Terminal Tasks and Artifacts remain until expiry.
 - AE12. A valid structured result survives later check or evidence failure as a
   valid result with an overall failed Task; invalid or absent results are never
   published as valid.
@@ -701,56 +902,63 @@ registry, or another profile configuration file for the initial use case.
   target.
 - AE14. Two gateways for different workspaces use distinct private state roots;
   a second process for the same root fails the exclusive lock. Wrong-owner,
-  permissive, linked, hard-linked, or overlapping roots fail startup. The real
-  helper VFS rejects database, WAL, SHM, journal, temporary-file, symlink,
-  hard-link, and rename-swap attacks. Process-kill fixtures at transaction, file
-  sync, directory sync, and response boundaries recover either the complete old
-  or new generation and never lose an acknowledged Task or publish false
-  success.
+  permissive, linked, or overlapping roots fail startup. Ordinary Bun SQLite
+  transactions with foreign keys and `synchronous=FULL` recover a committed
+  Task/claim/lease generation after process-kill fixtures and never acknowledge
+  an uncommitted Task or publish false success; no custom VFS is required.
 - AE15. Barrier-controlled provider-terminal, caller-cancel, deadline, and
-  shutdown races durably select one internal intent and one abort/quiescence
-  path during Git, OCI, preparation, Codex, Pi, or evidence. Subscribers observe
-  no terminal Task until one transaction writes status, integrity Artifact,
-  bounded evidence, result/failure, termination, cleanup, and lease release.
-  Later reaping changes only internal readiness/recovery state.
+  shutdown races durably select one internal intent and one abort path during
+  Docker acquisition, preparation, Codex, Pi, or evidence. Normal settlement
+  writes status, integrity Artifact, bounded evidence, result/failure, observed
+  termination, cleanup, and lease release in one transaction. The
+  `execution_termination_failed` exception writes the terminal failure without
+  filesystem/Git evidence and deliberately retains the poisoned lease.
 - AE16. Repeated cancel while cancellation is pending is idempotent; cancel
   after canceled, completed, failed, or rejected returns
   `TaskNotCancelableError`.
-- AE17. A workspace containing `setup` shell entries never executes them through
-  gateway acquisition or startup. Real Codex/Pi child and grandchild tool paths
-  are helper-mediated: filesystem, environment, inherited descriptor, `/proc`,
-  and magic-link probes cannot read provider/MCP secrets, operator stores, or
-  gateway state. Agent Card, Task operations, host loopback, bind/advertised
-  addresses, ingress, and management-network probes fail from every invocation
-  role; only compiled role egress succeeds.
-- AE18. Evidence is collected only after containment quiescence. An escaping
-  link, hard link, special file, sparse-file abuse, replaced inode, or `.git`
-  indirection is rejected and Git inspection runs without repository-controlled
-  execution. Unknown quiescence produces no verified filesystem Artifact.
+- AE17. A workspace containing `setup` shell entries never executes them during
+  acquisition or startup. The acquisition image receives only staging,
+  source-only credentials, exact source network policy, and archive limits; it
+  receives no host home, Docker socket, gateway state, provider auth, Codex, Pi,
+  or coding harness. Codex and Pi run afterward as direct host processes with
+  explicit environments that preserve required host identity/auth paths and
+  omit unrelated ambient values.
+- AE18. Evidence collection starts only after the direct provider process has
+  settled and process-group escalation has completed. Git inspection disables
+  repository-controlled execution, and the integrity Artifact distinguishes
+  observed direct-process termination and cleanup from full descendant
+  quiescence. Documentation explicitly states that AllAgents provides no
+  hostile-code or model-tool secret-isolation guarantee.
 - AE19. The 1001st unexpired retained Task is rejected with
   `retention_capacity_exhausted`; no retained Task is evicted before TTL. While
   one Task holds the execution lease, a barrier-controlled second request
-  settles `execution_capacity_unavailable` and launches no helper child; races
-  and restart never produce two lease holders.
+  settles `execution_capacity_unavailable` and launches no acquisition or
+  provider child; races and restart never produce two lease holders.
 - AE20. Official HTTP+JSON client fixtures send `A2A-Version: 1.0`, exercise
   required-extension activation and both `SendMessage` modes, preserve unrelated
   metadata, verify standard `google.rpc.Status` errors, and cover every
   `ListTasks` filter, cursor, order, response field, and artifact-inclusion rule.
-  A terminal Task contains one extension-marked integrity Artifact plus
-  referenced produced Artifacts using unified Parts.
+  A terminal Task contains one extension-marked integrity Artifact with its
+  effective logical working directory, workspace access, and referenced
+  produced Artifacts using unified Parts.
 - AE21. The AI Evals Promptfoo fixture has a top-level prompt and disables
   sharing, caching, result writes, and concurrency above one. It loads one
   repository-mode and one snapshot-mode provider, sends only closed logical
-  source data, retains one invocation key across ambiguous retries, and cancels
-  an accepted Task on abort. Both calls return scorable output, normalized token
+  source, working-directory, and workspace-access data, replaces cwd and access
+  per trial through `allagentsWorkingDirectory` and
+  `allagentsWorkspaceAccess`, retains one invocation key across ambiguous
+  retries, and cancels an accepted Task on abort. Two read-only trials for the
+  same immutable source share the validated base; two read-write trials receive
+  independent disposable views. Both return scorable output, normalized token
   usage, and Task/Artifact/logical-provenance metadata. Safe failure metadata
   includes code, retryability, and accepted Task ID. Calls with omitted context
-  work; unknown variables, mutable revisions, origins, destinations, or
-  undeclared names fail before submission.
+  work; unknown variables, invalid or escaping relative directories, physical
+  paths, mutable revisions, origins, destinations, materializer choices, or
+  undeclared names fail before provider execution.
 
 ### Success Criteria
 
-- `allagents gateway serve` starts from a real workspace with no deployment YAML.
+- `allagents-gateway serve` starts from a real workspace with no deployment YAML.
 - Explicit loopback, private-interface, and `0.0.0.0` listeners work with a
   distinct valid advertised interface URL; health/readiness reflect admission.
 - The official A2A client exercises version and extension negotiation, both send
@@ -758,33 +966,49 @@ registry, or another profile configuration file for the initial use case.
   cancel, terminal cancel errors, Task-embedded Artifacts, standard HTTP+JSON
   errors, and expiry.
 - An AI Evals-style Promptfoo custom-provider fixture consumes secure-default
-  YAML for both source modes, propagates post-acceptance cancellation, and maps a
+  YAML for both source modes, selects a logical cwd and access mode per trial,
+  proves shared-base reuse for read-only trials and independent disposable views
+  for read-write trials, propagates post-acceptance cancellation, and maps a
   terminal Task to `ProviderResponse` without adding Promptfoo to the AllAgents
   runtime.
-- Built-in Codex/Pi and gateway-enabled profile targets pass one conformance
-  suite, including reserved-ID collisions and Codex native-schema gating.
-- Direct Git and OCI snapshot fixtures produce equivalent validated workspace
-  manifests and truthful complete provenance.
-- GitHub App eligibility, 404 ambiguity, unknown failure, no-installation `gh`
-  fallback, fresh-token validation/revocation, OCI authentication and challenge
-  handling, and pre-provider credential teardown are proven end to end.
-- No request can supply a command, executable, URL, destination, credential,
-  mutable OCI tag, backend override, or arbitrary environment value.
-- State-store crash, deadline/cancellation/terminal/shutdown race, descendant
-  escape, unsafe evidence, and stale-root scenarios fail closed.
-- The bundled CLI and packaged Linux helper pass a trusted-network smoke test
-  against project and user workspaces created under `/tmp/`.
+- Built-in Codex/Pi and gateway-enabled profile targets pass one backend
+  conformance suite, including reserved-ID collisions, existing-host-auth
+  behavior, explicit environment construction, cancellation escalation, and
+  Codex native-schema gating.
+- Direct Git and OCI snapshot acquisition in the exact digest-pinned image
+  produces equivalent typed manifests and truthful provenance; repeated
+  immutable requests reuse one validated base and the image is removed before
+  provider execution. GitHub App eligibility, 404 ambiguity, unknown failure,
+  no-installation `gh` fallback, base-acquisition token validation/revocation, OCI
+  authentication/challenge handling, staging validation, and pre-provider
+  credential teardown are proven end to end.
+- No request can supply a command, executable, URL, physical cwd, configured
+  destination, credential, mutable OCI tag, backend or materializer override,
+  arbitrary environment value, Docker option, image reference, or mount.
+- SQLite crash/race/restart, acquisition-container cleanup, host provider
+  process-group cancellation, and truthful post-settlement evidence scenarios
+  pass without claiming complete descendant containment.
+- The independently packaged Bun gateway passes a trusted-network smoke against
+  project and user workspaces under `/tmp/`; a CLI-only install fetches neither
+  the gateway package nor the acquisition image.
 
 ### Scope Boundaries
 
 **In scope**
 
 - A2A 1.0 HTTP+JSON and the required AllAgents extension.
-- One process and one active invocation at a time initially.
-- Built-in and gateway-enabled profile-backed Codex/Pi targets.
-- Direct declared Git repositories and named OCI workspace snapshots.
+- One gateway process and one active invocation at a time initially.
+- Built-in and gateway-enabled profile-backed Codex/Pi host execution.
+- Docker-only acquisition of direct declared Git repositories and named OCI
+  workspace snapshots when no reusable validated base exists.
+- Reusable immutable bases and Task-private runtime state for read-only
+  execution; non-reusable Task-owned bases for mutable revisions; unique
+  disposable writable views for read-write execution.
+- Logical workspace-root or declared-repository-relative provider cwd plus
+  explicit `readOnly | readWrite` access selected at runtime.
 - GitHub App and configured GitHub CLI acquisition credentials.
-- Local durable Task/evidence storage, cancellation, cleanup, and provenance.
+- Local durable Task/evidence storage, bounded base caching, process-group
+  cancellation, materialization cleanup, and provenance.
 - Listen addresses including `0.0.0.0`.
 
 **Out of scope**
@@ -793,13 +1017,17 @@ registry, or another profile configuration file for the initial use case.
   Internet hardening.
 - `gateway.yaml`, `worker.yaml`, remote workers, mTLS worker links, Kubernetes
   routing, autoscaling, and multiple gateway replicas.
-- Caller-provided repository or registry origins, mutable OCI tags, custom
-  materializers, Dockerfiles, Compose files, or acquisition commands.
+- Caller-provided physical workspaces/cwds, repository or registry origins,
+  mutable OCI tags, custom materializers, Dockerfiles, Compose files, or
+  acquisition commands.
 - GitHub Enterprise Server and multiple ordered Apps/accounts in the initial
   delivery.
 - OpenCode, Claude, Copilot, OMP, arbitrary CLI, and TUI adapters.
 - Evaluation orchestration and automatic retries.
-- Non-Linux gateway execution in v1; ordinary AllAgents CLI behavior remains
+- Per-provider containers; cgroups, pidfds, namespaces, nftables, `openat2`, a
+  native platform layer, non-bypassable spawn mediation, hostile-code
+  containment, and secret isolation from model-invoked tools.
+- Non-Linux gateway execution in v1; ordinary `allagents` CLI behavior remains
   cross-platform.
 
 ### Sources
@@ -810,6 +1038,9 @@ registry, or another profile configuration file for the initial use case.
 - [Source credential broker precedents](../research/source-credential-broker-precedents.md)
 - [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/)
 - [A2A extension guide](https://a2a-protocol.org/latest/topics/extensions/)
+- [Official A2A JavaScript SDK](https://github.com/a2aproject/a2a-js)
+- [Bun workspaces](https://bun.sh/docs/install/workspaces)
+- [Bun SQLite](https://bun.sh/docs/api/sqlite)
 - [Promptfoo custom providers](https://www.promptfoo.dev/docs/providers/custom-api/)
 - [Promptfoo configuration reference](https://github.com/promptfoo/promptfoo/blob/main/site/docs/configuration/reference.md)
 - [OpenAI Codex SDK](https://developers.openai.com/codex/sdk/)
@@ -817,10 +1048,15 @@ registry, or another profile configuration file for the initial use case.
 - [GitHub App installation tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
 - [Git credential helpers](https://git-scm.com/docs/gitcredentials)
 - [Docker credential stores](https://docs.docker.com/reference/cli/docker/login/#credential-stores)
-- [Node.js SQLite API](https://nodejs.org/docs/latest-v22.x/api/sqlite.html)
 - [OCI Image Specification](https://github.com/opencontainers/image-spec)
 - [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec)
-- [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html)
+- [GitHub Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [JFrog Artifactory Docker repositories](https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-repositories)
+- [JFrog Container Registry image](https://hub.docker.com/r/jfrog/artifactory-jcr)
+- [Docker OverlayFS storage driver](https://docs.docker.com/engine/storage/drivers/overlayfs-driver/)
+- [Docker VFS copy fallback](https://docs.docker.com/engine/storage/drivers/vfs-driver/)
+- [Windows ReFS block cloning](https://learn.microsoft.com/en-us/windows-server/storage/refs/block-cloning)
+- [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
 ---
 
@@ -828,22 +1064,30 @@ registry, or another profile configuration file for the initial use case.
 
 ### Key Technical Decisions
 
-- KTD1. **Use the official A2A JavaScript SDK transport around an
-  AllAgents-owned request handler.** Do not use `DefaultRequestHandler` or its
-  non-transactional `TaskStore` seam. Implement the SDK's request-handler
-  interface so AllAgents controls UUIDv7 creation, atomic `createOrReplay`,
-  monotonic settlement, listing, retention, expiry, and HTTP+JSON error details
-  while retaining standard Task/Artifact carriers.
-- KTD2. **Generate and publish the extension and storage contracts from canonical
-  Zod schemas.** The versioned extension specification at its declared URI
-  defines Agent Card params, activation, Message metadata/extensions, request,
-  Task/Artifact, idempotency, error, replay, examples, and versioning. Generate
-  public JSON Schemas, Task-store, workspace-manifest, and adapter types from the
-  same source. Keep backend-specific fields private.
-- KTD3. **Use a single-process supervisor, not a remote worker protocol.** One
-  service owns Task state, staging, publication, backend child processes,
-  evidence, termination, and cleanup. Child processes remain contained behind
-  an invocation lifecycle boundary.
+- KTD1. **Gate the official A2A JavaScript SDK in the shipped Bun server
+  direction before adopting it.** Pin the exact SDK version and prove Agent Card
+  discovery, both send modes, streaming, Task get/list/cancel, resubscription,
+  extension negotiation, metadata preservation, and HTTP error envelopes by
+  driving the production gateway server with an independent official client
+  fixture. Implement the SDK's public request-handler seam while AllAgents owns
+  UUIDv7 creation, atomic `createOrReplay`, monotonic settlement, listing,
+  retention, expiry, and HTTP+JSON error details. Do not use an SDK default store
+  as the transaction boundary or replace A2A with a bespoke protocol.
+- KTD2. **Keep contracts portable and generated from narrow TypeScript
+  packages.** `packages/workspace-config` owns project/user parsing and compiled
+  catalogs; `packages/execution-contracts` owns A2A extension, request,
+  Task/Artifact, idempotency, result, error, adapter, and evidence schemas;
+  `packages/acquisition-contracts` owns acquisition requests, typed manifests,
+  OCI snapshot rules, and fixed limits. Check generated JSON Schemas and golden
+  accepted/rejected examples into `contracts/` for the host gateway, acquirer
+  image, public docs, and consumer fixtures. Do not create `core`, `common`, or
+  a speculative shared package.
+- KTD3. **Use one gateway supervisor, not a remote worker protocol.** The Bun
+  gateway owns Task state, immutable-base caching, Task runtime/view
+  materialization, provider child processes, evidence, termination, and cleanup.
+  It creates an ephemeral Docker container only when no reusable validated base
+  exists, removes it before provider execution, and launches Codex/Pi directly
+  on the trusted host in Linux process groups.
 - KTD4. **Make application authentication intentionally absent.** All Tasks and
   Artifacts share one deployment namespace. The listener accepts explicit
   `0.0.0.0`; network controls are external. Bind and advertised interface URL
@@ -853,88 +1097,161 @@ registry, or another profile configuration file for the initial use case.
   profile-client schemas. A gateway-only compiler normalizes the project
   repository catalog and resolves each public launcher ID to one profile/client.
   Add no deployment YAML. (session-settled: user-directed.)
-- KTD6. **Keep source input name-based and closed.** Repository requests carry
-  only declared-name revisions; snapshot requests carry only a declared snapshot
-  name and immutable digests. Compute one canonical source identity for
-  idempotency and provenance.
-- KTD7. **Freeze direct Git and OCI acquisition profiles.** Git runs with
-  hermetic config and an invocation credential helper. An AllAgents-owned
-  minimal OCI Distribution client in the Rust helper uses pinned `reqwest`
-  (rustls, redirects and ambient proxies disabled), `tar`, `flate2`, and `zstd`
-  crates for streaming pull, bounded authentication, decoding, and changeset
-  application behind the helper's typed protocol. The client implements only the
-  v1 direct-image manifest/config/layer profile, RFC 8785 workspace-manifest
-  config, fixed extraction limits, and explicit Distribution-Spec authentication
-  and redirect policy. A test-only deterministic reference packer produces the
-  conformance fixture that freezes the format.
-- KTD8. **Select GitHub credentials by provable three-way eligibility.** App
-  lookup 200 is eligible; 404 is ineligible only with independent repository-
-  existence proof; all ambiguous outcomes are unknown. Fresh App tokens bypass
-  SDK cache, are validated and revoked, and only positive ineligibility permits
-  the configured `gh` account. (session-settled: user-directed.)
+- KTD6. **Keep source, cwd, and access input logical and closed.** Repository
+  requests carry only declared-name revisions; snapshot requests carry only a
+  declared snapshot name and immutable digests. Working-directory requests
+  select only the effective workspace root or a declared repository plus a
+  bounded relative directory. `workspaceAccess` is exactly `readOnly` or
+  `readWrite`. Read-only Tasks may share the immutable base; read-write Tasks
+  receive Task-ID-derived views. The gateway never accepts or returns a caller
+  path or materializer choice. Include canonical source identity, logical cwd,
+  and access in idempotency and provenance.
+- KTD7. **Freeze Docker-only base acquisition.** Build `apps/acquirer` once as a
+  multi-architecture GHCR image and select it by manifest digest. Each request
+  without a reusable validated base starts a fresh container with one staging
+  bind mount, a typed acquisition request, source-only credentials, strict
+  source network policy, fixed size/archive limits, no host home, and no Docker
+  socket.
+  The image owns hermetic Git plus the minimal OCI Distribution client
+  and implements only the v1 direct-image manifest/config/layer profile,
+  RFC 8785 workspace-manifest config, explicit authentication/redirect rules,
+  streaming digest checks, and changeset application. It emits a typed manifest,
+  exits, and is removed before host validation/publication. It contains and
+  downloads no Codex, Pi, or other coding harness. A deterministic producer
+  fixture freezes the format.
+- KTD8. **Select GitHub credentials by provable three-way eligibility.** On a
+  base-acquisition miss, App lookup 200 is eligible; 404 is ineligible only with
+  independent repository-existence proof; all ambiguous outcomes are unknown.
+  Fresh App tokens bypass credential cache, are validated and revoked, and only
+  positive ineligibility permits the configured `gh` account. The selected token
+  enters only the acquisition container; base-cache hits resolve no credential.
+  (session-settled: user-directed.)
 - KTD9. **Keep one behavior-focused `codex | pi` adapter registry.** Direct
-  targets and gateway-enabled profile targets resolve to the same adapter types
-  and conformance tests; profile context modifies server-owned configuration,
-  never the public command line. A target is ready only when its pinned backend
-  exposes a non-bypassable spawn hook through which the helper launches every
-  MCP and model-tool process with separate filesystem, environment, descriptor,
-  secret, and network views.
-- KTD10. **Put durable Task truth behind the Rust helper's SQLite VFS.** The
-  helper owns the single process-lifetime SQLite connection and exposes typed
-  transactional store operations; TypeScript never opens the database by path.
-  A small audited VFS roots every database, WAL, SHM, journal, and temporary-file
-  open beneath a preopened private state-directory descriptor with `openat2`
-  beneath/no-symlink checks, rejects hard links, and fsyncs files and containing
-  directories. SQLite uses WAL, foreign keys, and `synchronous=FULL`. Claims,
-  Tasks, events, bounded Artifact bytes, execution lease, containment identity,
-  internal outcome intent, and expiry live in transactional tables.
-  `createOrReplay`, lease acquisition, and terminal settlement are transactions;
-  acknowledge only committed state. Crash recovery yields a complete old or new
-  generation, never a mixed or missing acknowledged Task. Integrity, VFS, helper
-  protocol, or durability failure stops admission and prevents false success.
-- KTD11. **Package one enforceable Linux security and state helper.** V1 supports
-  Linux x64/arm64 with cgroup v2, `clone3(CLONE_INTO_CGROUP)`, pidfds, `openat2`
-  beneath/no-symlink resolution, mount and network namespaces, and nftables
-  through a small audited Rust helper distributed in platform-specific optional
-  packages. Its typed inherited-pipe protocol owns SQLite operations, creates
-  empty containment behind a durable start gate, atomically launches and tracks
-  the complete acquisition/provider descendant set, mediates every MCP/tool
-  spawn, builds role-specific filesystem/environment/descriptor/network views,
-  terminates and waits for membership, and performs safe file operations.
-  Missing kernel features, delegated cgroup/network access, helper package,
-  backend spawn mediation, or protocol compatibility fails before binding;
-  there is no weaker fallback. A poisoned process remains alive to reap until
-  the set is empty.
-- KTD12. **Capture live events, then collect durable filesystem evidence only
-  after quiescence.** Evidence retains bounded source, Git, provider, result,
-  Artifact, and cleanup facts. Post-execution workspace reads use the helper's
-  descriptor-relative no-follow handles, revalidate identity/size, and reject
-  Git metadata indirections or repository-controlled execution. Structured logs
-  remain metadata-only and never retain secrets or unrestricted
-  request/output/file bodies.
+  targets and gateway-enabled profile targets resolve to the same narrow
+  AllAgents-owned TypeScript adapter contract and conformance suite; profile
+  context modifies server-owned configuration, never public argv. Codex uses
+  pinned `@openai/codex-sdk` first; app-server is allowed only for a proven
+  required SDK gap. Pi uses a pinned supported package/RPC surface. Neither
+  adapter downloads runtimes per request or adopts AI SDK Harnesses. A global
+  binary override requires an exact compatibility probe.
+- KTD10. **Keep durable Task truth inside ordinary Bun SQLite ownership.** The
+  gateway holds the process-lifetime `bun:sqlite` connection, private state
+  root, and exclusive lock. SQLite uses foreign keys, transactional
+  `createOrReplay`/lease/settlement/expiry operations, WAL where supported, and
+  `synchronous=FULL`; acknowledge only committed state. Claims, Tasks, events,
+  bounded Artifact bytes, execution lease, acquisition-container/staging/
+  transient-base identity, provider process-group identity, internal outcome
+  intent, and expiry live in tables. Startup integrity or durability failure
+  stops admission and prevents false success. Do not build a custom VFS or
+  native file layer.
+- KTD11. **Treat the trusted Linux CI job as the provider isolation boundary.**
+  The gateway uses Docker only when no reusable validated base exists. Codex and
+  Pi run bare metal with the same CI-job authority as the gateway and existing
+  host
+  auth. Read-only is a consumer-selected cooperative contract with private
+  runtime state, optional-lock suppression, and native provider policy where
+  available; it is not hostile-code containment.
+  Construct provider environments explicitly to preserve required identity/auth
+  paths while omitting unrelated ambient values, but do not claim this protects
+  secrets from model-invoked tools. Linux cancellation is adapter abort, then
+  process-group `SIGTERM`, then `SIGKILL`; runner teardown is the final orphan
+  boundary. Do not add cgroups, pidfds, `openat2`, namespaces, nftables, native
+  containment packages, per-provider Docker, or spawn mediation.
+- KTD12. **Capture live events, then collect bounded evidence after the direct
+  provider settles.** Evidence retains bounded source, Git, provider, result,
+  Artifact, observed termination, and cleanup facts. Git inspection disables
+  repository-controlled execution. Evidence and docs must not turn process-
+  group termination into a claim that all descendants are quiescent or that
+  model-tool output is redacted.
+- KTD13. **Use one private Bun workspace without coupling releases.** The root
+  package is private orchestration. `apps/cli` publishes `allagents`;
+  `apps/gateway` publishes `allagents-gateway`; `apps/acquirer` is never
+  published to npm and ships only as a digest-pinned multi-architecture GHCR
+  image. Shared packages are limited to `packages/workspace-config`,
+  `packages/execution-contracts`, and `packages/acquisition-contracts`;
+  generated portable fixtures live under `contracts/`.
+
+  CLI and gateway have independent versions, tags, changelogs, triggers, npm
+  tarballs, and release jobs. A CLI-only install resolves neither the gateway nor
+  the acquisition image. A gateway release first builds the acquisition image
+  once for the exact commit, resolves and records its multi-architecture
+  manifest plus supported platform digests, runs package and registry checks
+  against those exact immutable artifacts, and only then publishes the exact
+  `allagents-gateway` npm tarball. A gateway-only release never publishes
+  `allagents`; no Rust, Cargo, native binary, or platform npm package exists.
+- KTD14. **Use tiered OCI registry conformance bound to exact release
+  artifacts.** Every pull request runs a local Distribution fixture and a live
+  public digest-pinned GHCR snapshot pull through the exact acquirer image. A
+  reusable release workflow adds authenticated least-privilege GHCR and pinned
+  private-CA JFrog Artifactory/JCR coverage.
+
+  The callable workflow receives the exact gateway npm tarball, acquisition
+  multi-architecture manifest digest, per-platform image digests where the
+  registry supports them, build commit, and expected compatibility output; it
+  never rebuilds either artifact. Reports record the tested commit, npm tarball
+  digest, acquisition manifest/platform digests, architecture, image/registry
+  identity, auth mode, snapshot descriptor digests, and compatibility output,
+  including partial evidence on red paths. They cover valid anonymous and
+  authenticated pulls plus wrong credentials, insufficient permissions, digest
+  mismatch, missing/wrong CA, invalid media, and repository-path failures. The
+  gateway release must verify GHCR and JFrog against those exact artifacts
+  before npm publication; the JFrog target need not run on every pull request.
+
+### Package compatibility contract
+
+`allagents-gateway compatibility --format json` emits one strict, versioned
+object containing `product: "allagents-gateway"`, `gatewayVersion`,
+`buildCommit`, `runtime: "bun"`, the pinned acquisition image repository and
+multi-architecture manifest digest, supported acquisition platforms/digests,
+and supported A2A, coding-extension, workspace, execution-contract, acquisition-
+contract, and snapshot versions. The packed npm tarball, clean-install smoke,
+registry workflow, and release workflow consume this same object.
+
+An optional `allagents gateway ...` dispatcher locates but never installs the
+separate gateway. It accepts independent CLI and gateway versions only when the
+product identity and required contract-version ranges intersect; otherwise it
+prints a clear install/upgrade error and does not start the service. The gateway
+rejects an acquisition image whose manifest digest, platform digest, build
+identity, or acquisition-contract version differs from its release metadata.
+Golden fixtures cover exact matches, supported CLI/gateway version skew,
+unsupported contract versions, wrong image manifests/platforms, divergent npm
+tarball or image build identities, and newest/oldest supported pairs. There are
+no platform npm packages or native-binary compatibility checks.
 
 ### High-Level Technical Design
 
 ```mermaid
 flowchart TB
-  C[Trusted-network A2A caller] --> G[Gateway server]
-  G --> H[Linux security and state helper]
-  H --> S[SQLite Task store]
-  G --> W[Workspace compiler]
+  C[Trusted-network A2A caller] --> G[Bun gateway host process]
+  G --> S[Bun SQLite Task store]
+  G --> W[workspace-config compiler]
   W --> PW[Project workspace.yaml]
   W --> UW[User workspace.yaml]
-  G --> A[Acquisition supervisor]
+  G --> BL[Reusable immutable-base lookup]
+  BL -->|hit| RB[Validated reusable base and pin]
+  BL -->|miss or mutable revision| D[Docker acquisition coordinator]
+  D --> A[Digest-pinned acquirer container]
   A --> Git[Declared Git repositories]
   A --> OCI[Named OCI snapshot]
-  A --> H
-  A --> P[Atomically published invocation workspace]
-  G --> R[Closed adapter registry]
-  R --> Codex[Codex SDK]
-  R --> Pi[Pi RPC]
-  Codex --> H
-  Pi --> H
-  H --> E[Quiescence then evidence and cleanup]
-  E --> S
+  A --> ST[Staging plus typed manifest]
+  ST --> V[Host validation and atomic base promotion]
+  V -->|exact identity| RB
+  V -->|mutable revision| TB[Task-owned transient base]
+  RB --> RO[Read-only base plus private runtime]
+  TB --> RO
+  RB --> M[Block clone or rootless OverlayFS or copy]
+  TB --> M
+  M --> RW[Task-owned writable view]
+  RO --> WD[Logical cwd resolver]
+  RW --> WD
+  WD --> R[Closed host adapter registry]
+  R --> Codex[Pinned Codex SDK]
+  R --> Pi[Pinned Pi RPC/package]
+  Codex --> PG[Linux provider process group]
+  Pi --> PG
+  PG --> E[Direct-process settlement then bounded evidence]
+  E --> C[Remove Task runtime, view, and transient base]
+  C --> S
 ```
 
 ### Configuration Contract
@@ -949,88 +1266,117 @@ No `gateway.yaml` or `worker.yaml` is introduced.
 | Advertised interface URL | `--advertise-url` | `ALLAGENTS_GATEWAY_ADVERTISE_URL` | `http://127.0.0.1:4732` only with the default loopback listener; otherwise required |
 | Project workspace | `--workspace` | `ALLAGENTS_GATEWAY_WORKSPACE` | cwd |
 | State directory | `--state-dir` | `ALLAGENTS_GATEWAY_STATE_DIR` | `~/.allagents/gateway/<workspace-id>` |
+| Invocation workspace root | `--invocation-root` | `ALLAGENTS_GATEWAY_INVOCATION_ROOT` | `~/.allagents/gateway-workspaces/<workspace-id>` |
+| Immutable-base cache root | `--base-cache-dir` | `ALLAGENTS_GATEWAY_BASE_CACHE_DIR` | `~/.allagents/gateway-cache/<workspace-id>` |
+| Immutable-base cache budget | `--base-cache-max-bytes` | `ALLAGENTS_GATEWAY_BASE_CACHE_MAX_BYTES` | `64GiB` |
+| Workspace materializer | `--workspace-materializer` | `ALLAGENTS_GATEWAY_WORKSPACE_MATERIALIZER` | `auto` (`auto | cow | copy`) |
+| Automatic copy ceiling | `--max-auto-copy-bytes` | `ALLAGENTS_GATEWAY_MAX_AUTO_COPY_BYTES` | `1GiB` |
 | Terminal Task TTL | `--task-ttl` | `ALLAGENTS_GATEWAY_TASK_TTL` | `24h` |
 | Retained Task limit | `--max-retained-tasks` | `ALLAGENTS_GATEWAY_MAX_RETAINED_TASKS` | `1000` |
 | Per-Task retained bytes | `--max-task-bytes` | `ALLAGENTS_GATEWAY_MAX_TASK_BYTES` | `64MiB` |
+| Acquisition image | `--acquisition-image` | `ALLAGENTS_GATEWAY_ACQUISITION_IMAGE` | release-embedded `ghcr.io/.../allagents-acquirer@sha256:<manifest>` |
+| Docker endpoint | `--docker-host` | `ALLAGENTS_GATEWAY_DOCKER_HOST` | existing local Docker context/socket |
+| Docker acquisition network | `--acquisition-network` | `ALLAGENTS_GATEWAY_ACQUISITION_NETWORK` | release-documented acquisition-only network |
+| Acquisition timeout | `--acquisition-timeout` | `ALLAGENTS_GATEWAY_ACQUISITION_TIMEOUT` | `900s`, capped by remaining Task deadline |
 | GitHub App ID | `--github-app-id` | `ALLAGENTS_GATEWAY_GITHUB_APP_ID` | unset |
 | App private key file | `--github-app-private-key-file` | `ALLAGENTS_GATEWAY_GITHUB_APP_PRIVATE_KEY_FILE` | unset |
 | App installation ID | `--github-app-installation-id` | `ALLAGENTS_GATEWAY_GITHUB_APP_INSTALLATION_ID` | discovered/unset |
 | GitHub CLI account | `--github-cli-account` | `ALLAGENTS_GATEWAY_GITHUB_CLI_ACCOUNT` | unset |
 | OCI auth file | `--oci-auth-file` | `ALLAGENTS_GATEWAY_OCI_AUTH_FILE` | unset |
 | OCI credential helper | `--oci-credential-helper` | `ALLAGENTS_GATEWAY_OCI_CREDENTIAL_HELPER` | unset |
-| Codex auth file | `--codex-auth-file` | `ALLAGENTS_GATEWAY_CODEX_AUTH_FILE` | supported Codex default if safe |
-| Pi auth file | `--pi-auth-file` | `ALLAGENTS_GATEWAY_PI_AUTH_FILE` | supported Pi default if safe |
+| OCI CA bundle map | `--oci-ca-bundle-map` | `ALLAGENTS_GATEWAY_OCI_CA_BUNDLE_MAP` | system roots only |
+| Codex home | `--codex-home` | `ALLAGENTS_GATEWAY_CODEX_HOME`, then `CODEX_HOME` | existing supported host Codex home |
+| Codex binary override | `--codex-bin` | `ALLAGENTS_GATEWAY_CODEX_BIN` | pinned SDK-managed surface; unset |
+| Pi home | `--pi-home` | `ALLAGENTS_GATEWAY_PI_HOME` | existing supported host Pi home |
+| Pi binary override | `--pi-bin` | `ALLAGENTS_GATEWAY_PI_BIN` | pinned package/RPC surface; unset |
+| Graceful abort period | `--abort-grace` | `ALLAGENTS_GATEWAY_ABORT_GRACE` | `10s` |
+| SIGTERM period | `--term-grace` | `ALLAGENTS_GATEWAY_TERM_GRACE` | `10s` |
+| Final cleanup period | `--cleanup-timeout` | `ALLAGENTS_GATEWAY_CLEANUP_TIMEOUT` | `30s` |
 
-Precedence is CLI over environment over default. The advertised value is the
-absolute URL placed in `AgentCard.supportedInterfaces`; wildcard hosts are
-invalid, non-loopback listeners require an explicit value, and production uses
-HTTPS. Credential options name file handles, accounts, or IDs, never secret
-values.
+Precedence is CLI over gateway-specific environment over provider-standard
+environment over default. For Codex this is `--codex-home`,
+`ALLAGENTS_GATEWAY_CODEX_HOME`, then the ordinary `CODEX_HOME` identity
+location. The advertised value is the absolute URL placed in
+`AgentCard.supportedInterfaces`; wildcard hosts are invalid, non-loopback
+listeners require an explicit value, and production uses HTTPS. The acquisition
+image must be a full `repository@sha256:<manifest>` reference; tags are rejected.
+The gateway verifies that the local platform resolves to the release-recorded
+platform digest before starting acquisition.
 
-The Linux helper resolves every key/auth/helper path from a verified root with
-`openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, rejects
-group/world-writable parent directories and linked or non-regular leaves, opens
-with close-on-exec/no-follow, and verifies owner, mode, link count, device, and
-inode with `fstat` after open. Consumers read the verified descriptor rather than
-reopening the path. The helper executes a credential-helper binary from that
-verified inode; a path or inode swap fails. Auth leaves are current-user/root-
-owned, have one link, and are no broader than `0600`; helper leaves are
-current-user/root-owned and not group/world-writable.
+Docker is a base-acquisition dependency only when no reusable validated base
+exists. The configured endpoint must support creating, waiting for, stopping,
+and removing a container plus bind-mounting gateway-created staging. A validated
+cache hit does not contact Docker or resolve a source credential. The gateway
+never passes the
+Docker socket into the container. The acquisition network is preconfigured by
+the operator to reach only declared Git/OCI source hosts and required auth/
+redirect hosts; the gateway supplies the stricter per-request host policy to the
+acquirer. No Docker flag, mount, network, image, or environment override is
+accepted from A2A.
 
-Setting both OCI options is a startup error. `--oci-auth-file` accepts at most
-1 MiB of strict UTF-8 Docker-config JSON containing only `auths`. Each key is the
-exact registry lookup key below and each strict entry contains exactly one of:
-bounded base64 `auth` decoding to `username:secret`, or bounded nonempty
-`identitytoken`. `credsStore`, `credHelpers`, proxy/plugin fields, unknown
-members, commands, and duplicate keys are rejected; nothing named by the file
-is executed. Credential selection is exact-key only.
+Credential and CA paths are resolved on the trusted host, must be current-user
+owned regular files with private permissions, and are read only for acquisition.
+Setting both OCI credential options is a startup error. `--oci-auth-file`
+accepts at most 1 MiB of strict UTF-8 Docker-config JSON containing only
+`auths`; each exact registry key contains one bounded `auth` or
+`identitytoken`. `credsStore`, `credHelpers`, proxy/plugin fields, commands,
+duplicate keys, and unknown members are rejected.
 
-The fixed OCI helper receives argv `[helperPath, "get"]` without a shell. Stdin
-is the raw Docker lookup key plus newline: lowercase `host[:nondefault-port]`
-except Docker Hub, which uses `https://index.docker.io/v1/`. Exit-zero stdout is
-one UTF-8 JSON object with required nonempty `Username` and `Secret` strings and
-optional `ServerURL`, each at most 64 KiB. `ServerURL`, when present, must equal
-the lookup key; `Username: "<token>"` classifies `Secret` as an identity token.
-Stdout over 128 KiB, timeout, nonzero exit, signal, malformed UTF-8/JSON, unknown
-member, mismatch, or empty credential fails with `source_auth_oci_failed`.
-Stderr is bounded, treated as secret-bearing, and never logged or retained.
+The fixed OCI helper receives argv `[helperPath, "get"]` without a shell and the
+raw exact Docker lookup key on stdin. Exit-zero stdout is one bounded strict JSON
+object with nonempty `Username` and `Secret` plus optional matching `ServerURL`.
+Timeout, nonzero exit, signal, malformed output, mismatch, or empty credentials
+fails with `source_auth_oci_failed`; stderr is secret-bearing and never logged.
 
-Registry access starts anonymously. Accept at most one well-formed HTTPS Bearer
-challenge and one authenticated retry per request, with one token refresh after
-an in-budget 401. Scope must exactly equal
-`repository:<configured-registry-repository-path>:pull`; service is bounded,
-passed only as data, and must match the registry service
-(`registry.docker.io` for Docker Hub).
-Credentialed token exchange is allowed only at a same-origin HTTPS realm
-or the exact Docker Hub realm `https://auth.docker.io/token`; other realms are
-anonymous-only. Do not request offline access or accept refresh tokens. Validate
-token type and bounded expiry.
+`--oci-ca-bundle-map` names a bounded strict JSON file mapping exact normalized
+`host[:port]` keys to private PEM CA files. Only the bundle for the exact
+registry, token service, or declared layer-redirect host augments system roots;
+there is no insecure-TLS switch. Registry access begins anonymously and accepts
+only bounded same-origin Basic or Distribution Bearer behavior plus the
+documented Docker Hub token service. Cross-origin redirects remain limited to
+layer `GET`/`HEAD` requests for exact declared hosts, with credentials stripped
+and every hop checked. The gateway passes only the selected source credential
+and exact CA material into the acquisition container and destroys both before
+provider execution.
 
-Redirect handling is manual and limited to three HTTPS hops. Same-origin
-redirects are permitted. A cross-origin redirect is permitted only for a
-layer-blob `GET`/`HEAD` when the destination's normalized `host[:port]` exactly
-matches that snapshot source's `layerRedirectHosts`; token, manifest, and config
-requests reject it. Every hop rejects URL credentials, strips authorization,
-cookies, and client credentials, resolves DNS afresh, validates every A/AAAA
-address, and connects to a validated address with the original hostname used
-for Host/SNI. Loopback, link-local, multicast, unspecified, RFC1918, ULA, CGNAT,
-and other non-global destinations are rejected unless that exact host is
-operator-approved for the source. Redirect loops, downgrade, mixed approved and
-unapproved answers, and rebinding fail. Final descriptor bytes still must match
-size and digest.
+Provider homes are never copied, mounted into Docker, parsed by AllAgents, or
+imported into another store. The direct Codex/Pi host process receives the
+selected home path and required host identity/auth environment in place.
+Binary overrides are absolute host paths and must pass the pinned adapter's
+exact version/protocol probe at readiness; they are not request-selectable.
+The explicit provider environment starts from an allowlist rather than the
+gateway's complete environment, but this is leakage reduction, not isolation.
 
-Credentials are invoked once per registry lookup key, scoped to that origin and
-repository pull, zeroed after use, and destroyed before publication.
+The immutable-base cache and invocation roots are current-user owned, private,
+and disjoint from state, project, profile, provider-auth, and each other.
+Acquisition writes a unique directory under `<base-cache-dir>/.staging`; host
+validation completes before an atomic same-filesystem rename to either the final
+cache-key directory or `<base-cache-dir>/transient/<task-id>` for a non-reusable
+base. Active Task references pin reusable entries. Least-recently-used eviction
+enforces the byte budget and removes only unpinned reusable bases. Every non-
+publication path removes its staging directory, and startup reconciles orphan
+staging and recorded transient bases before readiness.
 
-Provider defaults are eligible only when their resolved auth files pass the same
-descriptor checks; otherwise the target is not ready. The gateway projects only
-the selected provider auth into its control-process view.
+For read-only access, every Task owns
+`<invocation-root>/<task-id>/runtime`; its cwd resolves in a reusable cached base
+or its non-reusable transient base. For read-write access, the Task also owns
+`<invocation-root>/<task-id>/workspace`. `auto` probes same-filesystem block
+clone first, then rootless OverlayFS on Linux, then ordinary copy only when the
+base does not exceed `--max-auto-copy-bytes`. `cow` requires block clone or
+rootless OverlayFS and fails readiness when neither is available. `copy` is the
+explicit portable, higher-I/O backend and may exceed the automatic copy ceiling.
+The explicit `copy` backend has no Linux-only filesystem requirement, but it
+does not by itself make the v1 gateway available on Windows; process lifecycle
+and cancellation remain Linux-only in this plan. Startup logs the selected
+capabilities without paths. No mode uses writable hard links. Startup rejects
+overlapping roots and stale mounts it cannot safely reconcile.
 
 The derived workspace ID is a stable digest of the canonical project-workspace
 path and is verified against SQLite metadata. Retention includes Task records,
-Artifact bytes, events, and invocation-key claims; expiry is transactional. When
-the unexpired Task-count limit is reached, new admission fails rather than
-evicting retained Tasks.
+Artifact bytes, events, and invocation-key claims; expiry is transactional. Task
+expiry does not evict a pinned base, and base eviction does not remove retained
+Task metadata. When the unexpired Task-count limit is reached, new admission
+fails rather than evicting retained Tasks.
 
 **Project workspace additions**
 
@@ -1046,13 +1392,25 @@ workspaceSnapshots:
     repository: ghcr.io/entityprocess/allagents-workspaces
     layerRedirectHosts:
       - pkg-containers.githubusercontent.com
+  enterprise:
+    repository: company.jfrog.io/docker-local/allagents-workspaces
 ```
 
 Snapshot names use the portable profile-name vocabulary. Repositories must have
-unique stable names for remote acquisition. Snapshot repository values contain
-only scheme/host/repository identity and an optional exact
-`layerRedirectHosts` allowlist; never tags, digests, credentials, or extraction
-paths. An absent allowlist rejects cross-origin layer redirects.
+unique stable names for remote acquisition. Non-Docker-Hub repository values
+contain only an exact registry `host[:port]/repository-path` identity and an
+optional exact `layerRedirectHosts` allowlist; never tags, digests, credentials,
+or extraction paths.
+
+Docker Hub uses only the canonical declaration
+`docker.io/<namespace>/<repository>` with an explicit namespace. The gateway
+maps that declaration to API origin `https://registry-1.docker.io`, Docker
+credential lookup key `https://index.docker.io/v1/`, Bearer service
+`registry.docker.io`, and token realm `https://auth.docker.io/token`;
+`index.docker.io` and `registry-1.docker.io` declarations are rejected as
+aliases. GHCR, JFrog Artifactory/JCR, and compatible private OCI registries keep
+their declared exact host. An absent allowlist rejects cross-origin layer
+redirects.
 
 **User workspace additions**
 
@@ -1079,10 +1437,13 @@ TypeScript. Its `constructor(options: ProviderOptions)` requires and stores a
 nonempty `options.id`, validates `options.config`, and `id()` returns that
 stored value.
 `callApi(prompt, context?, options?)` reads
-`context?.vars?.allagentsSource` when present and
+`context?.vars?.allagentsSource`,
+`context?.vars?.allagentsWorkingDirectory`, and
+`context?.vars?.allagentsWorkspaceAccess` when present, plus
 `options?.abortSignal` for cancellation.
 
-Static YAML defines the source mode and every logical name:
+Static YAML defines the source mode, logical names, and optional default logical
+working directory and workspace access:
 
 ```yaml
 prompts:
@@ -1102,6 +1463,10 @@ providers:
     config:
       endpoint: https://allagents-gateway.example.internal
       target: codex
+      workingDirectory:
+        kind: repository
+        repository: allagents
+      workspaceAccess: readOnly
       source:
         kind: repositories
         revisions:
@@ -1112,6 +1477,10 @@ providers:
     config:
       endpoint: https://allagents-gateway.example.internal
       target: codex
+      workingDirectory:
+        kind: repository
+        repository: allagents
+      workspaceAccess: readWrite
       source:
         kind: workspaceSnapshot
         snapshot: evaluation
@@ -1125,6 +1494,11 @@ tests:
       allagentsSource:
         revisions:
           allagents: fedcba9876543210fedcba9876543210fedcba98
+      allagentsWorkingDirectory:
+        kind: repository
+        repository: allagents
+        path: apps/gateway
+      allagentsWorkspaceAccess: readOnly
 
   - description: immutable prebuilt workspace
     providers: [codex-evaluation-snapshot]
@@ -1132,6 +1506,11 @@ tests:
       allagentsSource:
         digest: sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
         workspaceManifestDigest: sha256:6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345
+      allagentsWorkingDirectory:
+        kind: repository
+        repository: allagents
+        path: apps/gateway
+      allagentsWorkspaceAccess: readWrite
 ```
 
 The gateway enforces one active invocation transactionally. Promptfoo keeps
@@ -1149,29 +1528,43 @@ revisions, and immutable digests, not
 `ghcr.io/entityprocess/allagents-workspaces`. The gateway resolves origins and
 credentials server-side and omits them from A2A source-identity responses.
 
-`context?.vars?.allagentsSource` is the only per-test override. In repository
+`context?.vars?.allagentsSource` remains limited to source leaves. In repository
 mode it may contain exactly `revisions`, whose keys must already exist in static
-`config.source.revisions` and whose values are full lowercase 40-hex commits.
-In snapshot mode it may contain exactly `digest` and/or
+`config.source.revisions` and whose values are full lowercase 40-hex commits. In
+snapshot mode it may contain exactly `digest` and/or
 `workspaceManifestDigest`, both full lowercase `sha256:` digests. Present leaves
 replace static leaves; absent leaves retain static values. Source kind,
-repository-name allowlist, and snapshot name remain static. Unknown members,
-mutable revisions, origins, destinations, credentials, and commands fail before
-A2A submission.
+repository-name allowlist, and snapshot name remain static.
+
+`context?.vars?.allagentsWorkingDirectory` replaces the complete static
+selector for that trial. It is exactly `workspaceRoot` or a declared repository
+name plus an optional `RelativeDirectory`; the gateway performs catalog and
+post-acquisition directory validation. `allagentsWorkspaceAccess` replaces the
+static access value with exactly `readOnly` or `readWrite`. Missing access
+defaults to `readWrite`. Neither variable accepts an absolute path, configured
+destination, materializer, cache key, `.` or `..` segment, backslash, symlink
+escape, or non-directory. Unknown members, mutable revisions, origins,
+destinations, credentials, and commands fail before provider execution.
 
 Each `callApi` creates one high-entropy invocation key and sends `SendMessage`
 with `returnImmediately: true`, then follows the accepted Task through
-`SubscribeToTask`, `GetTask`, and bounded resubscription. An abort or deadline
+`SubscribeToTask`, `GetTask`, and bounded resubscription. A read-only Task may
+share its immutable physical base and cwd with other Tasks while keeping private
+runtime state; a read-write Task receives a unique disposable writable view. The
+caller chooses neither physical path nor materializer. An abort or deadline
 sends one `CancelTask` with a fresh cleanup signal. Ambiguous submission retry
-reuses the same key and request. The provider returns terminal text or validated
-structured result as `ProviderResponse.output`. It maps gateway usage exactly as
+reuses the same key, canonical request, Task, base/view, cwd, and access mode.
+The provider returns terminal text or validated structured result as
+`ProviderResponse.output`. It maps gateway usage exactly as
 `inputTokens -> tokenUsage.prompt`, `outputTokens -> tokenUsage.completion`,
 `cachedInputTokens -> tokenUsage.cached`, and
 `totalTokens -> tokenUsage.total`; provider-specific counters remain in
-`metadata`. Task ID, Artifact references, logical source identity, termination,
-cleanup, and stable failure `code`/`retryable`/accepted `taskId` also remain in
-`metadata`, without origins or destination paths. Admission and terminal
-failures use a safe `ProviderResponse.error`. This provider is AI Evals code;
+`metadata`. Task ID, Artifact references, logical source identity, logical
+working directory, workspace access, termination, cleanup, and stable failure
+`code`/`retryable`/accepted `taskId` also remain in metadata, without origins,
+configured destinations, or physical paths.
+Admission and terminal failures use a safe `ProviderResponse.error`. This
+provider is AI Evals code;
 AllAgents has no Promptfoo runtime dependency.
 
 ### Error and Status Mapping
@@ -1188,12 +1581,15 @@ reason. Custom admission errors include `google.rpc.ErrorInfo` with domain
 |---|---|---|
 | Unsupported A2A version | HTTP 400 A2A `VersionNotSupportedError`; no Task | No |
 | Missing required extension | HTTP 400 A2A `ExtensionSupportRequiredError`; no Task | No |
-| Malformed request, source, digest, schema, prompt, or unknown target/source | HTTP 400 `INVALID_ARGUMENT`; `invalid_execution_request`; no Task | No |
+| Malformed request, source, working-directory selector, workspace access, digest, schema, prompt, or unknown target/source/repository | HTTP 400 `INVALID_ARGUMENT`; `invalid_execution_request`; no Task | No |
 | Invocation-key conflict | HTTP 409 `ALREADY_EXISTS`; `invocation_key_conflict`; no new Task | No |
 | Identical retained invocation replay | Existing Task with embedded Artifacts | N/A |
 | Cancel after terminal state | HTTP 400 A2A `TaskNotCancelableError` | No |
 | Retained Task capacity exhausted | HTTP 429 `RESOURCE_EXHAUSTED`; `retention_capacity_exhausted`; `Retry-After`; no Task | Yes, after expiry |
 | Runtime capacity unavailable after acceptance | `execution_capacity_unavailable`; failed Task | Yes |
+| Valid logical cwd resolves to a missing, non-directory, or escaping path after acquisition | `execution_working_directory_invalid`; failed Task; no provider start; no physical path returned | No |
+| Required copy-on-write materializer unavailable, or `auto` would copy above its ceiling | `workspace_materialization_unavailable`; failed Task; no provider start | No |
+| Task-private runtime, non-reusable base, or writable-view creation/removal fails | `workspace_cleanup_failed`; failed Task; `cleanup.workspace: "failed"`; retain cleanup record; stop admission if an active mount or uncertain writable view remains | Yes only as a fresh invocation after operator repair |
 | App absent/ineligible and configured `gh` succeeds | Continue with recorded provider class | N/A |
 | App applicability unknown | `source_auth_applicability_unknown`; failed Task; no fallback | Yes for rate-limit/service causes only |
 | Selected App config/auth/mint/validation/revocation failure | `source_auth_failed`; failed Task; no fallback | No |
@@ -1209,15 +1605,17 @@ reason. Custom admission errors include `google.rpc.ErrorInfo` with domain
 | Deadline expires | `execution_deadline_exceeded`; abort/terminate; failed Task | Yes |
 | Known provider permission denial | `execution_permission_denied`; rejected Task | No |
 | Unknown provider protocol or result shape | `provider_protocol_invalid`; failed Task | No |
-| Cancellation with proven quiescence | `execution_canceled`; canceled Task | No |
-| Termination or cleanup cannot be proven | `execution_quiescence_unknown`; failed Task; readiness poisoned | No |
-| State store durability/integrity failure | `task_store_failed`; stop admission; abort/contain; no success | No |
+| Cancellation after acquisition removal or direct provider settlement | `execution_canceled`; canceled Task | No |
+| Acquisition container or unpublished staging cannot be removed | `source_cleanup_failed`; failed Task; stop admission | No |
+| Direct provider does not settle after abort/`SIGTERM`/`SIGKILL` | `execution_termination_failed`; failed Task; no filesystem/Git evidence; retain Task-owned runtime, view, or non-reusable base and lease; stop admission until post-teardown reconciliation | No |
+| State store durability/integrity failure | `task_store_failed`; stop admission; request active-work abort; no success | No |
 | Restart finds interrupted Task | `gateway_restarted`; failed Task; no provider resume | Yes as a new invocation |
 | Retention expiry | HTTP 404 A2A `TaskNotFoundError` | Yes as a new invocation |
 
 Accepted-Task failures use the integrity Artifact's strict `failure` object with
 `code`, safe `message`, table-defined `retryable`, and one closed cause from
-`validation | capacity | sourceAuth | sourceGit | sourceSnapshot | deadline |
+`validation | capacity | sourceAuth | sourceGit | sourceSnapshot | sourceCleanup |
+workingDirectory | workspaceMaterialization | workspaceCleanup | deadline |
 permission | providerProtocol | cancellation | termination | stateStore |
 restart`. Retryability says whether a caller may create a fresh invocation; it
 never enables automatic Task retry or provider/source fallback. Promptfoo copies
@@ -1227,347 +1625,507 @@ carrier.
 
 ### Phased Delivery
 
-1. Build the current CLI and record the red E2E showing that
-   `allagents gateway serve` is unavailable. Record the exact `/tmp/` workspace
-   setup, command, and observed failure.
-2. Freeze workspace additions, the published extension, snapshot format,
-   common manifests, result schema, errors, packaging, and fixtures. Establish
-   the Rust helper protocol, safe SQLite VFS, platform packages, and ordered
-   release pipeline first.
-3. Build the SQLite Task store through the helper, AllAgents A2A request handler,
-   HTTP+JSON server, minimal backend interface/registry, and fake adapter.
-4. Extend the packaged helper with invocation supervision, execution
-   containment, spawn mediation, role-specific network/secret views, safe
-   evidence, and terminal arbitration around the fake adapter.
-5. Add repository and OCI acquisition through the supervisor/helper with
-   credential containment and manifest validation.
-6. Add Codex, then Pi, against the same conformance suite.
-7. Run final implementation review and fix important correctness, security,
+1. In a clean `/tmp/` npm prefix, install the current `allagents` package and
+   record the red E2E showing that `allagents-gateway serve` is unavailable and
+   that no acquisition image is fetched.
+2. Execute U0 as a bounded feasibility gate: establish the private Bun
+   workspace layout; prove the shipped A2A server with the official JavaScript
+   client; pin and probe Codex SDK and Pi RPC/package surfaces; characterize
+   explicit provider environments and Linux process groups; build and run the
+   digest-pinned acquisition image for both supported architectures; and prove
+   independent CLI/gateway packaging plus exact release binding.
+3. Freeze workspace additions, published extension, snapshot format, execution
+   and acquisition contracts, generated portable fixtures, error vocabulary,
+   SQLite schema/transactions, compatibility output, and release manifest.
+4. Build the Bun SQLite Task store, AllAgents A2A request handler, HTTP+JSON/SSE
+   server, minimal backend interface/registry, and fake adapter.
+5. Add direct host-process supervision, explicit environment construction,
+   read-only runtime separation, read-write materialization, process-group
+   cancellation, typed preparation, bounded evidence, terminal arbitration,
+   restart handling, and cleanup around the fake adapter.
+6. Add Docker-only Git and OCI acquisition for requests without reusable bases,
+   with source-only credentials, strict mount/network/archive limits, typed
+   manifest emission, host validation, reusable-cache or non-reusable-base
+   publication, pinning, cleanup, reuse, and eviction.
+7. Add Codex through the pinned SDK, then Pi through the pinned supported
+   package/RPC surface, against the same conformance suite.
+8. Run final implementation review and fix important correctness, security,
    contract, reliability, DRY, and coverage findings.
-8. Run the green bundled-CLI `/tmp/` E2E, clean-registry install smoke,
-   repository quality gates, user documentation, and release evidence.
+9. Run green packed CLI/gateway `/tmp/` smokes, exact multi-architecture
+   acquirer-image tests, public GHCR conformance, exact-release authenticated
+   GHCR/JFrog conformance, repository quality gates, user documentation, and
+   release evidence.
 
 ### System-Wide Impact
 
-- **Package surface:** Declare a root Bun workspace; add private
-  `packages/execution-service` and Rust `packages/execution-helper`; add the
-  service as a root `workspace:*` development dependency; distribute Linux
-  x64/arm64 helper binaries through versioned platform-specific optional
-  packages; and bundle the service into published `dist/index.js`. The release
-  scripts and Publish workflow version matching helper packages and root
-  dependency ranges, publish and verify both platform packages first, and
-  publish `allagents` only after their registry metadata and checksums resolve.
-  Add public `allagents gateway serve` without changing existing profile and
-  sync commands. Root build, typecheck, tests, and clean-registry install smoke
-  include the private workspace service and resolved helper binary.
-- **Schema surface:** Extend project workspace schemas with named snapshots,
-  exact layer-redirect hosts, and user profile-client schemas with explicit
-  gateway enablement. Publish the versioned extension specification and
-  generated JSON Schemas; update configuration docs.
-- **Dependency surface:** Put the official A2A SDK, pinned Codex SDK, and
-  `@octokit/auth-app` in the private service package. Pin SQLite, the custom VFS
-  bindings, `reqwest` with rustls, `tar`, `flate2`, and `zstd` in the Rust helper
-  lockfile together with the Rust toolchain/helper protocol; check helper release
-  checksums.
-- **State surface:** Add one bounded SQLite gateway state root and per-invocation
-  staging, publication, evidence, and cleanup roots. Do not alter profile state.
-- **Security surface:** The network is the caller authorization boundary. Source
-  credentials are phase-scoped; helper-mediated process and network views keep
-  acquired code and agent tools from App, `gh`, OCI, provider, MCP, operator, and
-  gateway credentials/state. Helper absence or capability loss fails closed.
+- **Package surface:** Convert the root to private Bun workspace orchestration.
+  `apps/cli` publishes `allagents`; `apps/gateway` publishes
+  `allagents-gateway`; `apps/acquirer` publishes no npm package and builds only
+  the digest-pinned GHCR image. The ordinary CLI has no gateway dependency.
+  GitHub Actions has independent CLI and gateway release triggers. Gateway
+  release builds and verifies the acquisition image first, then publishes the
+  exact npm tarball; a gateway-only run never publishes the CLI.
+- **Runtime surface:** `apps/gateway` owns gateway behavior end to end. Docker
+  exists only at the base-acquisition boundary when no reusable validated base
+  exists. Codex and Pi execute directly on the trusted Linux runner with
+  existing host
+  authentication. Packages share contracts and configuration, not generic
+  implementation helpers; do not add `core`, `common`, native IPC, or dual
+  implementations.
+- **Schema surface:** `packages/workspace-config` extends project schemas with
+  named snapshots/exact redirect hosts and user profile-client schemas with
+  gateway enablement. `packages/execution-contracts` and
+  `packages/acquisition-contracts` generate versioned JSON Schemas and fixtures
+  under `contracts/`; update extension, snapshot-format, and configuration docs.
+- **Dependency surface:** Pin Bun, the official A2A JavaScript SDK,
+  `@openai/codex-sdk`, the supported Pi package/RPC dependency, and the minimal
+  Git/OCI/archive dependencies used by `apps/acquirer` in the Bun lockfile.
+  Minimize dependencies per workspace and scan both the npm tarball and image.
+- **State surface:** Add one bounded private Bun SQLite state root, one bounded
+  immutable-base cache, and per-Task runtime plus optional writable-view roots.
+  Do not alter provider profile or authentication state.
+- **Security surface:** Network reachability authorizes callers. The acquisition
+  container has staging, source-only credentials, and strict source policy but
+  no host home or Docker socket. Provider execution has trusted CI-job
+  authority; explicit environments reduce accidental leakage but do not isolate
+  secrets or hostile code from model tools.
 - **Compatibility:** Existing workspace files remain valid because new fields
-  are optional. Gateway startup applies stricter repository-catalog rules.
-  Older binaries reject the new strict nested profile field, so docs state the
-  minimum supporting version.
+  are optional; request access defaults to `readWrite`. Gateway startup applies
+  stricter catalog, cache-root, materializer, and provider-readiness rules.
+  CLI/gateway version skew is governed by contract ranges; gateway/image
+  compatibility is exact by manifest digest and acquisition-contract version.
 
 ### Risks and Mitigations
 
+- **A2A or provider-surface immaturity:** Pin exact JavaScript package versions
+  and run U0 wire/provider probes before production units. If the Codex SDK
+  lacks a required capability, document proof before selecting pinned app-server;
+  if neither works, the target is unavailable rather than silently scraped.
+- **Contract drift:** Generate public and private schemas plus accepted/rejected
+  fixtures from the three narrow packages and run drift checks in the gateway,
+  acquirer, docs, and consumer fixtures.
+- **Install-size regression:** Keep CLI and gateway workspace dependency graphs
+  separate, report packed/installed sizes, enforce budgets, and fail CLI-only
+  smoke if it resolves the gateway or acquisition image.
 - **Accidental network exposure:** Binding `0.0.0.0` is intentional and allowed;
   require a distinct advertised URL, use HTTPS in production, and state in
-  startup output/docs that every reachable host has full authority.
+  startup output/docs that every reachable peer has full authority.
 - **Profile identity drift:** Derive targets only from current validated user
   declarations and matching installed state; never resurrect declaration-missing
   launchers from retained profile state.
-- **Credential leakage or path swap:** Use fresh validated/revoked App tokens or
-  one configured `gh` account, descriptor-bound credential handles, hermetic
-  Git, strict Docker auth/helper protocols, and credential teardown before
-  publication. Non-bypassable helper spawn mediation replaces environments,
-  closes descriptors, and enters role-specific mount/network namespaces before
-  every MCP or model-tool exec; a backend lacking that hook is unavailable.
+- **Working-directory escape or mutable cross-trial reuse:** Accept only the
+  closed logical selector and `RelativeDirectory` grammar, resolve through the
+  compiled catalog, and require an existing directory beneath the selected
+  repository. Read-only Tasks share only the gateway-managed immutable base and
+  keep private runtime state; read-write views derive from Task IDs. Never expose
+  or accept a resolved host path.
+- **Read-only contract violated by the prompt or provider:** Do not inspect
+  prompts or claim a sandbox. Disable optional Git locks, request native provider
+  read-only policy when available, isolate runtime writes, and document that
+  consumers must choose `readWrite` when project mutation is required. Do not
+  add a per-Task mount, chmod traversal, or full-tree verification in v1. A
+  violating provider can contaminate the base and later Tasks; the operator must
+  evict that entry before reuse.
+- **Large workspace duplication or unsupported copy-on-write:** Acquire each
+  immutable identity once, pin shared bases, prefer block clone, fall back to
+  rootless OverlayFS, and retain explicit `copy` for portability. `auto` refuses
+  a full copy above its byte ceiling; startup reports capabilities, and CI users
+  provision enough disk or choose a larger/self-hosted runner.
+- **Base-cache corruption or unbounded growth:** Bind keys to immutable source,
+  catalog/layout, and acquisition-contract identity; publish atomically; keep
+  roots private; pin active entries; evict only unpinned least-recently-used
+  entries under a byte budget; and stop admission on detected metadata or
+  filesystem inconsistency. This is trusted-runner state, not a hostile-process
+  integrity boundary.
+- **Acquisition credential leakage:** Mount only staging, inject only the
+  selected source credential and exact-host CA material, never mount host home
+  or Docker socket, remove the container before provider execution, and scan
+  the manifest/staging/logs for gateway-managed credential values.
 - **Identity-changing fallback:** Classify App applicability as eligible,
   ineligible, or unknown; require repository-existence proof for 404
   ineligibility; only positive ineligibility permits `gh`.
 - **OCI registry/archive abuse:** Require immutable digests, a closed
-  manifest/config/layer profile, same-origin metadata, exact operator-approved
-  layer-redirect hosts with per-hop address validation, changeset semantics,
-  fixed extraction limits, safe paths/types/links, and exact project-catalog
-  manifest verification.
-- **Untrusted acquired code:** General hostile-code sandboxing beyond the
-  declared Linux process/network namespace and secret boundary is not claimed.
-  Invocation routes deny gateway, host loopback, and management networks;
-  provider/MCP egress is allowlisted; and model tools cannot reach provider/MCP/
-  operator credentials or gateway state. Project/user setup shell commands are
-  never automatic.
-- **Evidence-time attacks:** Prove containment empty first, then use
-  descriptor-relative no-follow reads with identity/size revalidation, reject
-  Git metadata indirection, and disable repository-controlled Git execution.
-- **Provider/API churn:** Pin compatible SDK/CLI/model versions and retain
-  versioned native fixtures plus one adapter conformance suite. Gate Codex native
-  schemas to the pinned Structured Outputs subset and backend availability to a
-  proven non-bypassable spawn hook.
-- **Orphaned processes:** Persist a stable empty containment identity before
-  start-gate release; enumerate the full project-owned cgroup namespace on
-  startup. On uncertain quiescence, stay alive, reject admission, and continue
-  reaping until empty without mutating the settled Task.
-- **Store corruption or disclosure:** Route SQLite and all sidecars through the
-  helper's descriptor-rooted no-follow VFS with full synchronization and
-  transactions; validate ownership, modes, links, root disjointness, lock, and
-  workspace identity. Integrity/durability failure stops admission and prevents
-  terminal success.
+  manifest/config/layer profile, exact host/redirect policy, changeset
+  semantics, fixed extraction limits, safe paths/types/links, and exact catalog
+  validation inside the image and again at the host publication boundary.
+- **Untrusted provider execution:** The acquired workspace and model tools run
+  with the same authority as the trusted CI job. Mitigate by using ephemeral
+  runners or an operator-managed VM/container boundary, least-privilege CI
+  credentials, explicit provider environments, no automatic setup commands,
+  and clear documentation. Do not describe AllAgents as a sandbox.
+- **Evidence overclaim:** Collect only after the direct provider process settles,
+  keep evidence bounded, record process-group signals and observed cleanup, and
+  explicitly avoid claiming full descendant quiescence or output redaction.
+- **Provider/API churn:** Pin SDK/package/protocol/model compatibility, require
+  exact probes for binary overrides, retain native fixtures, and share one
+  adapter conformance suite. Never download a provider runtime per request.
+- **Orphaned processes:** Use a new Linux process group per direct provider,
+  persist the leader identity, escalate abort to `SIGTERM` and `SIGKILL`, and
+  rely on CI runner teardown as the final orphan boundary.
+- **Store corruption or disclosure:** Use a current-user private state root,
+  exclusive gateway lock, ordinary Bun SQLite transactions, foreign keys,
+  `synchronous=FULL`, integrity checks, and bounded data. Integrity/durability
+  failure stops admission and prevents false success.
+- **Artifact mismatch:** Bind every release report to the exact gateway npm
+  tarball digest and acquisition manifest/platform digests. Reject rebuilt,
+  mutable-tagged, wrong-commit, or contract-incompatible substitutes.
 
 ### Assumptions
 
 - The initial deployment is one gateway process and one transactionally enforced
-  active invocation.
+  active invocation on a trusted Linux CI runner.
 - Every external network peer able to connect is trusted with all available
-  targets, including built-ins and gateway-enabled profiles, and all retained
-  Tasks. Invocation descendants are deliberately unable to reach that network
-  boundary.
+  targets and retained Tasks.
+- The CI job, VM, or deployment container is the isolation boundary. AllAgents
+  does not isolate hostile repository code, provider credentials, MCP secrets,
+  or host network access from model-invoked tools.
 - The selected project workspace is operator-controlled and compiles to 1-64
   uniquely named GitHub repositories with collision-free destinations.
 - GitHub.com is the only authenticated Git host in the initial delivery.
-- OCI snapshots use HTTPS registries and the frozen v1 direct-image format.
-- Codex and Pi are available only when their pinned automation surfaces support
-  non-bypassable helper-mediated tool and MCP spawning.
-- Gateway v1 execution supports Linux x64/arm64 hosts with cgroup v2, `clone3`,
-  pidfds, `openat2`, mount/network namespaces, nftables, and delegated
-  permissions.
+- OCI snapshots use HTTPS Docker Hub, GHCR, JFrog Artifactory/JCR, or compatible
+  private OCI registries and the frozen v1 direct-image format.
+- Docker is available solely for base-acquisition containers when no reusable
+  validated base exists, and the operator-provided acquisition network enforces
+  the deployment's source egress boundary. Immutable repository cache reuse
+  requires full commit IDs.
+- Codex and Pi are installed or provided by pinned workspace dependencies before
+  gateway start and can reuse their existing host authentication locations.
+- The implementation units after U0 assume the Bun/A2A/provider/process/acquirer
+  feasibility gates passed. A failed provider probe disables that target; a
+  failed architecture or release-binding gate stops the affected release rather
+  than introducing Rust, native platform packages, or a split runtime.
 
 ---
 
 ## Implementation Units
 
-### U1. Workspace, extension, and manifest contracts
+### U0. Bun monorepo, provider, process, and acquirer feasibility
 
-- **Goal:** Freeze configuration, packaging, safe state primitives, and every
-  versioned public/private contract before runtime implementation.
-- **Requirements:** R1, R2, R3, R5, R6, R7, R8, R9, R11, R18; AE3, AE4, AE5,
-  AE7, AE8, AE9, AE13, AE14, AE16, AE20; KTD1, KTD2, KTD5, KTD6, KTD7,
-  KTD10, KTD11.
-- **Files:** root `package.json`/build/typecheck configuration,
-  `packages/execution-service/package.json` and TypeScript config, Rust
-  `packages/execution-helper`, Linux x64/arm64 optional packages, typed helper
-  protocol, SQLite schema/migrations and descriptor-rooted VFS,
-  `scripts/release.ts`, `scripts/publish.ts`, `.github/workflows/publish.yml`,
-  `src/models/workspace-config.ts`, schema generation tests and generated public
-  schemas, execution-service contracts,
-  `docs/src/pages/a2a/extensions/coding-execution/v1.astro` at the exact
-  declared URI plus a generated schema asset beneath that route, a versioned
-  snapshot-format specification, deterministic reference packer/conformance
-  fixtures, and configuration docs.
-- **Approach:** Declare the Bun workspace and root `workspace:*` development
-  edge so the private service is installed, checked, and bundled. Establish the
-  helper protocol and audited SQLite VFS before the server store client. Version
-  helper packages with matching root optional-dependency ranges; publish and
-  verify both platform packages before the root package. Verify a clean registry
-  install resolves the matching helper binary and checksum and that the packed
-  root manifest contains no workspace protocol.
+- **Goal:** Prove the settled Bun architecture can preserve A2A behavior,
+  independent distribution, supported provider control, Linux cancellation,
+  read-only shared-base execution, read-write materialization, and exact
+  acquisition-image release binding before production implementation.
+- **Requirements:** R1-R2, R8, R13-R16, R18; AE8-AE11, AE17-AE18, AE20;
+  KTD1-KTD3, KTD6-KTD7, KTD9, KTD11-KTD14.
+- **Files:** private root `package.json`/`bun.lock`, `apps/cli`,
+  `apps/gateway`, `apps/acquirer`, the three named `packages/` workspaces,
+  representative generated fixtures under `contracts/`, acquisition Dockerfile/
+  image metadata, provider and workspace-materializer feasibility probes,
+  process-group probe, independent CLI/gateway pack scripts, and gateway release
+  workflow skeleton.
+- **Approach:** Move the existing CLI into `apps/cli` without changing its
+  public package or behavior. Establish `apps/gateway` as the separately packed
+  Bun executable package and `apps/acquirer` as image-only code. Pin the
+  official A2A JavaScript SDK and drive a minimal production-direction server
+  through every required operation. Probe `@openai/codex-sdk` for invocation,
+  events, native abort, usage, structured-output support, and existing
+  `CODEX_HOME` behavior; consider app-server only when a named required
+  capability is proven absent. Probe the supported Pi package/RPC surface for
+  invocation, events, abort, usage, and existing host auth. Prove exact
+  compatibility rejection for global binary overrides.
 
-  Add strict named `workspaceSnapshots` with exact layer-redirect hosts and
-  nested profile-client `gateway.enabled`; preserve ordinary project/user
-  parsing while compiling gateway repository and target catalogs. Publish Agent
-  Card params, version/header activation, Message metadata/extensions, unified
-  Parts, exact result-schema grammar, source union, deadline, idempotency/replay,
-  HTTP+JSON errors, integrity/produced Artifacts, workspace manifest, OCI media/
-  change-set/limit profile, and canonical digest preimages from Zod.
-- **Execution note:** Start with independent wire fixtures that use only the
-  published extension specification. Reject missing version/activation, cross-
-  variant/unknown fields, extra Message Parts, undeclared names, mutable
-  snapshot references, malformed digests, invalid deadlines, incomplete or
-  mismatched manifests, gateway enablement without launcher, built-in
-  collisions, and unsupported clients while preserving unrelated metadata.
-  Fault-inject database/WAL/SHM link and rename swaps through the real VFS.
-- **Verification:** Focused workspace-schema, packaging, helper VFS, and
-  contract tests; generated schema/spec drift checks; representative YAML, HTTP
-  errors, and wire examples parse through runtime schemas; snapshot conformance,
-  canonicalization, Artifact-cardinality, clean-registry install, matching
-  helper version/checksum, and ordered publish dry-run fixtures pass.
+  Run a real Linux child in a new process group and demonstrate graceful abort,
+  `SIGTERM`, and `SIGKILL` escalation plus the limit that unrelated/escaped
+  descendants are not proven gone. Prove one immutable base can serve repeated
+  read-only Tasks with private runtime state; probe block cloning and rootless
+  OverlayFS; verify independent writable changes and removal; and prove explicit
+  copy behavior plus the automatic copy ceiling. Build the acquirer image for
+  every supported architecture, run it with only a staging mount and synthetic
+  source secret, verify typed manifest output and container removal, and prove
+  the image has no provider runtime or Docker socket. Pack CLI and gateway
+  separately, prove a CLI-only install fetches neither gateway nor image, and
+  define the immutable gateway-tarball/acquisition-manifest release record.
+- **Execution note:** U0 is a feasibility gate, not partial production
+  scaffolding. Do not paper over missing SDK/RPC behavior with TUI scraping,
+  AI SDK Harnesses, per-request downloads, per-provider Docker, or native
+  containment machinery. A missing provider capability disables that provider;
+  failed A2A, process, acquisition, or release-binding feasibility returns the
+  affected design for revision before dependent units.
+- **Verification:** Official JavaScript client fixtures pass against the Bun
+  server; provider probes record exact pinned versions and auth-path behavior;
+  shared read-only base, private runtime, reflink, rootless-overlay, explicit
+  copy, cleanup, environment, and process-group probes pass on Linux; multi-
+  architecture image manifests/digests are recorded and the image boundary
+  rejects extra mounts/credentials/network; independent packed CLI/gateway
+  installs and compatibility fixtures pass; CLI-only installation fetches
+  neither gateway nor acquisition image.
+
+### U1. Workspace packages, contracts, SQLite, and release foundation
+
+- **Goal:** Freeze the monorepo ownership, workspace configuration, public and
+  acquisition contracts, ordinary SQLite transactions, and exact release
+  artifact binding before runtime implementation.
+- **Requirements:** R1-R3, R5-R9, R11-R12, R18; AE3-AE9, AE13-AE14, AE16,
+  AE20; KTD1-KTD2, KTD5-KTD8, KTD10, KTD13-KTD14.
+- **Files:** `packages/workspace-config`, `packages/execution-contracts`,
+  `packages/acquisition-contracts`, generated `contracts/` schemas and golden
+  examples, gateway SQLite schema/migrations, release scripts/workflows,
+  deterministic snapshot producer/conformance fixture, published extension and
+  snapshot-format assets, and configuration docs.
+- **Approach:** Move authoritative project/user parsing and gateway catalog
+  compilation into `workspace-config`; add strict named `workspaceSnapshots`,
+  exact redirect hosts, and nested `gateway.enabled` without changing ordinary
+  CLI behavior. Define execution contracts for Agent Card params, version/header
+  activation, Message metadata/extensions, unified Parts, source union, logical
+  working-directory union and relative-path grammar, workspace access/default,
+  result-schema grammar, deadline, idempotency/replay, materialization errors,
+  HTTP errors, integrity/produced Artifacts, adapter events/results, and
+  evidence. Define acquisition contracts for the closed request, path-free typed
+  manifest, immutable-base cache key, private compiled-layout checks, OCI
+  media/change-set profile, fixed limits, and canonical digests. Generate
+  portable accepted/rejected fixtures beneath `contracts/`.
+
+  Add private `bun:sqlite` ownership with foreign keys, WAL where supported,
+  `synchronous=FULL`, migrations, one execution lease, `createOrReplay`,
+  immutable-base metadata and active pins, internal outcome intent, atomic
+  settlement, transactional expiry, and recorded acquisition-container/provider-
+  process identities. Establish independent CLI/gateway versions and release
+  triggers. The gateway release record binds the exact npm tarball digest to the
+  acquirer multi-architecture manifest and supported platform digests; the image
+  is verified before npm publication.
+- **Execution note:** Do not add `core`, `common`, a custom VFS, native file
+  primitives, native/platform npm packages, or runtime compatibility shims.
+  Start with external wire/manifest fixtures and stable rejection codes. Fault
+  SQLite transactions and process exit around commit/acknowledgment boundaries,
+  not filesystem attacks the ordinary SQLite contract does not claim to defeat.
+- **Verification:** Workspace parsing/catalog fixtures, generated-schema drift,
+  wire/manifest accepted/rejected examples, canonicalization, Artifact
+  cardinality, SQLite commit/replay/lease/settlement/expiry/crash fixtures,
+  independent package versions, CLI-only and gateway clean-registry installs,
+  compatibility skew/image-mismatch matrix, exact tarball/image release record,
+  and idempotent absent/identical/divergent publication fixtures pass.
 
 ### U2. Deployment-wide Task store and A2A server
 
 - **Goal:** Serve the A2A lifecycle without application authentication and keep
   durable deployment-wide Task/idempotency truth behind a fake backend.
-- **Requirements:** R1, R2, R3, R4, R5, R8, R13, R16, R17, R18; AE1, AE2, AE9,
-  AE11, AE14, AE15, AE16, AE19, AE20; KTD1, KTD2, KTD3, KTD4, KTD9, KTD10.
-- **Files:** typed Task-store client, Agent Card, AllAgents request handler,
-  HTTP+JSON/SSE server, pagination/retention, minimal backend interface and
-  registry, fake adapter, health/readiness, CLI gateway command, focused tests.
-- **Approach:** Implement flags/env precedence, bind/advertised-URL separation,
-  private project state and lock, helper-owned SQLite full-sync transactions,
-  startup integrity and full containment-namespace reconciliation, A2A version
-  and extension negotiation, exact `SendMessage` modes and `ListTasks`
-  semantics, standard/custom `google.rpc.Status` errors, durable
-  `createOrReplay`, one execution lease, internal outcome intent plus atomic
-  terminal settlement, bounded events/Artifact bytes, no early eviction,
-  transactional expiry, global listing/cancellation, deadline handling, and
-  fail-closed graceful shutdown against the fake adapter.
-- **Execution note:** Prove with the official A2A client that one external caller
-  can read and cancel another caller's Task; this is expected behavior. Kill
-  subprocesses after transaction write/sync/commit/response boundaries and
-  fault-inject helper/VFS I/O, capacity races, cancellation intent, Artifact,
-  and terminal settlement.
-- **Verification:** A2A discovery/send modes/stream/get/full list/subscribe/
-  cancel/replay/expiry and HTTP-error integration tests on loopback plus explicit
-  `0.0.0.0`/advertised URL; health/readiness, state-path, retained and active
-  capacity, crash/store-fault, competing-lock, deadline, shutdown, and restart
-  tests.
+- **Requirements:** R1-R5, R8, R13, R16-R18; AE1-AE2, AE9, AE11-AE16,
+  AE19-AE20; KTD1-KTD4, KTD9-KTD10.
+- **Files:** `apps/gateway` Task-store module, Agent Card, A2A request handler,
+  HTTP+JSON/SSE server, pagination/retention, backend registry/fake adapter,
+  health/readiness, `allagents-gateway` command, and focused integration tests.
+- **Approach:** Implement flags/environment precedence, bind/advertised-URL
+  separation, private state/lock, SQLite transactions, startup integrity and
+  interrupted-Task reconciliation, A2A version/extension negotiation, exact
+  `SendMessage` modes and `ListTasks` semantics, standard/custom
+  `google.rpc.Status` errors, durable `createOrReplay`, one execution lease,
+  internal outcome intent plus atomic terminal settlement, bounded
+  events/Artifact bytes, no early eviction, transactional expiry, deployment-
+  wide listing/cancellation, deadline handling, and graceful shutdown against a
+  fake adapter.
+- **Execution note:** Use an independent official JavaScript A2A client to prove
+  one external caller can read and cancel another caller's Task; that is expected
+  trusted-network behavior. Kill gateway subprocesses around SQLite transaction,
+  commit, acknowledgment, cancellation-intent, Artifact, and settlement
+  boundaries. Do not add caller ownership or an application credential.
+- **Verification:** Discovery, both send modes, stream/get/full list/subscribe/
+  cancel/replay/expiry, HTTP errors, loopback and explicit
+  `0.0.0.0`/advertised URL, probes, retained/active capacity, competing lock,
+  SQLite crash/fault, deadline, shutdown, restart, and fake-backend tests pass.
 
-### U3. Invocation supervisor and backend contract
+### U3. Host process supervisor and backend contract
 
-- **Goal:** Run one fake-backed invocation through containment, typed
-  preparation, evidence, terminal arbitration, and cleanup with truthful
-  outcomes before real acquisition/adapters.
-- **Requirements:** R3, R5, R8, R13, R14, R15, R16; AE9, AE10, AE11, AE12,
-  AE14, AE15, AE16, AE17, AE18; KTD3, KTD9, KTD10, KTD11, KTD12.
-- **Files:** security/state helper extensions, provider/MCP/tool view and egress
-  compiler, invocation state machine, containment/start-gate controller, spawn
-  broker, typed preparation, evidence collector, result validator,
-  cleanup/reaper, and lifecycle tests.
-- **Approach:** Extend the U1 helper to allocate an empty cgroup with a stable ID
-  and start gate, commit Task+lease+containment before release, and enumerate
-  recorded and unknown cgroups on startup. Launch every child into the cgroup;
-  mediate every backend MCP/tool spawn; enter role-specific mount and network
-  namespaces; replace environments; close descriptors; apply nftables egress
-  policy; use pidfds for termination/wait; and expose safe file operations.
-  Resolve targets through U2's typed fake adapter; never execute generated
-  launchers or setup commands. Commit one internal intent across provider,
-  cancel, deadline, and shutdown; capture live events; prove quiescence before
-  filesystem evidence; atomically settle status, evidence, Artifacts, cleanup,
-  and lease release; remain alive to reap when poisoned without mutating the
-  settled Task.
-- **Execution note:** Fault-inject every boundary: capacity races and restart;
-  process death before/after empty-set creation, Task binding, child clone, and
-  start-gate release; pairwise and three-way outcome races; child fork/escape;
-  helper protocol/version/package mismatch; provider/MCP/tool attempts to reach
-  Agent Card, ListTasks, GetTask, SendMessage, CancelTask, host loopback, and
-  management networks; environment/path/inherited-FD/`/proc`/magic-link secret
-  reads by real child and grandchild processes; output truncation, malicious
-  evidence, valid-result-then-evidence-failure, and unknown cleanup.
-- **Verification:** Deterministic lifecycle, single execution lease, helper
-  packaging/checksum, cgroup/pidfd/mount/network namespace containment,
-  non-bypassable spawn mediation, separate secret/descriptor/egress views,
-  typed preparation, safe-file/evidence, unknown-cgroup reconciliation, and
-  poison/reaping tests plus real child-process smoke on Linux x64/arm64 CI.
+- **Goal:** Run fake-backed direct host invocations through shared read-only and
+  independent read-write workspace selection, logical cwd resolution, typed
+  preparation, explicit environment construction, process-group cancellation,
+  evidence, terminal arbitration, and cleanup with truthful limits before real
+  adapters.
+- **Requirements:** R3, R5, R8, R13-R16, R18; AE8-AE12, AE14-AE18;
+  KTD3, KTD6, KTD9-KTD12.
+- **Files:** `apps/gateway` backend types/registry, immutable-base manager,
+  workspace materializer, provider environment builder, Linux process-group
+  supervisor, invocation state machine, typed preparation, evidence collector,
+  result validator, cleanup/restart reconciliation, fake process fixtures, and
+  lifecycle tests.
+- **Approach:** Define the minimal adapter contract for availability,
+  capabilities, access-aware invoke/events, graceful abort, direct-process
+  settlement, result/usage/evidence, and disposal. Resolve fake targets without
+  executing generated launchers or setup commands. For read-only, resolve cwd in
+  immutable base and allocate private runtime state. For read-write, materialize
+  a Task-ID-derived view via block clone, rootless OverlayFS,
+  or explicit copy. Resolve workspace-root and repository-relative selectors,
+  reject missing/non-directory/escaping paths, and pass only the effective cwd,
+  runtime paths, and access mode to the adapter. Start each direct provider in a
+  new process group, persist its leader PID and process-start marker before
+  marking execution started, and build its environment from a reviewed allowlist
+  that preserves required host identity/auth paths. Commit one internal intent
+  across provider terminal, cancel, deadline, and shutdown. Escalate adapter
+  abort to process-group `SIGTERM` and `SIGKILL`; capture bounded live events;
+  collect filesystem/Git evidence only after the direct process settles; remove
+  Task runtime or writable view; and atomically settle status, evidence,
+  Artifacts, observed termination, cleanup, and lease release. The non-settling
+  path emits only termination failure and live evidence, retains Task-owned
+  state plus lease, and blocks admission until verified reconciliation.
+- **Execution note:** Fixtures must distinguish what AllAgents observes from what
+  it cannot guarantee. Exercise child and grandchild processes, including one
+  that escapes or outlives the direct process, and assert the gateway never
+  labels process-group cleanup as complete descendant quiescence. The CI runner
+  teardown is the final orphan boundary. No cgroups, pidfds, namespaces,
+  nftables, `openat2`, spawn broker, provider container, or isolation claim.
+- **Verification:** Deterministic lifecycle; shared-base reuse without shared
+  runtime state; adapter-native read-only policy where available; independent
+  reflink, rootless-overlay, and copy views; automatic copy ceiling; cwd
+  resolution and escape rejection; single lease; explicit environment
+  inclusion/exclusion;
+  required host-auth preservation; binary-override compatibility rejection;
+  graceful/TERM/KILL timing; cancellation/deadline/shutdown races; poisoned-
+  lease behavior; post-teardown reconciliation; evidence ordering; result
+  states; cleanup outcomes; and truthful orphan-limit fixtures pass on trusted
+  Linux CI.
 
-### U4. Git and OCI workspace acquisition
+### U4. Docker-only Git and OCI immutable-base acquisition
 
-- **Goal:** Materialize declared repository sets and named OCI snapshots into the
-  same validated invocation workspace through the U3 security helper.
-- **Requirements:** R6, R9, R10, R11, R12, R15, R16, R18; AE5, AE6, AE7,
-  AE8, AE10, AE15, AE17, AE18; KTD6, KTD7, KTD8, KTD11, KTD12.
-- **Files:** acquisition coordinator, Git transport, GitHub provider selection,
-  strict Docker-auth/helper resolver, OCI Distribution client and changeset
-  applier, workspace-manifest validator, staging/publication helper, fixtures and
-  tests.
-- **Approach:** Resolve name-based requests from the compiled project catalog.
-  Implement hermetic Git and full-commit verification. Apply the exact App
-  eligibility proof table, bypass token cache, validate/revoke each fresh token,
-  permit `gh` only for positive ineligibility, and use descriptor-bound temporary
-  helpers. Implement anonymous-first bounded Bearer authentication, redirect/
-  credential-origin rules, the frozen direct-image media profile, streaming
-  descriptor verification, gzip/zstd changeset and whiteout semantics, all
-  extraction ceilings, exact project-manifest validation, and atomic publication.
-  Tear down every acquisition credential before typed preparation.
-- **Execution note:** Use local Git remotes and a local OCI registry plus the U1
-  producer fixture. Prove ambiguous/selected-App failures never call `gh`, two
-  sequential acquisitions mint distinct tokens, token validation/revocation and
-  lifetime are enforced, helper/auth-file swaps fail, and snapshot failure never
-  invokes Git fallback.
-- **Verification:** Three-way provider-selection and real-response fixture tests;
-  Git branch/tag/full-commit integration; GHCR/Docker Hub helper fixtures;
-  malicious realm/scope/downgrade/redirect tests; OCI index/media/digest/size/
-  limit/order/whiteout/path/catalog fixtures; credential leak scans; equivalent
-  complete manifest output across both acquisition modes.
+- **Goal:** Materialize declared repository sets and named OCI snapshots when no
+  reusable validated base exists, validate and promote bases on the host, and
+  prove reuse and non-reusable cleanup without placing providers in Docker.
+- **Requirements:** R6, R8-R12, R15-R16, R18; AE5-AE11, AE15, AE17-AE19;
+  KTD3, KTD6-KTD8, KTD10-KTD14.
+- **Files:** `apps/acquirer` Git/OCI implementations and entrypoint,
+  `packages/acquisition-contracts`, `apps/gateway` Docker coordinator,
+  immutable-base cache/pin/eviction manager and host staging/manifest validator,
+  deterministic producer fixture, local/GHCR/JFrog fixtures, reusable registry-
+  conformance workflow, and focused tests.
+- **Approach:** Derive cacheability and keys from the compiled catalog,
+  acquisition-contract version, layout digest, and immutable source identity.
+  A valid hit pins the base and starts no container or credential flow. On a
+  miss, the host creates private staging, resolves only the selected source
+  credential, and starts the exact digest-pinned image with staging as its sole
+  writable bind, no host home, no Docker socket, and per-request source policy.
+  In repository mode the host coordinator implements the App eligibility table,
+  mints and injects only the fresh repository-scoped token, validates/revokes it,
+  selects `gh` only for positive ineligibility, and never falls back after
+  selected-provider failure. Branch/tag requests bypass reusable bases. In
+  snapshot mode implement anonymous-first bounded Basic/Bearer authentication,
+  canonical Docker Hub normalization, exact-host CA/realm/redirect rules,
+  direct-image media profile, streaming digest verification, gzip/zstd
+  changesets/whiteouts, fixed limits, and path-free manifest/private layout
+  checks.
 
-### U5. Codex backend adapter
+  The acquirer emits only typed manifest and staging content, then exits. The
+  gateway removes it, destroys source material, validates manifest, limits, and
+  exact catalog again on the host, and atomically publishes the base. Private-
+  root, pinning, budgeted unpinned-LRU eviction, and
+  restart fixtures cover cache lifecycle. Image probes prove no Codex/Pi/harness,
+  provider auth, host home, gateway state, or Docker control reaches acquisition.
+  Snapshot failure never invokes Git fallback.
+- **Execution note:** Every PR runs local Git, local Distribution, and live
+  public digest-pinned GHCR against the exact built image. Release conformance
+  reuses the exact gateway npm tarball plus multi-architecture acquisition
+  manifest/platform digests without rebuilding. Authenticated GHCR uses least-
+  privilege pull credentials; pinned JFrog JCR uses HTTPS/private CA/private
+  repository/pull-only identity. Run platform-specific cases only where the
+  registry/runner supports that architecture and record coverage explicitly.
+- **Verification:** App three-way selection, base-acquisition token lifetime/
+  validation/revocation, cache-hit no-credential/no-container behavior, `gh`
+  fallback, Git revisions, immutable key invalidation, pin/eviction/restart,
+  non-reusable branch/tag base cleanup, Docker mount/env/network/credential/limit
+  enforcement, container and orphan-staging removal,
+  host revalidation/atomic publication, OCI auth/realm/redirect/CA/media/digest/
+  size/whiteout/path/catalog cases, clean leak scans, equivalent typed manifests,
+  and exact local/public GHCR/authenticated GHCR/private-CA JFrog reports pass.
 
-- **Goal:** Run built-in and profile-backed Codex targets through the supported
-  SDK while preserving structured progress, result, usage, cancellation, and
-  native evidence.
-- **Requirements:** R7, R8, R13, R14, R15, R16; AE1, AE3, AE4, AE10, AE12,
-  AE15, AE17, AE18; KTD9, KTD11, KTD12.
-- **Files:** Codex adapter, profile-context and auth bridge, fixtures,
-  conformance and optional credentialed smoke tests.
-- **Approach:** Pin SDK/model compatibility and first prove a non-bypassable
-  synchronous hook that delegates every MCP and model-tool spawn to the U3
-  helper. If the pinned Codex surface can bypass that hook, Codex is unavailable
-  in v1 rather than relying on an asserted view. Create one fresh thread per
-  Task; pass cwd, typed profile configuration, abort signal, and the private
-  Codex control-process auth view inside containment. Pass native `outputSchema`
-  only for the pinned Structured Outputs subset; otherwise add JSON guidance and
-  use the common terminal validator. Normalize events/usage, bound evidence, and
-  dispose fully.
-- **Execution note:** Characterize the pinned SDK/model's spawn, schema, tool-
-  sandbox, auth, abort, and event behavior with captured fixtures before
-  normalization. Do not import Promptfoo provider code.
-- **Verification:** Shared adapter conformance, real SDK child/grandchild spawn
-  mediation, filesystem/environment/inherited-FD/`/proc` credential denial,
-  gateway/host-network denial, native-schema and validated-fallback paths,
-  deadline, and an opt-in credentialed smoke case.
+### U5. Codex SDK adapter
 
-### U6. Pi backend adapter
+- **Goal:** Run built-in and profile-backed Codex targets on the trusted host
+  through the pinned SDK while preserving progress, result, usage, cancellation,
+  existing authentication, and truthful evidence.
+- **Requirements:** R7-R8, R13-R16, R18; AE1, AE3-AE4, AE10-AE12,
+  AE15, AE17-AE18; KTD9, KTD11-KTD12.
+- **Files:** `apps/gateway` Codex adapter, typed profile projection, environment
+  policy, SDK fixtures, shared conformance tests, and optional credentialed
+  smoke tests.
+- **Approach:** Use pinned `@openai/codex-sdk` first. Create one fresh execution
+  context per Task; pass the resolved cwd, access mode, Task-private runtime
+  paths, and typed profile settings. For `readOnly`, request the native read-only
+  policy when supported and keep preparation outside the base. Preserve the
+  existing host `CODEX_HOME`/ChatGPT login when API credentials are absent;
+  stream/normalize events and usage; connect native abort to U3; bound evidence;
+  and dispose.
+  Use app-server only if U0 recorded a specific required SDK gap and pin/probe
+  its protocol.
+  Pass native `outputSchema` only for the supported Structured Outputs subset;
+  otherwise add JSON guidance and use the common terminal validator.
+- **Execution note:** Characterize pinned SDK/model auth, abort, event, tool, and
+  schema behavior before normalization. Provider and model tools retain trusted
+  CI-job authority; tests inspect the explicit environment but make no hostile-
+  code, network, or secret-isolation claim. Do not import Promptfoo or AI SDK
+  Harnesses and do not download Codex per request.
+- **Verification:** Shared adapter conformance; built-in/profile targets;
+  existing `CODEX_HOME` and API-credential paths; environment allowlist; exact
+  override probe; event/usage/result normalization; graceful/TERM/KILL
+  cancellation; native-schema and validated-fallback paths; deadline; malformed
+  provider payload; and opt-in credentialed smoke pass outside Docker.
 
-- **Goal:** Run built-in and profile-backed Pi targets through strict RPC with the
-  same public lifecycle and honest capability reporting.
-- **Requirements:** R7, R8, R13, R14, R15, R16; AE3, AE4, AE10, AE12, AE15,
-  AE17, AE18; KTD9, KTD11, KTD12.
-- **Files:** Pi adapter, RPC parser, restricted policy extension, profile-context
-  and auth bridge, fixtures, conformance and optional credentialed smoke tests.
-- **Approach:** First prove strict RPC exposes a non-bypassable synchronous hook
-  that delegates every MCP and model-tool spawn to the U3 helper. If Pi can
-  bypass that hook, Pi is unavailable in v1. Launch Pi with typed invocation
-  configuration, its private control-process auth view, strict JSONL RPC,
-  explicit allowed tools/extensions, per-MCP secret declarations,
-  deterministic permissions, event validation, deadline/cancellation
-  escalation, and settled completion. Repository extensions and unrestricted
-  built-ins remain disabled.
-- **Execution note:** Characterize and pin Pi's spawn/RPC contract; record
-  Pi-specific facts as bounded native evidence rather than public schema
-  branches.
-- **Verification:** Shared adapter conformance, real RPC child/grandchild spawn
-  mediation, filesystem/environment/inherited-FD/`/proc` provider/MCP secret
-  denial, gateway/host-network denial, malformed/unknown RPC, deadline, and an
-  opt-in credentialed smoke case.
+### U6. Pi RPC adapter
+
+- **Goal:** Run built-in and profile-backed Pi targets on the trusted host through
+  the pinned supported package/RPC surface with the same public lifecycle and
+  honest capability reporting.
+- **Requirements:** R7-R8, R13-R16, R18; AE3-AE4, AE10-AE12, AE15,
+  AE17-AE18; KTD9, KTD11-KTD12.
+- **Files:** `apps/gateway` Pi adapter/RPC parser, restricted policy extension,
+  typed profile projection, environment policy, fixtures, shared conformance
+  tests, and optional credentialed smoke tests.
+- **Approach:** Launch Pi directly in the resolved cwd with access mode,
+  Task-private runtime paths, typed invocation configuration, existing host Pi
+  authentication location, strict RPC, explicit supported tools/extensions,
+  deterministic permissions, validated events, bounded evidence, and U3
+  cancellation escalation. Request a native read-only policy when supported.
+  Never copy, mount, parse, or import Pi auth.
+  Repository extensions and unrestricted built-ins remain disabled. A global
+  Pi binary override must pass the exact pinned version/protocol probe.
+- **Execution note:** Characterize and pin Pi's RPC/auth/abort/event contract.
+  Pi-specific facts remain bounded native evidence rather than public schema
+  branches. Model tools retain trusted CI-job authority; do not claim the
+  explicit environment isolates provider/MCP/operator secrets.
+- **Verification:** Shared adapter conformance; built-in/profile targets;
+  existing host auth; environment allowlist; exact override probe; strict
+  malformed/unknown RPC rejection; event/usage/result normalization; graceful/
+  TERM/KILL cancellation; deadline; and opt-in credentialed smoke pass outside
+  Docker. Malformed RPC can never produce success.
 
 ### U7. End-to-end delivery and documentation
 
-- **Goal:** Prove the bundled/packed CLI and document the trusted-network
-  operating model, Linux requirements, workspace configuration, credentials,
-  sources, Promptfoo consumption, and risks.
-- **Requirements:** R1-R19; F1-F6; AE1-AE21.
-- **Files:** published extension and snapshot-format pages, gateway guide/
-  reference, configuration reference, README, CHANGELOG, real project/user
-  workspaces, AI Evals-style Promptfoo YAML and custom-provider contract fixture,
-  E2E fixtures, packed-install smoke, release evidence.
-- **Approach:** After final implementation review, build and pack the CLI plus
-  both helper packages; install in a clean Linux environment; create project and
-  user workspaces under `/tmp/`; gateway-enable fixture targets; serve on
-  loopback and `0.0.0.0` with a valid advertised URL; exercise health/readiness;
-  acquire local Git and OCI fixtures; and run an independently generated
-  official A2A client through version/extension negotiation, errors, both send
-  modes, complete listing, success, replay, cancellation, deadline, shutdown,
-  restart, and expiry. Run the custom-provider fixture through repository and
-  snapshot invocations with secure Promptfoo defaults, proving requests contain
-  only logical source data while the gateway resolves origins. Document full
-  network-peer authority, sensitive opaque payloads, and process-only secrets.
-- **Execution note:** Green smoke uses the same built command and `/tmp/`
-  workspace shape as red E2E, never a test-only server. The consumer fixture is
-  AI Evals-style test/documentation code; AllAgents runtime does not import
-  Promptfoo.
-- **Verification:** `bun run build`, packed-install/helper checksum smoke,
-  focused and full tests, typecheck, lint, docs build, extension/schema drift,
-  custom-provider contract fixture, and exact red/green commands/results in the
-  PR description.
+- **Goal:** Prove independently released Bun CLI/gateway packages and the exact
+  acquisition image, then document the trusted-network and trusted-runner model,
+  workspace/source configuration, host auth, registry coverage, Promptfoo
+  consumption, installation, release ordering, and limits.
+- **Requirements:** R1-R19; F1-F6; AE1-AE21; KTD1-KTD14.
+- **Files:** published extension/snapshot-format pages, gateway guide/reference,
+  configuration reference, README, CHANGELOGs, real project/user workspaces,
+  AI Evals-style Promptfoo YAML/provider contract fixture, E2E fixtures,
+  CLI-only and gateway packed-install smokes, acquisition-image release record,
+  GHCR/JFrog reports, size/SBOM evidence, and independent release evidence.
+- **Approach:** After final review, pack `apps/cli` and `apps/gateway`
+  independently without publishing. Prove CLI-only installation resolves
+  neither gateway nor image; install the gateway tarball in a clean trusted
+  Linux environment with Docker and pre-existing Codex/Pi host auth. Create
+  project/user workspaces under `/tmp/`; serve on loopback and `0.0.0.0`; test
+  probes and the complete A2A lifecycle; acquire local Git/OCI plus live registry
+  fixtures through the exact image; and run Codex/Pi on the host. Exercise the
+  Promptfoo consumer fixture in both source modes with per-trial logical cwd and
+  workspace access. Prove read-only Tasks reuse one immutable base without
+  shared runtime state, read-write Tasks receive independent disposable views,
+  and requests carry only logical source, cwd, and access data.
+
+  Run registry workflows with the exact gateway tarball, acquisition manifest,
+  supported platform digests, and build commit. Gateway publication is blocked
+  until the image has passed required GHCR/JFrog conformance. Document that
+  network peers have full Task authority, providers/model tools have CI-job
+  authority, explicit environments are not isolation, evidence follows only
+  direct-process settlement, Docker is acquisition-only, and ephemeral runner
+  teardown is the final orphan boundary.
+- **Execution note:** Green smoke uses the release-candidate npm tarball and
+  exact acquisition image artifacts, never a checkout rebuild. The consumer
+  fixture is AI Evals-owned test/documentation code; AllAgents runtime does not
+  import Promptfoo.
+- **Verification:** CLI-only/gateway clean installs and sizes, independent
+  release dry runs, compatibility/image mismatch fixtures, local Distribution
+  and public digest-pinned GHCR on every PR, authenticated GHCR and private-CA
+  JFrog release conformance against exact artifacts, complete A2A/Task/provider/
+  acquisition E2E, Promptfoo contract fixture, Bun typecheck/lint/test/build,
+  dependency/image scans, generated contract/docs drift, docs build, and exact
+  red/green commands/results in the PR description.
 
 ---
 
@@ -1575,94 +2133,153 @@ carrier.
 
 | Gate | Applies to | Required evidence |
 |---|---|---|
-| Workspace/package schema | U1 | Root workspace install/build edge; ordered helper-package publication and clean-registry resolution; project/user parsing; compiled repository/target catalogs; generated schema/spec drift |
-| Public contract | U1-U2 | Independent official HTTP+JSON client; card interface/params/streaming capability; A2A version and every-operation extension headers; unified Parts; both send modes; complete listing; metadata; `google.rpc.Status`; request/result/Artifact/canonicalization fixtures |
-| Trusted-network model | U2-U3, U7 | Loopback and `0.0.0.0` with distinct advertised URL; HTTPS docs; shared external Task visibility/cancellation; invocation-to-gateway and host-network denial; metadata-only health/readiness |
-| Durable Task lifecycle | U1-U3 | Descriptor-rooted SQLite VFS/full-sync transactions; private state/lock; create-or-replay; one execution lease; internal outcome intent and atomic terminal settlement; no early eviction; crash/store faults; restart; transactional expiry |
-| Repository acquisition | U4 | Compiled-name resolution, hermetic Git, commits, 200/404/ambiguous App eligibility, cache bypass, token validation/revocation, `gh` fallback and sub-budget |
-| OCI acquisition | U4 | Strict Docker auth/helper; exact layer-redirect allowlist and per-hop address checks; Bearer origin policy; direct-image/config/layer media; descriptor verification; changesets/whiteouts; fixed limits; exact project catalog; no fallback |
-| Linux helper and isolation | U1, U3-U7 | x64/arm64 packages/checksums; kernel/cgroup readiness; gated durable containment; full namespace enumeration; pidfd termination; openat2 path/VFS handles; non-bypassable spawn mediation; separate mount/environment/descriptor/network views |
-| Supervisor lifecycle | U3 | Capacity races; pre/post-gate crash points; provider/cancel/deadline/shutdown intent races; live-event capture; atomic evidence settlement; poison/readiness/reaping; unknown-set proof |
-| Safe evidence | U3-U6 | Descriptor-relative reads with identity/size recheck; links/special/sparse/replaced files and Git indirection rejected; no verified FS evidence before quiescence |
-| Backend conformance | U2-U3, U5-U6 | Same lifecycle suite for fake, Codex, and Pi; real child/grandchild spawn mediation; credential and gateway-network denial; profile and built-in variants |
-| Structured result | U1, U3, U5-U6 | Public grammar, Codex native-subset gate and fallback, valid/invalid/not-produced states, Artifact cardinality, no false publication |
-| Repository quality | All | Build, clean-registry install, focused/full tests, typecheck, lint, schema/spec checks, docs build |
-| Bundled CLI E2E | U7 | Recorded red then green command under `/tmp/`, both sources, advertised URL/probes, auth and network isolation, capacity, replay/cancel/deadline/shutdown/restart |
-| Promptfoo consumption | U7 | Secure-default AI Evals YAML for both modes; optional context; nonblocking acceptance/subscription/cancel; source/provenance omit origins; output/usage/error metadata mapping |
+| Bun architecture feasibility | U0 | Exact A2A JavaScript SDK pin and official-client server-direction operations; pinned Codex SDK and Pi RPC/package probes; existing host-auth behavior; shared read-only base/private runtime; reflink, rootless-overlay, and copy probes; Linux abort/TERM/KILL process-group probe with truthful descendant limit; exact multi-architecture acquirer image; independent packed CLI/gateway installs; immutable tarball/image binding |
+| Bun repository quality | U0-U7 | One lockfile; private root orchestration; workspace-scoped typecheck/lint/test/build; dependency and image scans; generated-contract drift; minimized runtime dependencies; packed and installed size budgets |
+| Package and release separation | U0-U1, U7 | Independent `allagents` and `allagents-gateway` versions/tags/triggers/tarballs; image-first gateway release; exact npm tarball plus acquisition manifest/platform digests; idempotent publication; CLI-only install fetches neither gateway nor image; gateway-only release never publishes the CLI |
+| Workspace and contract packages | U0-U1 | Only `workspace-config`, `execution-contracts`, and `acquisition-contracts` shared packages; generated portable `contracts/` fixtures; normalized catalogs/defaults/order/collision keys/stable errors; project/user parsing; schema/spec drift; no `core`/`common` |
+| Public contract | U0-U2 | Official JavaScript client against the Bun gateway; card interface/params/streaming; A2A version and extension headers; unified Parts; logical cwd and workspace-access schema/default/canonicalization/integrity evidence; both send modes; complete listing; metadata; `google.rpc.Status`; request/result/Artifact fixtures |
+| Trusted-network and runner model | U2-U7 | Loopback and `0.0.0.0` with distinct advertised URL; HTTPS docs; shared external Task visibility/cancellation; trusted Linux CI job/VM/deployment container as provider isolation boundary; read-only described as cooperative best-effort; explicit no-hostile-code/no-secret-isolation wording; metadata-only probes |
+| Durable Task lifecycle | U1-U3 | Private gateway-owned `bun:sqlite`; foreign keys and `synchronous=FULL`; transactions for create/replay, base pins, lease, intent, settlement, and expiry; no early eviction; process-kill/store faults; lock/restart/interrupted-Task reconciliation |
+| Acquisition-container boundary | U0, U4, U7 | One fresh container when no reusable validated base exists and none on cache hit; exact digest-pinned image; staging-only writable bind; selected repository/registry credentials and CA material only; no App private key, host home, Docker socket, gateway state, provider auth, Codex, Pi, or harness downloads; strict source network/size/archive policy; typed manifest; exit/removal before host validation and provider execution; orphan-staging cleanup |
+| Immutable-base cache | U0-U4, U7 | Key binds acquisition contract, compiled catalog/layout, and immutable source; exact commit/digest reuse; branch/tag bypass into non-reusable Task-owned bases; atomic promotion; active pins; unpinned LRU byte-budget eviction; one acquisition across 100 identical read-only trials; no cached credentials; transient-base cleanup |
+| Repository acquisition | U0, U4 | Compiled-name resolution; hermetic Git/full commits; App 200/404/ambiguous eligibility; fresh base-acquisition token validation/revocation; cache-hit no credential; `gh` only after positive ineligibility; acquisition sub-budget; no provider start on failure |
+| OCI acquisition | U4 | Canonical Docker Hub plus GHCR/JFrog/private-registry matrix; exact-key auth/helper/CA; bounded Basic/Bearer; redirect/rebinding policy; direct-image/config/layer media; descriptor verification; path-free manifest/private layout; changesets/whiteouts; fixed limits; no fallback |
+| Registry and exact-artifact conformance | U4, U7 | Local Distribution and public digest-pinned GHCR on every PR; authenticated GHCR and private-CA JFrog release targets; exact gateway npm tarball plus acquisition multi-architecture manifest/platform digests without rebuild; positive/negative auth/permission/CA/media/path cases; explicit architecture coverage |
+| Host supervisor lifecycle | U3 | One active lease; reusable-base read-only/private-runtime and non-reusable-base paths; independent writable views and cleanup; provider PID/start identity persisted before started state; explicit environment allowlist and host auth paths; cancel/deadline/shutdown races; graceful abort then TERM/KILL; non-settling failure retains Task-owned state/lease and blocks readiness; verified post-teardown reconciliation |
+| Truthful bounded evidence | U3-U6 | Live bounded events; collection only after the direct provider settles and escalation finishes; hermetic Git inspection; observed termination/cleanup recorded; no claim of full descendant quiescence, hostile-code containment, secret isolation, or opaque-output redaction |
+| Backend conformance | U0, U2-U3, U5-U6 | Narrow access-aware AllAgents adapter contract; same lifecycle suite for fake, Codex SDK, and Pi RPC/package; built-in/profile variants; reusable or non-reusable read-only bases and independent read-write views; resolved logical cwd/runtime/access passed to providers; existing host auth; exact binary override probes; direct host execution outside acquisition Docker; no AI SDK Harnesses or per-request runtime download |
+| Structured result | U1, U3, U5-U6 | Public grammar; Codex native-subset gate and validated fallback; valid/invalid/not-produced states; Artifact cardinality; malformed provider/RPC payload cannot publish success |
+| Repository quality | All | Bun install/typecheck/lint/test/build; focused and full suites; clean-registry packed installs; dependency/image audit; generated schema/spec checks; docs build |
+| Packaged gateway E2E | U7 | Recorded red/green `/tmp/` commands; explicit gateway install; exact acquisition image; Git/local OCI/GHCR/JFrog sources; base reuse/materialization/cleanup; advertised URL/probes; capacity/replay/cancel/deadline/shutdown/restart; host Codex/Pi auth; truthful trust documentation |
+| Promptfoo consumption | U7 | Secure-default AI Evals YAML for both source modes; optional context; per-trial `allagentsWorkingDirectory` and `allagentsWorkspaceAccess`; shared-base read-only trials; independent disposable read-write views; nonblocking acceptance/subscription/cancel; logical source/cwd/access provenance without origins or physical paths; output/usage/error metadata mapping; no AllAgents Promptfoo runtime dependency |
 
 ## Definition of Done
 
 ### Global
 
 - Every R1-R19 requirement is implemented or explicitly demonstrated by a
-  passing acceptance scenario.
-- The gateway starts with no `gateway.yaml` or `worker.yaml`, defaults to
-  loopback HTTP, accepts explicit `0.0.0.0`, requires a separate advertised URL
-  off default loopback, documents production HTTPS, and exposes truthful
+  passing acceptance scenario; F1-F6 and AE1-AE21 agree with the implementation
+  and error table.
+- U0's Bun/A2A/provider/process/acquirer/package gate passes before dependent
+  units. The private root, three apps, three named packages, and generated
+  `contracts/` fixtures are the complete shared layout; no speculative shared
+  package, native sidecar, or split runtime remains.
+- `allagents` and `allagents-gateway` remain independently versioned and
+  released. A CLI-only install fetches neither gateway nor acquisition image.
+  Gateway release builds/verifies the exact acquisition image and registry
+  reports before publishing the bound npm tarball.
+- The gateway starts without `gateway.yaml` or `worker.yaml`, defaults to
+  loopback HTTP, accepts explicit `0.0.0.0`, requires a distinct advertised URL
+  away from default loopback, documents production HTTPS, and exposes truthful
   metadata-only health/readiness.
-- Network reachability is the only external caller trust boundary; Task
-  visibility and idempotency are deployment-wide. Invocation descendants cannot
-  reach that boundary, host loopback, or management networks.
+- Network reachability is the external caller authorization boundary; Task
+  visibility and idempotency are deployment-wide. Provider execution uses the
+  trusted Linux CI job/VM/deployment-container boundary and existing host auth.
+  Documentation explicitly says AllAgents does not contain hostile repository
+  code or isolate provider/MCP/operator secrets from model-invoked tools.
 - Project workspace declarations compile to the exact repository/snapshot
   catalog; user declarations own profile launcher gateway enablement; built-in
-  target IDs cannot be shadowed.
+  IDs cannot be shadowed. Requests may select only the effective workspace root
+  or a declared repository plus a bounded relative directory and may select only
+  `readOnly | readWrite` access. They cannot supply physical/configured
+  destination paths, origins, credentials, commands, provider environments,
+  materializers, cache keys, Docker images/options/mounts, or provider permission
+  policy.
 - The published extension, Agent Card interface/params, A2A version and
-  activation headers, unified Parts, both send modes, full ListTasks behavior,
-  metadata preservation, strict schemas, HTTP+JSON errors, embedded Artifacts,
-  canonicalization, retention, and cancellation pass independent official-client
-  fixtures.
+  activation headers, logical cwd and workspace-access unions/defaults, unified
+  Parts, both send modes, full `ListTasks`, metadata preservation, strict
+  schemas, HTTP+JSON errors, embedded Artifacts, canonicalization, retention,
+  and cancellation pass official-client fixtures.
 - Secure-default AI Evals Promptfoo YAML selects repository mode with optional
-  named revision overrides or snapshot mode with one handle and immutable
-  digests. The provider maps one optional-context `callApi` to one nonblocking
-  Task, retains its high-entropy key across ambiguous retry, propagates
-  cancellation with a fresh cleanup signal, normalizes usage, and returns safe
-  error metadata and logical provenance without origins or runtime dependency.
-- Git and OCI modes produce one complete workspace-manifest contract. OCI v1
-  uses the direct-image/config/layer profile, exact project catalog, descriptor
-  verification, same-origin metadata, operator-approved layer redirect hosts
-  with per-hop address validation, changeset semantics, and fixed extraction
-  ceilings. Source modes never fall back and provenance never overclaims
+  named revisions or snapshot mode with immutable digests and can replace the
+  logical cwd and access per trial. Each `callApi` maps to one nonblocking Task;
+  read-only Tasks may share the immutable base and physical cwd, while read-
+  write Tasks receive independent disposable views. Ambiguous retries retain the
+  same key, base/view, cwd, and access. The provider propagates cancellation,
+  normalizes usage, and returns safe failure/logical provenance without origins,
+  configured destinations, physical paths, or an AllAgents Promptfoo dependency.
+- Every request without a reusable validated base starts the exact digest-pinned
+  image with staging as its only writable bind plus source-only credentials and
+  strict policy. A valid cache hit starts no container and resolves no
+  credential. The image has
+  no host home, Docker socket, gateway state, provider auth, Codex, Pi, or
+  harness download path. It emits a typed manifest, exits, and is removed before
+  host validation, immutable-base publication, typed preparation, or provider
+  execution. Git and OCI modes produce one path-free manifest contract while the
+  host validates exact private destinations. OCI v1 remains registry-neutral
+  across Docker Hub, GHCR, JFrog, and compatible private registries with
+  immutable digests, descriptor verification, exact redirect/auth/CA rules,
+  changesets, fixed limits, no cross-mode fallback, and truthful source
   verification.
-- App eligibility and ambiguous 404 handling, acquisition sub-budget, positive-
-  ineligibility `gh` fallback, fresh token cache bypass/validation/revocation,
-  strict Docker auth/helper and registry challenge policy, and pre-provider
-  credential teardown are proven.
-- Typed preparation never runs workspace setup commands. The packaged Linux
-  helper durably binds containment before releasing any child, enumerates
-  unknown cgroups, and mediates every MCP/tool exec into role-specific mount,
-  environment, descriptor, credential, and network views. Real Codex/Pi
-  child/grandchild tests prove model tools cannot reach provider/MCP/operator
-  credentials, gateway state, or the gateway/host-management network; a backend
-  without non-bypassable spawn mediation is unavailable.
-- The descriptor-rooted SQLite VFS, execution lease, pre/post-start-gate crash
-  boundaries, internal outcome-intent races, atomic terminal evidence
-  settlement, result states, state-path safety, descendant quiescence, readiness
-  poisoning/reaping, immutable terminal Tasks, and cleanup pass fault tests.
-- Evaluation behavior, public-Internet authentication, remote workers, custom
-  materializers, non-Linux gateway execution, and multi-tenant policy remain
-  absent.
+- App eligibility/ambiguous 404 handling, base-acquisition fresh token
+  validation/revocation, cache-hit credential avoidance, positive-ineligibility
+  selection, OCI auth/challenges, exact-host CA, and acquisition credential
+  teardown pass. Local Distribution and public digest-pinned GHCR run on every
+  PR; authenticated GHCR and private-CA JFrog release reports match the exact
+  gateway tarball, acquisition manifest, supported platform digests, commit, and
+  compatibility output.
+- Codex uses pinned `@openai/codex-sdk` first and existing `CODEX_HOME`/ChatGPT
+  login when API credentials are absent; app-server is used only for a recorded
+  SDK capability gap. Pi uses its pinned supported package/RPC surface and
+  existing host auth. No OAuth/auth files are copied, mounted, parsed, or
+  imported, and no provider runtime is downloaded per request.
+- Direct providers start in Linux process groups with explicit environments that
+  preserve required identity/auth paths. Read-only Tasks use shared immutable
+  bases with private runtime state and best-effort provider policy; read-write
+  Tasks use independent disposable block-cloned, overlaid, or copied views.
+  Cancellation escalates adapter abort to `SIGTERM` to `SIGKILL`. Evidence is
+  bounded and begins only after the direct provider settles. A non-settling
+  provider publishes no filesystem/Git evidence, retains its Task-owned runtime
+  and any writable view plus the lease, and blocks readiness until verified
+  post-teardown reconciliation. Evidence reports observed termination/cleanup,
+  not full descendant quiescence; CI runner teardown is the final orphan
+  boundary.
+- Ordinary private Bun SQLite ownership, foreign keys, full synchronization,
+  create/replay, base pins, one lease, internal outcome races, atomic settlement,
+  immutable terminal Tasks, expiry, crash/restart reconciliation, cache
+  eviction, and cleanup pass fault tests without a custom VFS or native file
+  layer.
+- Evaluation behavior, public-Internet authentication, remote workers, caller-
+  selected custom materializers, per-provider Docker, native containment
+  primitives, non-Linux gateway execution, and multi-tenant policy remain absent.
 
 ### Per unit
 
-- U1: Root workspace packaging, ordered helper-platform publication, clean-
-  registry resolution, safe SQLite VFS, runtime/generated schemas, published
-  extension and snapshot format, producer fixture, and invalid negotiation/
-  source/enablement/collision/configuration fixtures agree.
-- U2: Official HTTP+JSON operations, version/extension/error/list semantics,
-  global replay/visibility, helper-owned SQLite locks/crashes, execution lease,
-  listeners/advertised URL, probes, deadline, shutdown, restart, and retention
-  pass against the fake backend.
-- U3: The fake lifecycle proves gated durable containment, full namespace
-  reconciliation, atomic terminal settlement, typed preparation, spawn-mediated
-  secret/descriptor/network views, safe evidence ordering, poisoning, reaping,
-  and cleanup on Linux x64/arm64.
-- U4: Git and OCI fixtures pass; App eligibility/cache bypass/token
-  validation/revocation, Docker credential/challenge and layer-redirect rules,
-  changesets, limits, exact catalog, and no-fallback rules are observed; leak
-  scans are clean.
-- U5: Codex passes shared conformance and both schema paths; optional
-  credentialed smoke evidence is recorded when credentials exist.
-- U6: Pi passes the same conformance and malformed RPC cannot produce success.
-- U7: Final review is resolved; bundled and packed CLI red/green E2E under
-  `/tmp/`, Promptfoo fixture, complete repository gates, published schemas/specs,
-  docs, and reproducible PR instructions are complete.
+- U0: Bun workspace layout, official-client A2A server direction, pinned Codex
+  SDK/Pi surface probes, host-auth behavior, shared read-only/private-runtime and
+  read-write materializer probes, explicit environment/process-group
+  feasibility, multi-architecture acquirer image, independent packed installs,
+  and exact tarball/image release binding all pass.
+- U1: Three narrow packages and generated fixtures, workspace additions,
+  execution/acquisition contracts including logical cwd, workspace access,
+  relative-path grammar, base-cache identity, and materialization errors, Bun
+  SQLite transactions/pins, published extension/snapshot format, independent
+  versions, compatibility matrix, and image-first release fixtures agree.
+- U2: Official-client operations, version/extension/error/list semantics,
+  logical cwd/access defaults/canonicalization/integrity evidence, deployment-
+  wide replay/visibility, SQLite lock/crash/lease behavior, listeners/advertised
+  URL/probes, deadline/shutdown/restart/retention, and fake backend pass.
+- U3: The fake lifecycle proves shared immutable-base read-only execution with
+  private runtime state, independent read-write views across every configured
+  materializer, cwd resolution/escape rejection, explicit provider environments,
+  required host-auth preservation, process-group abort/TERM/KILL, outcome races,
+  atomic settlement, evidence ordering, restart cleanup, and truthful orphan
+  limitations on Linux.
+- U4: Git/OCI fixtures, App/`gh` selection, cache hit/miss/key/pin/eviction,
+  exact acquisition image boundary, staging-only mount, source credentials/
+  network/limits, typed manifest, host revalidation/publication, local/public/
+  authenticated GHCR, private-CA JFrog, exact manifest/platform digests, no
+  fallback, and leak scans pass.
+- U5: Codex passes shared access-aware conformance and both schema paths through
+  the pinned SDK or documented required app-server fallback, receives resolved
+  cwd/runtime/access, reuses existing host auth, runs outside Docker, and records
+  optional credentialed smoke evidence.
+- U6: Pi passes the same host-process conformance through pinned RPC/package
+  support with resolved cwd/runtime/access, reuses existing auth, and malformed
+  RPC cannot produce success.
+- U7: Final review is resolved; CLI-only/gateway packed smokes and `/tmp/` E2E,
+  independent release/size/SBOM evidence, public GHCR on every PR,
+  authenticated GHCR/private-CA JFrog exact-artifact reports, Promptfoo
+  per-trial logical-cwd/access shared-base/read-write-view fixture, repository
+  gates, published schemas/specs, truthful threat-model docs, and reproducible PR
+  instructions are complete.

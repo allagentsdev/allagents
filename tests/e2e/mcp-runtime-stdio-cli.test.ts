@@ -23,6 +23,7 @@ const userServer = 'user-stdio';
 const profileServer = 'profile-stdio';
 const rejectedServer = 'rejected-argv';
 const hangingServer = 'hanging-stdio';
+const reflectingServer = 'reflecting-credential';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -58,6 +59,8 @@ describe('MCP runtime direct stdio CLI e2e', () => {
     fixture = createMcpRuntimeStdioFixture(join(rootDir, 'fixture-state'));
     const hangingConfig = fixture.serverConfig();
     hangingConfig.env.MCP_STDIO_HANG_LIST = '1';
+    const reflectingConfig = fixture.serverConfig();
+    reflectingConfig.env.MCP_STDIO_REFLECT_SECRET = '1';
 
     writeJson(join(workspaceDir, '.allagents', 'workspace.yaml'), {
       repositories: [],
@@ -69,6 +72,7 @@ describe('MCP runtime direct stdio CLI e2e', () => {
           args: [fixture.serverPath, '${ARGV_SECRET}'],
         }),
         [hangingServer]: hangingConfig,
+        [reflectingServer]: reflectingConfig,
       },
     });
     writeJson(join(homeDir, '.allagents', 'workspace.yaml'), {
@@ -405,6 +409,21 @@ describe('MCP runtime direct stdio CLI e2e', () => {
     expect(fixture.exits()).toHaveLength(exitCount);
     expect(fixture.environments()).toHaveLength(environmentCount);
     expect(fixture.captures()).toHaveLength(captureCount);
+  }, 30_000);
+
+  test('fails closed when stdio output reflects a resolved credential and cleans up the child', async () => {
+    const result = await runSpawned(
+      ['--json', 'mcp', 'tools', reflectingServer],
+      1,
+    );
+
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: false,
+      command: 'mcp tools',
+      error: 'MCP output contained a configured credential value',
+    });
+    expectNoSecretLeak(result);
+    expect(fixture.exits()).toHaveLength(1);
   }, 30_000);
 
   test('waits for stdio cleanup after the first interrupt', async () => {

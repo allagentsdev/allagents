@@ -20,6 +20,7 @@ import {
   type OAuthDiscoveryState,
   UnauthorizedError,
 } from '@modelcontextprotocol/sdk/client/auth.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type {
@@ -107,7 +108,6 @@ export function createMcpCredentialGuard(
   };
 }
 
-
 export function resolveMcpHeaderReferences(
   headers: Record<string, string>,
   environment: NodeJS.ProcessEnv = process.env,
@@ -148,6 +148,54 @@ export class OAuthAuthorizationError extends Error {
     super('OAuth authorization failed');
     this.name = 'OAuthAuthorizationError';
   }
+}
+
+function containsMcpAuthorizationFailure(
+  error: unknown,
+  seen: Set<object>,
+): boolean {
+  if (
+    error instanceof UnauthorizedError ||
+    error instanceof InvalidGrantError ||
+    error instanceof OAuthAuthorizationError
+  ) {
+    return true;
+  }
+  if (error === null || typeof error !== 'object') return false;
+  if (seen.has(error)) return false;
+  seen.add(error);
+
+  const candidate = error as {
+    error?: unknown;
+    errorCode?: unknown;
+    cause?: unknown;
+  };
+  if (
+    candidate.error === 'invalid_grant' ||
+    candidate.errorCode === 'invalid_grant'
+  ) {
+    return true;
+  }
+  if (
+    error instanceof Error &&
+    error.message === 'OAuth authorization requires an interactive terminal'
+  ) {
+    return true;
+  }
+  if (
+    containsMcpAuthorizationFailure(candidate.cause, seen) ||
+    (error instanceof AggregateError &&
+      error.errors.some((nested) =>
+        containsMcpAuthorizationFailure(nested, seen),
+      ))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isMcpAuthorizationFailure(error: unknown): boolean {
+  return containsMcpAuthorizationFailure(error, new Set());
 }
 
 function parseOAuthCallbackResponse(
@@ -276,9 +324,7 @@ function boundMcpResponse(
     eventBytes += lineBytes + lineEndingBytes;
     lineBytes = 0;
     if (eventBytes > maxResponseBytes) {
-      throw new Error(
-        `MCP HTTP SSE event exceeds ${maxResponseBytes} bytes`,
-      );
+      throw new Error(`MCP HTTP SSE event exceeds ${maxResponseBytes} bytes`);
     }
   };
   const boundedBody = response.body.pipeThrough(
@@ -495,6 +541,7 @@ interface OAuthProviderOptions {
   allowAuthorization?: boolean;
   profile?: string;
   credentialValues?: Set<string>;
+  signal?: AbortSignal;
 }
 
 class FileOAuthClientProvider implements OAuthClientProvider {
@@ -513,6 +560,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   private readonly authorizationOutput: (message: string) => void;
   private readonly allowAuthorization: boolean;
   private readonly credentialValues: Set<string>;
+  private readonly signal: AbortSignal | undefined;
   private readonly stateValue = randomUUID();
 
   constructor(
@@ -530,6 +578,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     this.authorizationOutput = options.authorizationOutput ?? console.error;
     this.allowAuthorization = options.allowAuthorization ?? true;
     this.credentialValues = options.credentialValues ?? new Set();
+    this.signal = options.signal;
   }
 
   get redirectUrl(): string {
@@ -562,7 +611,9 @@ class FileOAuthClientProvider implements OAuthClientProvider {
       this.codeVerifierValue = await readFile(this.verifierPath, 'utf-8');
     }
     const clientSecret = (
-      this.clientInfo as (OAuthClientInformationMixed & { client_secret?: string }) | undefined
+      this.clientInfo as
+        | (OAuthClientInformationMixed & { client_secret?: string })
+        | undefined
     )?.client_secret;
     if (clientSecret) this.credentialValues.add(clientSecret);
     if (this.tokenSet?.access_token) {
@@ -680,6 +731,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   private waitForAuthorizationCode(authorizationUrl: URL): Promise<string> {
     const { promise, resolve, reject } = Promise.withResolvers<string>();
     const readerAbortController = new AbortController();
+    let cancelAuthorization: (() => void) | undefined;
     let settled = false;
     const settle = (
       outcome: 'resolve' | 'reject',
@@ -689,6 +741,9 @@ class FileOAuthClientProvider implements OAuthClientProvider {
       settled = true;
       clearTimeout(timeout);
       readerAbortController.abort();
+      if (cancelAuthorization) {
+        this.signal?.removeEventListener('abort', cancelAuthorization);
+      }
       if (server.listening) server.close();
       if (outcome === 'resolve') {
         resolve(value as string);
@@ -752,6 +807,20 @@ class FileOAuthClientProvider implements OAuthClientProvider {
         new Error('Timed out waiting for OAuth authorization callback'),
       );
     }, AUTH_TIMEOUT_MS);
+    cancelAuthorization = () => {
+      const reason = this.signal?.reason;
+      settle(
+        'reject',
+        reason instanceof Error
+          ? reason
+          : new Error('MCP connection was cancelled'),
+      );
+    };
+    if (this.signal?.aborted) {
+      cancelAuthorization();
+      return promise;
+    }
+    this.signal?.addEventListener('abort', cancelAuthorization, { once: true });
     server.on('error', (error) => settle('reject', error));
     server.listen(this.port, '127.0.0.1', () => {
       this.authorizationOutput('Opening browser for authorization...');
@@ -821,6 +890,7 @@ export interface ConnectMcpHttpClientOptions {
   environment?: NodeJS.ProcessEnv;
   fetch?: FetchLike;
   maxResponseBytes?: number;
+  signal?: AbortSignal;
 }
 
 export interface McpHttpClientConnection {
@@ -840,8 +910,14 @@ export async function connectMcpHttpClient(
     options.environment,
   );
   for (const [key, value] of Object.entries(headers)) {
-    if (!UNSAFE_CONFIGURED_HEADERS[key.toLowerCase()]) {
-      credentialValues.add(value);
+    if (UNSAFE_CONFIGURED_HEADERS[key.toLowerCase()]) continue;
+    credentialValues.add(value);
+    if (
+      key.toLowerCase() === 'authorization' ||
+      key.toLowerCase() === 'proxy-authorization'
+    ) {
+      const credentialComponent = /^\s*\S+\s+(.+?)\s*$/.exec(value)?.[1];
+      if (credentialComponent) credentialValues.add(credentialComponent);
     }
   }
   const provider = await buildOAuthProvider(serverUrl, {
@@ -855,6 +931,7 @@ export async function connectMcpHttpClient(
       ? {}
       : { allowAuthorization: options.allowAuthorization }),
     ...(options.profile === undefined ? {} : { profile: options.profile }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     credentialValues,
   });
   const client = new Client(
@@ -890,29 +967,37 @@ export async function connectMcpHttpClient(
 
   try {
     try {
-      await client.connect(transport as unknown as Transport);
+      await client.connect(
+        transport as unknown as Transport,
+        options.signal === undefined ? undefined : { signal: options.signal },
+      );
     } catch (error) {
       if (!(error instanceof UnauthorizedError)) throw error;
+      if (options.signal?.aborted) throw error;
       const authorizationCode = await provider.waitForAuthCode();
       await transport.finishAuth(authorizationCode);
       await transport.close();
       transport = buildTransport();
-      await client.connect(transport as unknown as Transport);
+      await client.connect(
+        transport as unknown as Transport,
+        options.signal === undefined ? undefined : { signal: options.signal },
+      );
     }
   } catch (error) {
     const credentialGuard = createMcpCredentialGuard(credentialValues);
+    const sanitizedError = credentialGuard.sanitizeError(error);
+    const connectionError = isMcpAuthorizationFailure(error)
+      ? new UnauthorizedError(sanitizedError.message)
+      : sanitizedError;
     try {
       await close();
     } catch (cleanupError) {
       throw new AggregateError(
-        [
-          credentialGuard.sanitizeError(error),
-          credentialGuard.sanitizeError(cleanupError),
-        ],
+        [connectionError, credentialGuard.sanitizeError(cleanupError)],
         'MCP connection failed and its transport could not be closed',
       );
     }
-    throw credentialGuard.sanitizeError(error);
+    throw connectionError;
   }
 
   return {
@@ -930,6 +1015,7 @@ export interface ConnectHttpMcpServerOptions {
   resetCredentials?: boolean;
   allowAuthorization?: boolean;
   profile?: string;
+  signal?: AbortSignal;
 }
 
 export async function connectHttpMcpServer(

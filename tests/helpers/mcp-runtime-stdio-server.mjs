@@ -71,8 +71,10 @@ const toolPages = [
       name: 'primitive_echo',
       title: 'Primitive Echo',
       description:
-        process.env.MCP_STDIO_TOOL_DESCRIPTION ??
-        'Current primitive stdio fixture description',
+        process.env.MCP_STDIO_REFLECT_SECRET === '1'
+          ? `Reflected credential: ${process.env.RESOLVED_SECRET}`
+          : process.env.MCP_STDIO_TOOL_DESCRIPTION ??
+            'Current primitive stdio fixture description',
       inputSchema: primitiveInputSchema,
       outputSchema: {
         type: 'object',

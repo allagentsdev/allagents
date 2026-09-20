@@ -249,6 +249,7 @@ export const mcpToolsMeta: AgentCommandMeta = {
     'allagents mcp tools deepwiki --search docs',
     'allagents --json mcp tools deepwiki --scope user',
     'allagents --json mcp tools trading --profile markets',
+    'allagents mcp tools -- --option-looking-server',
   ],
   expectedOutput:
     'Connects directly to the selected configured server, lists every tool page, then closes the connection before rendering. Human output prints one block per matching tool. JSON output preserves complete parsed tool records. Exit 0 for a catalog or empty result, 1 for an operational or cleanup failure, and 2 for invalid usage.',
@@ -300,6 +301,7 @@ export const mcpCallMeta: AgentCommandMeta = {
     'allagents mcp call deepwiki ask_question --input \'{"question":"How?"}\'',
     'allagents mcp call catalog search --query docs --limit 5',
     'allagents --json mcp call trading quote --profile markets --symbol AAPL',
+    'allagents mcp call --help -- --option-looking-server --option-looking-tool',
   ],
   expectedOutput:
     'Discovers the current tool descriptor on the same direct connection used for an invocation. Fully qualified --help reports the live input contract without invoking. Calls preserve content order and complete parsed JSON results. Exit 0 on success, 1 for tool, operational, or cleanup failure, and 2 for invalid usage.',
@@ -330,7 +332,14 @@ export const mcpCallMeta: AgentCommandMeta = {
     destination: destinationOutput,
     server: 'string',
     tool: 'string',
-    result: 'complete parsed MCP call result',
+    result: 'complete parsed MCP call result (invocation only)?',
+    descriptor: 'complete parsed MCP tool descriptor (live help only)?',
+    input: {
+      mode: 'generated | input-only',
+      required: 'string[]',
+      options: 'generated tool option[]?',
+      reason: 'string?',
+    },
   },
   skipUpdateCheck: true,
 };

@@ -211,6 +211,16 @@ describe('parseMcpToolArguments', () => {
     },
   );
 
+  test.each([
+    ['9007199254740993e0', 'integer outside the safe range'],
+    ['9007199254740993.0', 'integer outside the safe range'],
+    ['1e309', 'non-finite number'],
+  ])('rejects unsafe JSON numeric token %s before parsing', (literal, error) => {
+    expect(() =>
+      parseMcpToolArguments(classification, ['--input', `{"value":${literal}}`]),
+    ).toThrow(error);
+  });
+
   test('leaves omitted optional values absent and accepts strict detached values', () => {
     expect(
       parseMcpToolArguments(classification, [

@@ -33,6 +33,7 @@ export type McpToolInputClassification =
 const PORTABLE_OPTION_NAME = /^[a-z][a-z0-9-]*$/;
 const STRICT_INTEGER = /^-?(?:0|[1-9]\d*)$/;
 const STRICT_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+const JSON_NUMBER_TOKEN = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 const RESERVED_OPTION_NAMES: Record<string, true> = {
   h: true,
   help: true,
@@ -94,7 +95,12 @@ function primitiveKind(value: unknown): McpPrimitiveKind | undefined {
 }
 
 function declaredPrimitiveKind(value: unknown): McpPrimitiveKind | undefined {
-  if (value === 'string' || value === 'number' || value === 'integer' || value === 'boolean') {
+  if (
+    value === 'string' ||
+    value === 'number' ||
+    value === 'integer' ||
+    value === 'boolean'
+  ) {
     return value;
   }
   return undefined;
@@ -105,28 +111,39 @@ function classifyProperty(
   schema: unknown,
   required: boolean,
 ): McpToolInputOption | string {
-  if (!isSchemaObject(schema)) return `Property '${name}' is not an object schema`;
+  if (!isSchemaObject(schema))
+    return `Property '${name}' is not an object schema`;
   const keyword = unsupportedKeyword(schema);
   if (keyword) return `Property '${name}' uses unsupported ${keyword}`;
-  if (hasOwn(schema, 'default')) return `Property '${name}' uses an unsupported default`;
-  if (schema.description !== undefined && typeof schema.description !== 'string') {
+  if (hasOwn(schema, 'default'))
+    return `Property '${name}' uses an unsupported default`;
+  if (
+    schema.description !== undefined &&
+    typeof schema.description !== 'string'
+  ) {
     return `Property '${name}' has a non-string description`;
   }
 
   const description = schema.description;
   if (schema.type === 'array') {
-    if (!isSchemaObject(schema.items)) return `Property '${name}' is not a homogeneous primitive array`;
+    if (!isSchemaObject(schema.items))
+      return `Property '${name}' is not a homogeneous primitive array`;
     const itemKeyword = unsupportedKeyword(schema.items);
-    if (itemKeyword) return `Property '${name}' array items use unsupported ${itemKeyword}`;
+    if (itemKeyword)
+      return `Property '${name}' array items use unsupported ${itemKeyword}`;
     const itemKind = declaredPrimitiveKind(schema.items.type);
-    if (!itemKind) return `Property '${name}' is not a homogeneous primitive array`;
+    if (!itemKind)
+      return `Property '${name}' is not a homogeneous primitive array`;
     if (hasOwn(schema.items, 'enum')) {
       const values = schema.items.enum;
       if (!Array.isArray(values) || values.length === 0) {
         return `Property '${name}' has an invalid item enum`;
       }
       for (const value of values) {
-        if (primitiveKind(value) !== itemKind && !(itemKind === 'number' && primitiveKind(value) === 'integer')) {
+        if (
+          primitiveKind(value) !== itemKind &&
+          !(itemKind === 'number' && primitiveKind(value) === 'integer')
+        ) {
           return `Property '${name}' has a heterogeneous item enum`;
         }
       }
@@ -158,7 +175,10 @@ function classifyProperty(
       return `Property '${name}' has an invalid enum`;
     }
     for (const value of values) {
-      if (primitiveKind(value) !== kind && !(kind === 'number' && primitiveKind(value) === 'integer')) {
+      if (
+        primitiveKind(value) !== kind &&
+        !(kind === 'number' && primitiveKind(value) === 'integer')
+      ) {
         return `Property '${name}' has a heterogeneous enum`;
       }
     }
@@ -195,9 +215,13 @@ export function classifyMcpToolInputSchema(
     return inputOnly('The input schema properties are not an object');
   }
 
-  const properties = schema.properties ?? Object.create(null) as Record<string, unknown>;
+  const properties =
+    schema.properties ?? (Object.create(null) as Record<string, unknown>);
   const requiredValue = schema.required ?? [];
-  if (!Array.isArray(requiredValue) || requiredValue.some((name) => typeof name !== 'string')) {
+  if (
+    !Array.isArray(requiredValue) ||
+    requiredValue.some((name) => typeof name !== 'string')
+  ) {
     return inputOnly('The input schema required list is invalid');
   }
   const required = new Set(requiredValue as string[]);
@@ -215,10 +239,7 @@ export function classifyMcpToolInputSchema(
     if (!PORTABLE_OPTION_NAME.test(name)) {
       return inputOnly(`Property '${name}' is not a portable long option name`);
     }
-    if (
-      RESERVED_OPTION_NAMES[name] ||
-      PROTOTYPE_SENSITIVE_NAMES[name]
-    ) {
+    if (RESERVED_OPTION_NAMES[name] || PROTOTYPE_SENSITIVE_NAMES[name]) {
       return inputOnly(`Property '${name}' is reserved`);
     }
   }
@@ -235,19 +256,27 @@ export function classifyMcpToolInputSchema(
   }
   for (const name of propertyNames) {
     if (booleanNegations.has(name)) {
-      return inputOnly(`Property '${name}' collides with a boolean no-* option`);
+      return inputOnly(
+        `Property '${name}' collides with a boolean no-* option`,
+      );
     }
   }
 
   return { mode: 'generated', options };
 }
 
-function parsePrimitive(kind: McpPrimitiveKind, raw: string, optionName: string): McpPrimitive {
+function parsePrimitive(
+  kind: McpPrimitiveKind,
+  raw: string,
+  optionName: string,
+): McpPrimitive {
   if (kind === 'string') return raw;
   if (kind === 'boolean') {
     if (raw === 'true') return true;
     if (raw === 'false') return false;
-    throw new Error(`Invalid value for --${optionName}: expected true or false`);
+    throw new Error(
+      `Invalid value for --${optionName}: expected true or false`,
+    );
   }
   if (kind === 'integer') {
     if (!STRICT_INTEGER.test(raw)) {
@@ -255,7 +284,9 @@ function parsePrimitive(kind: McpPrimitiveKind, raw: string, optionName: string)
     }
     const value = Number(raw);
     if (!Number.isSafeInteger(value)) {
-      throw new Error(`Invalid value for --${optionName}: integer is outside the safe range`);
+      throw new Error(
+        `Invalid value for --${optionName}: integer is outside the safe range`,
+      );
     }
     return value;
   }
@@ -264,23 +295,33 @@ function parsePrimitive(kind: McpPrimitiveKind, raw: string, optionName: string)
   }
   const value = Number(raw);
   if (!Number.isFinite(value)) {
-    throw new Error(`Invalid value for --${optionName}: expected a finite number`);
+    throw new Error(
+      `Invalid value for --${optionName}: expected a finite number`,
+    );
   }
   return value;
 }
 
-function parseOptionValue(option: McpToolInputOption, raw: string): McpPrimitive {
+function parseOptionValue(
+  option: McpToolInputOption,
+  raw: string,
+): McpPrimitive {
   const value = parsePrimitive(option.valueKind, raw, option.name);
-  if (option.enumValues && !option.enumValues.some((candidate) => Object.is(candidate, value))) {
-    throw new Error(`Invalid value for --${option.name}: expected one of ${option.enumValues.map(String).join(', ')}`);
+  if (
+    option.enumValues &&
+    !option.enumValues.some((candidate) => Object.is(candidate, value))
+  ) {
+    throw new Error(
+      `Invalid value for --${option.name}: expected one of ${option.enumValues.map(String).join(', ')}`,
+    );
   }
   return value;
 }
 
-function rejectUnsafeIntegerLiterals(input: string): void {
+function rejectUnsafeJsonNumbers(input: string): void {
   let inString = false;
   let escaped = false;
-  for (let index = 0; index < input.length;) {
+  for (let index = 0; index < input.length; ) {
     const character = input[index];
     if (inString) {
       if (escaped) escaped = false;
@@ -294,12 +335,22 @@ function rejectUnsafeIntegerLiterals(input: string): void {
       index += 1;
       continue;
     }
-    if (character === '-' || (character !== undefined && character >= '0' && character <= '9')) {
-      const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(input.slice(index));
+    if (
+      character === '-' ||
+      (character !== undefined && character >= '0' && character <= '9')
+    ) {
+      JSON_NUMBER_TOKEN.lastIndex = index;
+      const match = JSON_NUMBER_TOKEN.exec(input);
       if (match) {
         const literal = match[0];
-        if (!literal.includes('.') && !/[eE]/.test(literal) && !Number.isSafeInteger(Number(literal))) {
-          throw new Error('JSON input contains an integer outside the safe range');
+        const value = Number(literal);
+        if (!Number.isFinite(value)) {
+          throw new Error('JSON input contains a non-finite number');
+        }
+        if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+          throw new Error(
+            'JSON input contains an integer outside the safe range',
+          );
         }
         index += literal.length;
         continue;
@@ -310,7 +361,7 @@ function rejectUnsafeIntegerLiterals(input: string): void {
 }
 
 function parseJsonObject(input: string): Record<string, unknown> {
-  rejectUnsafeIntegerLiterals(input);
+  rejectUnsafeJsonNumbers(input);
   let value: unknown;
   try {
     value = JSON.parse(input);
@@ -331,7 +382,8 @@ export function parseMcpToolArguments(
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--input') {
-      if (input !== undefined) throw new Error('--input may only be specified once');
+      if (input !== undefined)
+        throw new Error('--input may only be specified once');
       const value = argv[index + 1];
       if (value === undefined) throw new Error('Missing value for --input');
       input = value;
@@ -339,7 +391,8 @@ export function parseMcpToolArguments(
       continue;
     }
     if (argument?.startsWith('--input=')) {
-      if (input !== undefined) throw new Error('--input may only be specified once');
+      if (input !== undefined)
+        throw new Error('--input may only be specified once');
       input = argument.slice('--input='.length);
       continue;
     }
@@ -347,19 +400,27 @@ export function parseMcpToolArguments(
   }
 
   if (input !== undefined) {
-    if (generated.length > 0) throw new Error('--input cannot be combined with generated tool options');
+    if (generated.length > 0)
+      throw new Error('--input cannot be combined with generated tool options');
     return parseJsonObject(input);
   }
   if (classification.mode === 'input-only') {
-    if (generated.length > 0) throw new Error(`Unknown tool option '${generated[0]}'`);
+    if (generated.length > 0)
+      throw new Error(`Unknown tool option '${generated[0]}'`);
     throw new Error(`This tool requires --input: ${classification.reason}`);
   }
 
-  const options = new Map(classification.options.map((option) => [option.name, option]));
+  const options = new Map(
+    classification.options.map((option) => [option.name, option]),
+  );
   const values = new Map<string, McpPrimitive | McpPrimitive[]>();
   for (let index = 0; index < generated.length; index += 1) {
     const argument = generated[index];
-    if (argument === undefined || !argument.startsWith('--') || argument === '--') {
+    if (
+      argument === undefined ||
+      !argument.startsWith('--') ||
+      argument === '--'
+    ) {
       throw new Error(`Unknown tool option '${argument ?? ''}'`);
     }
     const equals = argument.indexOf('=');
@@ -372,9 +433,12 @@ export function parseMcpToolArguments(
       raw = argument.slice(equals + 1);
     } else {
       const detached = generated[index + 1];
-      if (detached === undefined) throw new Error(`Missing value for --${name}`);
+      if (detached === undefined)
+        throw new Error(`Missing value for --${name}`);
       if (detached.startsWith('-')) {
-        throw new Error(`Flag-looking values for --${name} require --${name}=value syntax`);
+        throw new Error(
+          `Flag-looking values for --${name} require --${name}=value syntax`,
+        );
       }
       raw = detached;
       index += 1;
@@ -387,7 +451,8 @@ export function parseMcpToolArguments(
       else if (Array.isArray(existing)) existing.push(value);
       else throw new Error(`Option --${name} has conflicting values`);
     } else {
-      if (values.has(option.propertyName)) throw new Error(`Option --${name} may only be specified once`);
+      if (values.has(option.propertyName))
+        throw new Error(`Option --${name} may only be specified once`);
       values.set(option.propertyName, value);
     }
   }

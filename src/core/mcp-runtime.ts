@@ -1,16 +1,23 @@
+import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import type {
-  CompatibilityCallToolResult,
-  Tool,
+import {
+  ErrorCode,
+  McpError,
+  type CompatibilityCallToolResult,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import type { McpServerConfig } from '../models/workspace-config.js';
 import {
   connectMcpHttpClient,
   createMcpCredentialGuard,
+  isMcpAuthorizationFailure,
   type McpCredentialGuard,
 } from './mcp-http-client.js';
+import { LinearStdioClientTransport } from './mcp-stdio-client-transport.js';
 import {
+  formatMcpDestination,
   getMcpServer,
   type McpDestination,
 } from './mcp-servers.js';
@@ -21,9 +28,11 @@ const DEFAULT_STDIO_EXIT_TIMEOUT_MS = 1_000;
 const MAX_MCP_TOOL_PAGES = 100;
 const MAX_MCP_TOOLS = 10_000;
 const MAX_MCP_PROTOCOL_MESSAGE_BYTES = 16 * 1024 * 1024;
+const MAX_MCP_PROTOCOL_WIRE_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES + 64 * 1024;
 const MAX_MCP_TOOL_METADATA_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES;
 const MAX_MCP_SCHEMA_DEPTH = 64;
 const MAX_MCP_SCHEMA_NODES = 100_000;
+const MCP_JSON_SCHEMA_VALIDATOR = new AjvJsonSchemaValidator();
 
 export type McpToolCatalog = readonly Tool[];
 
@@ -59,11 +68,11 @@ export interface ManagedMcpConnectionOptions {
   environment?: NodeJS.ProcessEnv;
   httpCleanupTimeoutMs?: number;
   stdioExitTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface ManagedMcpOperationOptions
   extends ManagedMcpConnectionOptions {
-  signal?: AbortSignal;
   timeoutMs?: number;
 }
 
@@ -92,17 +101,12 @@ export class McpRuntimeCancelledError extends Error {
   }
 }
 
-function assertBoundedMcpProtocolValue(
-  value: unknown,
-  label: string,
-): void {
+function assertBoundedMcpProtocolValue(value: unknown, label: string): void {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) {
     throw new Error(`MCP ${label} could not be serialized`);
   }
-  if (
-    Buffer.byteLength(serialized, 'utf8') > MAX_MCP_PROTOCOL_MESSAGE_BYTES
-  ) {
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_MCP_PROTOCOL_MESSAGE_BYTES) {
     throw new Error(
       `MCP ${label} exceeds ${MAX_MCP_PROTOCOL_MESSAGE_BYTES} serialized bytes`,
     );
@@ -149,7 +153,7 @@ export async function listAllMcpTools(
 ): Promise<McpToolCatalog> {
   const tools: Tool[] = [];
   const names = new Set<string>();
-  const cursors = new Set<string>();
+  const cursorHashes = new Set<string>();
   let cursor: string | undefined;
   let pages = 0;
   let metadataBytes = 2;
@@ -157,9 +161,7 @@ export async function listAllMcpTools(
 
   while (hasMore) {
     if (pages >= MAX_MCP_TOOL_PAGES) {
-      throw new Error(
-        `MCP tool catalog exceeds ${MAX_MCP_TOOL_PAGES} pages`,
-      );
+      throw new Error(`MCP tool catalog exceeds ${MAX_MCP_TOOL_PAGES} pages`);
     }
     const page = await client.listTools(
       cursor === undefined ? undefined : { cursor },
@@ -169,15 +171,16 @@ export async function listAllMcpTools(
     pages += 1;
     for (const tool of page.tools) {
       if (names.has(tool.name)) {
-        throw new Error(`MCP tool catalog contains duplicate tool '${tool.name}'`);
-      }
-      if (tools.length >= MAX_MCP_TOOLS) {
         throw new Error(
-          `MCP tool catalog exceeds ${MAX_MCP_TOOLS} tools`,
+          `MCP tool catalog contains duplicate tool '${tool.name}'`,
         );
       }
+      if (tools.length >= MAX_MCP_TOOLS) {
+        throw new Error(`MCP tool catalog exceeds ${MAX_MCP_TOOLS} tools`);
+      }
       assertBoundedMcpSchema(tool.inputSchema, tool.name);
-      if (tool.outputSchema) assertBoundedMcpSchema(tool.outputSchema, tool.name);
+      if (tool.outputSchema)
+        assertBoundedMcpSchema(tool.outputSchema, tool.name);
       const serialized = JSON.stringify(tool);
       const candidateBytes =
         metadataBytes +
@@ -198,20 +201,26 @@ export async function listAllMcpTools(
       hasMore = false;
       continue;
     }
-    if (cursors.has(nextCursor)) {
-      throw new Error(`MCP tool catalog repeated cursor '${nextCursor}'`);
+    const cursorHash = createHash('sha256').update(nextCursor).digest('hex');
+    if (cursorHashes.has(cursorHash)) {
+      throw new Error('MCP tool catalog repeated a pagination cursor');
     }
-    cursors.add(nextCursor);
+    const candidateBytes =
+      metadataBytes + Buffer.byteLength(nextCursor, 'utf8');
+    if (candidateBytes > MAX_MCP_TOOL_METADATA_BYTES) {
+      throw new Error(
+        `MCP tool catalog exceeds ${MAX_MCP_TOOL_METADATA_BYTES} serialized bytes`,
+      );
+    }
+    metadataBytes = candidateBytes;
+    cursorHashes.add(cursorHash);
     cursor = nextCursor;
   }
 
   return tools;
 }
 
-export function findMcpTool(
-  catalog: McpToolCatalog,
-  toolName: string,
-): Tool {
+export function findMcpTool(catalog: McpToolCatalog, toolName: string): Tool {
   const tool = catalog.find((candidate) => candidate.name === toolName);
   if (!tool) throw new Error(`MCP tool '${toolName}' was not found`);
   return tool;
@@ -219,15 +228,13 @@ export function findMcpTool(
 
 export async function callMcpTool(
   client: Client,
-  catalog: McpToolCatalog,
-  toolName: string,
+  tool: Tool,
   args: Record<string, unknown>,
   options: McpRuntimeRequestOptions = {},
 ): Promise<CompatibilityCallToolResult> {
-  const tool = findMcpTool(catalog, toolName);
   if (tool.execution?.taskSupport === 'required') {
     throw new Error(
-      `MCP tool '${toolName}' requires task-based execution and cannot be called synchronously`,
+      `MCP tool '${tool.name}' requires task-based execution and cannot be called synchronously`,
     );
   }
   const result = await client.callTool(
@@ -236,35 +243,78 @@ export async function callMcpTool(
     options,
   );
   assertBoundedMcpProtocolValue(result, 'tools/call result');
+  if (tool.outputSchema) {
+    const structuredContent =
+      'structuredContent' in result ? result.structuredContent : undefined;
+    const isError = 'isError' in result && result.isError === true;
+    if (structuredContent === undefined && !isError) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        `Tool ${tool.name} has an output schema but did not return structured content`,
+      );
+    }
+    if (structuredContent !== undefined) {
+      try {
+        const validation = MCP_JSON_SCHEMA_VALIDATOR.getValidator(
+          tool.outputSchema as JsonSchemaType,
+        )(structuredContent);
+        if (!validation.valid) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
+          );
+        }
+      } catch (error) {
+        if (error instanceof McpError) throw error;
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Failed to validate structured content: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
   return result;
 }
 
-class ObservedStdioClientTransport extends StdioClientTransport {
-  started = false;
-
-  override async start(): Promise<void> {
-    await super.start();
-    this.started = true;
-  }
-}
-
-function destinationDisplay(destination: McpDestination): string {
-  if (destination.kind === 'project') return 'workspace.yaml';
-  if (destination.kind === 'user') return 'the user workspace';
-  return `profile '${destination.name}'`;
+function shellQuoteIdentity(value: string): string {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function reauthorizationCommand(
   destination: McpDestination,
   serverName: string,
 ): string {
+  const args = ['allagents', 'mcp', 'reauth'];
   if (destination.kind === 'user') {
-    return `allagents mcp reauth ${serverName} --scope user`;
+    args.push('--scope', 'user');
+  } else if (destination.kind === 'profile') {
+    args.push('--profile', shellQuoteIdentity(destination.name));
   }
-  if (destination.kind === 'profile') {
-    return `allagents mcp reauth ${serverName} --profile ${destination.name}`;
-  }
-  return `allagents mcp reauth ${serverName}`;
+  if (serverName.startsWith('-')) args.push('--');
+  args.push(shellQuoteIdentity(serverName));
+  return args.join(' ');
+}
+
+function runtimeCredentialGuard(
+  credentialGuard: McpCredentialGuard,
+  destination: McpDestination,
+  serverName: string,
+): McpCredentialGuard {
+  return {
+    assertSafe(value) {
+      credentialGuard.assertSafe(value);
+    },
+    sanitizeError(error) {
+      const authorizationFailure = isMcpAuthorizationFailure(error);
+      const sanitized = credentialGuard.sanitizeError(error);
+      return authorizationFailure
+        ? new McpRuntimeAuthorizationError(
+            reauthorizationCommand(destination, serverName),
+          )
+        : sanitized;
+    },
+  };
 }
 
 interface ResolvedMcpEnvironment {
@@ -323,7 +373,6 @@ async function waitForExit(
   return promise;
 }
 
-
 async function connectStdioSession(
   config: Extract<McpServerConfig, { command: string }>,
   options: ManagedMcpConnectionOptions,
@@ -337,22 +386,16 @@ async function connectStdioSession(
   const credentialGuard = createMcpCredentialGuard(
     resolvedEnvironment.credentialValues,
   );
-  const transport = new ObservedStdioClientTransport({
+  const transport = new LinearStdioClientTransport({
     command: config.command,
     args,
     env: resolvedEnvironment.values,
     stderr: 'pipe',
+    maxBufferSize: MAX_MCP_PROTOCOL_WIRE_BYTES,
   });
   // Keep child diagnostics from reaching the parent and retain no unbounded copy.
   transport.stderr?.on('data', () => undefined);
 
-  const { promise: exited, resolve: resolveExited } =
-    Promise.withResolvers<void>();
-  let exitObserved = false;
-  transport.onclose = () => {
-    exitObserved = true;
-    resolveExited();
-  };
   const client = new Client(
     { name: 'AllAgents', version: '1.0.0' },
     { capabilities: {} },
@@ -366,10 +409,10 @@ async function connectStdioSession(
       } catch (error) {
         closeError = credentialGuard.sanitizeError(error);
       }
-      if (transport.started && !exitObserved) {
+      if (transport.started) {
         const timeoutMs =
           options.stdioExitTimeoutMs ?? DEFAULT_STDIO_EXIT_TIMEOUT_MS;
-        if (!(await waitForExit(exited, timeoutMs))) {
+        if (!(await waitForExit(transport.exited, timeoutMs))) {
           const exitError = new Error(
             `MCP stdio child did not exit within ${timeoutMs}ms after close`,
           );
@@ -388,20 +431,23 @@ async function connectStdioSession(
   };
 
   try {
-    await client.connect(transport);
+    await client.connect(
+      transport,
+      options.signal === undefined ? undefined : { signal: options.signal },
+    );
   } catch (error) {
+    const startupError = options.signal?.aborted
+      ? new McpRuntimeCancelledError()
+      : credentialGuard.sanitizeError(error);
     try {
       await close();
     } catch (cleanupError) {
       throw new AggregateError(
-        [
-          credentialGuard.sanitizeError(error),
-          credentialGuard.sanitizeError(cleanupError),
-        ],
+        [startupError, credentialGuard.sanitizeError(cleanupError)],
         'MCP stdio connection failed and its child could not be closed',
       );
     }
-    throw credentialGuard.sanitizeError(error);
+    throw startupError;
   }
   return { client, credentialGuard, close };
 }
@@ -413,7 +459,7 @@ export async function resolveConfiguredMcpServer(
   const config = await getMcpServer(destination, serverName);
   if (!config) {
     throw new Error(
-      `MCP server '${serverName}' is not defined in ${destinationDisplay(destination)}`,
+      `MCP server '${serverName}' is not defined in ${formatMcpDestination(destination)}`,
     );
   }
   return config;
@@ -424,25 +470,31 @@ export async function connectManagedMcpServer(
   serverName: string,
   options: ManagedMcpConnectionOptions = {},
 ): Promise<ManagedMcpSession> {
+  if (options.signal?.aborted) throw new McpRuntimeCancelledError();
   const config = await resolveConfiguredMcpServer(destination, serverName);
+  if (options.signal?.aborted) throw new McpRuntimeCancelledError();
   if ('command' in config) return connectStdioSession(config, options);
 
   try {
     const connection = await connectMcpHttpClient(config.url, {
       headers: config.headers ?? {},
       allowAuthorization: false,
-      maxResponseBytes: MAX_MCP_PROTOCOL_MESSAGE_BYTES,
-      ...(destination.kind === 'profile'
-        ? { profile: destination.name }
-        : {}),
+      maxResponseBytes: MAX_MCP_PROTOCOL_WIRE_BYTES,
+      ...(destination.kind === 'profile' ? { profile: destination.name } : {}),
       ...(options.environment === undefined
         ? {}
         : { environment: options.environment }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
+    const credentialGuard = runtimeCredentialGuard(
+      connection.credentialGuard,
+      destination,
+      serverName,
+    );
     let closePromise: Promise<void> | undefined;
     return {
       client: connection.client,
-      credentialGuard: connection.credentialGuard,
+      credentialGuard,
       close() {
         closePromise ??= (async () => {
           const timeoutMs =
@@ -450,7 +502,7 @@ export async function connectManagedMcpServer(
           const termination = connection.transport
             .terminateSession()
             .then<Error | undefined>(() => undefined)
-            .catch((error) => connection.credentialGuard.sanitizeError(error));
+            .catch((error) => credentialGuard.sanitizeError(error));
           const { promise: deadline, resolve: resolveDeadline } =
             Promise.withResolvers<Error>();
           const timeout = setTimeout(
@@ -462,16 +514,13 @@ export async function connectManagedMcpServer(
               ),
             timeoutMs,
           );
-          const terminationError = await Promise.race([
-            termination,
-            deadline,
-          ]);
+          const terminationError = await Promise.race([termination, deadline]);
           clearTimeout(timeout);
           let closeError: Error | undefined;
           try {
             await connection.close();
           } catch (error) {
-            closeError = connection.credentialGuard.sanitizeError(error);
+            closeError = credentialGuard.sanitizeError(error);
           }
           if (terminationError && closeError) {
             throw new AggregateError(
@@ -486,10 +535,8 @@ export async function connectManagedMcpServer(
       },
     };
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message === 'OAuth authorization requires an interactive terminal'
-    ) {
+    if (options.signal?.aborted) throw new McpRuntimeCancelledError();
+    if (isMcpAuthorizationFailure(error)) {
       throw new McpRuntimeAuthorizationError(
         reauthorizationCommand(destination, serverName),
       );

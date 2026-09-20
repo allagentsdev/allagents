@@ -10,6 +10,7 @@ import {
   string,
 } from 'cmd-ts';
 import type {
+  CallToolResult,
   CompatibilityCallToolResult,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -492,12 +493,7 @@ class McpRuntimeUsageError extends Error {
 
 const defaultMcpRuntimeDependencies: McpRuntimeCliDependencies = {
   runManagedOperation: (destination, serverName, operation, options) =>
-    runManagedMcpRuntimeOperation(
-      destination,
-      serverName,
-      operation,
-      options,
-    ),
+    runManagedMcpRuntimeOperation(destination, serverName, operation, options),
 };
 
 function outputFields(value: string): string[] | undefined {
@@ -508,9 +504,10 @@ function outputFields(value: string): string[] | undefined {
   return fields.length > 0 ? fields : undefined;
 }
 
-function consumeLeadingOutputOptions(
-  args: readonly string[],
-): { index: number; legal: boolean } {
+function consumeLeadingOutputOptions(args: readonly string[]): {
+  index: number;
+  legal: boolean;
+} {
   let index = 0;
   while (index < args.length) {
     const argument = args[index];
@@ -616,13 +613,29 @@ function parseMcpRuntimeRequest(
     index = consumed;
   }
 
+  let opaqueIdentities = false;
   for (let index = leading.index + 2; index < args.length; index += 1) {
     const argument = args[index];
-    const outputIndex = consumeRuntimeOutputOption(
-      args,
-      index,
-      request.output,
-    );
+    if (argument === undefined) continue;
+    if (!opaqueIdentities && argument === '--') {
+      opaqueIdentities = true;
+      continue;
+    }
+    if (opaqueIdentities) {
+      if (request.server === undefined) {
+        request.server = argument;
+        continue;
+      }
+      if (kind === 'call' && request.tool === undefined) {
+        request.tool = argument;
+        continue;
+      }
+      throw new McpRuntimeUsageError(
+        `Unexpected argument '${argument}' for mcp ${kind}`,
+      );
+    }
+
+    const outputIndex = consumeRuntimeOutputOption(args, index, request.output);
     if (outputIndex !== undefined) {
       index = outputIndex;
       continue;
@@ -632,7 +645,7 @@ function parseMcpRuntimeRequest(
       continue;
     }
 
-    if (argument === '--scope' || argument?.startsWith('--scope=')) {
+    if (argument === '--scope' || argument.startsWith('--scope=')) {
       const attached = argument.startsWith('--scope=');
       const value = attached
         ? argument.slice('--scope='.length)
@@ -641,7 +654,7 @@ function parseMcpRuntimeRequest(
       if (!attached) index += 1;
       continue;
     }
-    if (argument === '--profile' || argument?.startsWith('--profile=')) {
+    if (argument === '--profile' || argument.startsWith('--profile=')) {
       const attached = argument.startsWith('--profile=');
       const value = attached
         ? argument.slice('--profile='.length)
@@ -666,19 +679,17 @@ function parseMcpRuntimeRequest(
 
     if (
       kind === 'call' &&
-      (argument === '--input' || argument?.startsWith('--input='))
+      (argument === '--input' || argument.startsWith('--input='))
     ) {
       request.toolArguments.push(argument);
       if (argument === '--input') {
-        request.toolArguments.push(
-          takeOptionValue(args, index, '--input'),
-        );
+        request.toolArguments.push(takeOptionValue(args, index, '--input'));
         index += 1;
       }
       continue;
     }
 
-    if (argument !== undefined && !argument.startsWith('-')) {
+    if (!argument.startsWith('-')) {
       if (request.server === undefined) {
         request.server = argument;
         continue;
@@ -698,18 +709,16 @@ function parseMcpRuntimeRequest(
 
     if (kind === 'tools') {
       throw new McpRuntimeUsageError(
-        `Unknown option '${argument ?? ''}' for mcp tools`,
+        `Unknown option '${argument}' for mcp tools`,
       );
     }
 
-    if (argument !== undefined) {
-      request.toolArguments.push(argument);
-      if (argument.startsWith('--') && !argument.includes('=')) {
-        const value = args[index + 1];
-        if (value !== undefined) {
-          request.toolArguments.push(value);
-          index += 1;
-        }
+    request.toolArguments.push(argument);
+    if (argument.startsWith('--') && !argument.includes('=')) {
+      const value = args[index + 1];
+      if (value !== undefined) {
+        request.toolArguments.push(value);
+        index += 1;
       }
     }
   }
@@ -778,11 +787,17 @@ function signalExitCode(signal: McpRuntimeSignal): number {
   return signal === 'SIGINT' ? 130 : 143;
 }
 
-interface ManagedExecution<T> {
-  result?: ManagedMcpOperationResult<T>;
-  error?: Error;
-  signal?: McpRuntimeSignal;
-}
+type ManagedExecution<T> =
+  | {
+      result: ManagedMcpOperationResult<T>;
+      error?: never;
+      signal?: McpRuntimeSignal;
+    }
+  | {
+      result?: never;
+      error: Error;
+      signal?: McpRuntimeSignal;
+    };
 
 async function executeManagedRuntime<T>(
   destination: McpDestination,
@@ -876,6 +891,70 @@ function shellToken(value: string): string {
   if (/^[A-Za-z0-9_./:@+-]+$/.test(safe)) return safe;
   return `'${safe.replaceAll("'", "'\\''")}'`;
 }
+
+function runtimeDestinationTokens(destination: McpDestination): string[] {
+  if (destination.kind === 'project') return [];
+  if (destination.kind === 'user') return ['--scope', 'user'];
+  return ['--profile', shellToken(destination.name)];
+}
+
+function liveHelpCommand(
+  destination: McpDestination,
+  server: string,
+  tool: string,
+): string {
+  const identities = [server, tool];
+  const destinationTokens = runtimeDestinationTokens(destination);
+  if (identities.some((identity) => identity.startsWith('-'))) {
+    return [
+      'allagents',
+      'mcp',
+      'call',
+      ...destinationTokens,
+      '--help',
+      '--',
+      ...identities.map(shellToken),
+    ].join(' ');
+  }
+  return [
+    'allagents',
+    'mcp',
+    'call',
+    shellToken(server),
+    shellToken(tool),
+    '--help',
+    ...destinationTokens,
+  ].join(' ');
+}
+
+function liveHelpUsage(
+  destination: McpDestination,
+  server: string,
+  tool: string,
+): string {
+  const identities = [server, tool];
+  const destinationTokens = runtimeDestinationTokens(destination);
+  if (identities.some((identity) => identity.startsWith('-'))) {
+    return [
+      'allagents',
+      'mcp',
+      'call',
+      ...destinationTokens,
+      '[options]',
+      '--',
+      ...identities.map(shellToken),
+    ].join(' ');
+  }
+  return [
+    'allagents',
+    'mcp',
+    'call',
+    shellToken(server),
+    shellToken(tool),
+    '[options]',
+    ...destinationTokens,
+  ].join(' ');
+}
 function terminalJson(value: unknown): string {
   return JSON.stringify(value, null, 2)
     .split('\n')
@@ -884,15 +963,14 @@ function terminalJson(value: unknown): string {
 }
 
 function renderTools(
+  destination: McpDestination,
   server: string,
   tools: readonly Tool[],
   search: string | undefined,
 ): void {
   if (tools.length === 0) {
     if (search === undefined) {
-      console.log(
-        `MCP server '${terminalSafe(server)}' exposes no tools.`,
-      );
+      console.log(`MCP server '${terminalSafe(server)}' exposes no tools.`);
     } else {
       console.log(
         `No MCP tools matched '${terminalSafe(search)}' on server '${terminalSafe(server)}'.`,
@@ -907,29 +985,15 @@ function renderTools(
       console.log(`  Title: ${singleLineTerminalText(tool.title)}`);
     }
     if (tool.description !== undefined) {
-      console.log(
-        `  Description: ${singleLineTerminalText(tool.description)}`,
-      );
+      console.log(`  Description: ${singleLineTerminalText(tool.description)}`);
     }
-    console.log(
-      `  Help: allagents mcp call ${shellToken(server)} ${shellToken(tool.name)} --help`,
-    );
+    console.log(`  Help: ${liveHelpCommand(destination, server, tool.name)}`);
     if (index < tools.length - 1) console.log('');
   }
 }
 
-function matchesToolSearch(tool: Tool, search: string): boolean {
-  const needle = search.toLowerCase();
-  return [tool.name, tool.title, tool.description].some(
-    (value) => value?.toLowerCase().includes(needle) ?? false,
-  );
-}
-
 function requiredToolFields(tool: Tool): string[] {
-  const required = tool.inputSchema.required;
-  return Array.isArray(required)
-    ? required.filter((value): value is string => typeof value === 'string')
-    : [];
+  return tool.inputSchema.required ?? [];
 }
 
 function liveInputData(
@@ -953,19 +1017,18 @@ function liveInputData(
 function optionValueLabel(option: McpToolInputOption): string {
   const base =
     option.kind === 'enum'
-      ? option.enumValues?.map(String).join(' | ') ?? option.valueKind
+      ? (option.enumValues?.map(String).join(' | ') ?? option.valueKind)
       : option.valueKind;
   return option.kind === 'array' ? `${base} (repeatable)` : base;
 }
 
 function renderLiveHelp(
+  destination: McpDestination,
   server: string,
   tool: Tool,
   classification: McpToolInputClassification,
 ): void {
-  console.log(
-    `Usage: allagents mcp call ${shellToken(server)} ${shellToken(tool.name)} [options]`,
-  );
+  console.log(`Usage: ${liveHelpUsage(destination, server, tool.name)}`);
   console.log('');
   console.log(`Tool: ${terminalSafe(tool.name)}`);
   if (tool.title !== undefined) {
@@ -1002,29 +1065,21 @@ function renderLiveHelp(
 }
 
 function renderCallResult(result: CompatibilityCallToolResult): void {
-  const record = result as Record<string, unknown>;
-  const content = record.content;
-  if (Array.isArray(content)) {
-    for (const item of content) {
-      if (
-        typeof item === 'object' &&
-        item !== null &&
-        (item as Record<string, unknown>).type === 'text' &&
-        typeof (item as Record<string, unknown>).text === 'string'
-      ) {
-        console.log(
-          terminalSafe((item as Record<string, unknown>).text),
-        );
-      } else {
-        console.log(terminalJson(item));
-      }
-    }
-  } else if (Object.hasOwn(record, 'toolResult')) {
-    console.log(terminalJson(record.toolResult));
+  if (!Array.isArray(result.content)) {
+    console.log(terminalJson(result.toolResult));
+    return;
   }
-  if (Object.hasOwn(record, 'structuredContent')) {
+  const callResult = result as CallToolResult;
+  for (const item of callResult.content) {
+    if (item.type === 'text') {
+      console.log(terminalSafe(item.text));
+    } else {
+      console.log(terminalJson(item));
+    }
+  }
+  if (callResult.structuredContent !== undefined) {
     console.log('Structured content:');
-    console.log(terminalJson(record.structuredContent));
+    console.log(terminalJson(callResult.structuredContent));
   }
 }
 
@@ -1058,15 +1113,13 @@ async function runToolsRuntime(
     ({ client, signal }) => listAllMcpTools(client, { signal }),
     dependencies,
   );
-  if (execution.error) {
+  if (execution.error !== undefined) {
     reportRuntimeError('mcp tools', execution.error, request.output.json);
     applyRuntimeExit(1, execution.signal);
     return;
   }
 
-  const managed = execution.result as ManagedMcpOperationResult<
-    readonly Tool[]
-  >;
+  const managed = execution.result;
   if (managed.operation.status === 'rejected') {
     reportRuntimeError(
       'mcp tools',
@@ -1080,7 +1133,7 @@ async function runToolsRuntime(
     }
     applyRuntimeExit(
       managed.operation.error instanceof McpRuntimeUsageError &&
-          managed.cleanup.status === 'fulfilled'
+        managed.cleanup.status === 'fulfilled'
         ? 2
         : 1,
       execution.signal,
@@ -1088,11 +1141,15 @@ async function runToolsRuntime(
     return;
   }
 
+  const searchNeedle = request.search?.toLowerCase();
   const tools =
-    request.search === undefined
+    searchNeedle === undefined
       ? managed.operation.value
-      : managed.operation.value.filter((tool) =>
-          matchesToolSearch(tool, request.search as string),
+      : managed.operation.value.filter(
+          (tool) =>
+            tool.name.toLowerCase().includes(searchNeedle) ||
+            tool.title?.toLowerCase().includes(searchNeedle) === true ||
+            tool.description?.toLowerCase().includes(searchNeedle) === true,
         );
   const data = {
     destination: serializeDestination(destination),
@@ -1113,7 +1170,7 @@ async function runToolsRuntime(
       cleanupMessage,
     );
   } else {
-    renderTools(server, tools, request.search);
+    renderTools(destination, server, tools, request.search);
   }
   if (cleanupMessage !== undefined) {
     console.error(`Error: ${terminalSafe(cleanupMessage)}`);
@@ -1154,24 +1211,20 @@ async function runCallRuntime(
           error instanceof Error ? error.message : String(error),
         );
       }
-      const result = await callMcpTool(
-        client,
-        catalog,
-        toolName,
-        parsedArguments,
-        { signal },
-      );
+      const result = await callMcpTool(client, tool, parsedArguments, {
+        signal,
+      });
       return { kind: 'call', result };
     },
     dependencies,
   );
-  if (execution.error) {
+  if (execution.error !== undefined) {
     reportRuntimeError('mcp call', execution.error, request.output.json);
     applyRuntimeExit(1, execution.signal);
     return;
   }
 
-  const managed = execution.result as ManagedMcpOperationResult<CallOperation>;
+  const managed = execution.result;
   if (managed.operation.status === 'rejected') {
     reportRuntimeError(
       'mcp call',
@@ -1185,7 +1238,7 @@ async function runCallRuntime(
     }
     applyRuntimeExit(
       managed.operation.error instanceof McpRuntimeUsageError &&
-          managed.cleanup.status === 'fulfilled'
+        managed.cleanup.status === 'fulfilled'
         ? 2
         : 1,
       execution.signal,
@@ -1224,7 +1277,12 @@ async function runCallRuntime(
       cleanupMessage,
     );
   } else if (operation.kind === 'help') {
-    renderLiveHelp(server, operation.tool, operation.classification);
+    renderLiveHelp(
+      destination,
+      server,
+      operation.tool,
+      operation.classification,
+    );
   } else {
     renderCallResult(operation.result);
   }
@@ -1235,6 +1293,13 @@ async function runCallRuntime(
     toolFailed || cleanupMessage !== undefined ? 1 : undefined,
     execution.signal,
   );
+}
+
+function applyRuntimeOutput(output: RuntimeOutputOptions): void {
+  setJsonMode(output.json, {
+    ...(output.jsonFields === undefined ? {} : { fields: output.jsonFields }),
+    ...(output.jqExpr === undefined ? {} : { jqExpr: output.jqExpr }),
+  });
 }
 
 export async function runMcpRuntimeCommand(
@@ -1248,14 +1313,7 @@ export async function runMcpRuntimeCommand(
     request = newParsedRuntimeRequest(kind);
     request = parseMcpRuntimeRequest(args, request);
     validateRuntimeOutput(request);
-    setJsonMode(request.output.json, {
-      ...(request.output.jsonFields === undefined
-        ? {}
-        : { fields: request.output.jsonFields }),
-      ...(request.output.jqExpr === undefined
-        ? {}
-        : { jqExpr: request.output.jqExpr }),
-    });
+    applyRuntimeOutput(request.output);
     const destination = runtimeDestination(request);
     if (request.kind === 'tools') {
       await runToolsRuntime(request, destination, dependencies);
@@ -1266,23 +1324,13 @@ export async function runMcpRuntimeCommand(
     const normalized =
       error instanceof Error ? error : new Error(String(error));
     const command =
-      classifyMcpRuntimeCommand(args) === 'tools'
-        ? 'mcp tools'
-        : 'mcp call';
+      classifyMcpRuntimeCommand(args) === 'tools' ? 'mcp tools' : 'mcp call';
     const json = request?.output.json ?? false;
     if (request !== undefined) {
-      setJsonMode(request.output.json, {
-        ...(request.output.jsonFields === undefined
-          ? {}
-          : { fields: request.output.jsonFields }),
-        ...(request.output.jqExpr === undefined
-          ? {}
-          : { jqExpr: request.output.jqExpr }),
-      });
+      applyRuntimeOutput(request.output);
     }
     reportRuntimeError(command, normalized, json);
-    process.exitCode =
-      normalized instanceof McpRuntimeUsageError ? 2 : 1;
+    process.exitCode = normalized instanceof McpRuntimeUsageError ? 2 : 1;
   }
 }
 

@@ -27,6 +27,7 @@ import { setJsonMode } from '../../src/cli/json-output.js';
 import { connectHttpMcpServer } from '../../src/core/mcp-http-client.js';
 import {
   createRuntimeToolPages,
+  FIXTURE_TOOL_NAME,
   type DummyMcpOAuthServer,
   RUNTIME_COMPLEX_TOOL_NAME,
   RUNTIME_FAILURE_RESULT,
@@ -141,12 +142,114 @@ describe('MCP runtime CLI source seam', () => {
     expect(
       shouldHandleMcpRuntimeCommand([
         'mcp',
+        'call',
+        '--help',
+        '--',
+        '--server',
+        '--tool',
+      ]),
+    ).toBe(true);
+    expect(
+      shouldHandleMcpRuntimeCommand([
+        'mcp',
         'tools',
         'server',
         '--search',
         '--help',
       ]),
     ).toBe(true);
+  });
+
+  test('treats identities after -- as opaque and rejects extra positionals', async () => {
+    const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
+    const tool = {
+      name: '--echo',
+      inputSchema: {
+        type: 'object' as const,
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      },
+    };
+
+    await runMcpRuntimeCommand(
+      ['mcp', 'tools', '--', '--catalog'],
+      dependencies(fakeClient([tool], { content: [] }, calls)),
+    );
+    expect(stdout).toContain('--echo');
+
+    stdout.length = 0;
+    await runMcpRuntimeCommand(
+      ['mcp', 'call', '--help', '--', '--catalog', '--echo'],
+      dependencies(fakeClient([tool], { content: [] }, calls)),
+    );
+    expect(calls).toEqual([]);
+    expect(stdout[0]).toBe(
+      'Usage: allagents mcp call [options] -- --catalog --echo',
+    );
+
+    stdout.length = 0;
+    await runMcpRuntimeCommand(
+      [
+        'mcp',
+        'call',
+        '--value=opaque',
+        '--',
+        '--catalog',
+        '--echo',
+      ],
+      dependencies(fakeClient([tool], { content: [] }, calls)),
+    );
+    expect(calls).toEqual([
+      { name: '--echo', arguments: { value: 'opaque' } },
+    ]);
+
+    await runMcpRuntimeCommand(
+      ['mcp', 'tools', '--', '--catalog', 'extra'],
+      dependencies(fakeClient([tool])),
+    );
+    expect(stderr).toContain(
+      "Error: Unexpected argument 'extra' for mcp tools",
+    );
+
+    stderr.length = 0;
+    await runMcpRuntimeCommand(
+      ['mcp', 'call', '--', '--catalog', '--echo', 'extra'],
+      dependencies(fakeClient([tool])),
+    );
+    expect(stderr).toContain(
+      "Error: Unexpected argument 'extra' for mcp call",
+    );
+    expect(process.exitCode).toBe(2);
+  });
+
+  test('renders shell-safe live-help commands for the selected destination', async () => {
+    const tool = {
+      name: 'echo tool',
+      inputSchema: { type: 'object' as const },
+    };
+    await runMcpRuntimeCommand(
+      ['mcp', 'tools', 'catalog', '--scope', 'user'],
+      dependencies(fakeClient([tool])),
+    );
+    expect(stdout).toContain(
+      "  Help: allagents mcp call catalog 'echo tool' --help --scope user",
+    );
+
+    stdout.length = 0;
+    await runMcpRuntimeCommand(
+      ['mcp', 'tools', '--profile', 'market-desk', '--', '-catalog'],
+      dependencies(
+        fakeClient([
+          {
+            name: '-echo tool',
+            inputSchema: { type: 'object' as const },
+          },
+        ]),
+      ),
+    );
+    expect(stdout).toContain(
+      "  Help: allagents mcp call --profile market-desk --help -- -catalog '-echo tool'",
+    );
   });
 
   test('renders filtered discovery in order and preserves complete JSON records', async () => {
@@ -548,6 +651,61 @@ describe('MCP runtime CLI real HTTP transport', () => {
     expect(dummy.activeSessionCount).toBe(0);
   }, 20_000);
 
+  test('uses -- to discover, inspect, and call option-looking configured identities', async () => {
+    dummy = await startDummyMcpOAuthServer({
+      requireAuth: false,
+      runtimeTools: true,
+    });
+    dummy.updateTool(FIXTURE_TOOL_NAME, { name: '--ask' });
+    writeRuntimeDestinations(workspaceDir, homeDir, {
+      '--remote': { type: 'http', url: dummy.mcpUrl },
+    });
+
+    const discovery = await runRealCli(workspaceDir, homeDir, [
+      '--json',
+      'mcp',
+      'tools',
+      '--',
+      '--remote',
+    ]);
+    expect(discovery.exitCode).toBe(0);
+    expect(
+      JSON.parse(discovery.stdout).data.tools.map((tool: Tool) => tool.name),
+    ).toContain('--ask');
+    expect(dummy.activeSessionCount).toBe(0);
+
+    const help = await runRealCli(workspaceDir, homeDir, [
+      '--json',
+      'mcp',
+      'call',
+      '--help',
+      '--',
+      '--remote',
+      '--ask',
+    ]);
+    expect(help.exitCode).toBe(0);
+    expect(JSON.parse(help.stdout).data.descriptor.name).toBe('--ask');
+    expect(dummy.callToolCount).toBe(0);
+    expect(dummy.activeSessionCount).toBe(0);
+
+    const call = await runRealCli(workspaceDir, homeDir, [
+      '--json',
+      'mcp',
+      'call',
+      '--input',
+      '{"question":"exact"}',
+      '--',
+      '--remote',
+      '--ask',
+    ]);
+    expect(call.exitCode).toBe(0);
+    expect(dummy.capturedCalls.at(-1)).toEqual({
+      name: '--ask',
+      arguments: { question: 'exact' },
+    });
+    expect(dummy.activeSessionCount).toBe(0);
+  }, 20_000);
+
   test('uses live help without calls and forwards generated and exact JSON arguments', async () => {
     dummy = await startDummyMcpOAuthServer({
       requireAuth: false,
@@ -763,6 +921,50 @@ describe('MCP runtime CLI real HTTP transport', () => {
     expect(dummy.activeSessionCount).toBe(0);
   }, 20_000);
 
+  test('fails closed when HTTP tool output reflects a configured header credential', async () => {
+    dummy = await startDummyMcpOAuthServer({
+      requireAuth: false,
+      runtimeTools: true,
+    });
+    const credential = 'runtime-reflection-secret-4c21f08d';
+    writeRuntimeDestinations(workspaceDir, homeDir, {
+      remote: {
+        type: 'http',
+        url: dummy.mcpUrl,
+        headers: { 'X-Reflect-Credential': credential },
+      },
+    });
+
+    const human = await runRealCli(workspaceDir, homeDir, [
+      'mcp',
+      'call',
+      'remote',
+      RUNTIME_FAILURE_TOOL_NAME,
+    ]);
+    expect(human.exitCode).toBe(1);
+    expect(human.stderr).toContain(
+      'MCP output contained a configured credential value',
+    );
+    expect(`${human.stdout}\n${human.stderr}`).not.toContain(credential);
+    expect(dummy.activeSessionCount).toBe(0);
+
+    const json = await runRealCli(workspaceDir, homeDir, [
+      '--json',
+      'mcp',
+      'call',
+      'remote',
+      RUNTIME_FAILURE_TOOL_NAME,
+    ]);
+    expect(json.exitCode).toBe(1);
+    expect(JSON.parse(json.stdout)).toEqual({
+      success: false,
+      command: 'mcp call',
+      error: 'MCP output contained a configured credential value',
+    });
+    expect(`${json.stdout}\n${json.stderr}`).not.toContain(credential);
+    expect(dummy.activeSessionCount).toBe(0);
+  }, 20_000);
+
   test('reuses and refreshes destination-owned OAuth caches without fresh consent', async () => {
     dummy = await startDummyMcpOAuthServer({
       accessTokenTtlMs: 1_500,
@@ -793,7 +995,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
       },
       {
         args: ['--json', 'mcp', 'tools', 'user', '--scope', 'user'],
-        command: 'allagents mcp reauth user --scope user',
+        command: 'allagents mcp reauth --scope user user',
       },
       {
         args: [
@@ -804,7 +1006,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
           '--profile',
           'markets',
         ],
-        command: 'allagents mcp reauth profile --profile markets',
+        command: 'allagents mcp reauth --profile markets profile',
       },
     ];
     for (const missing of missingCases) {
@@ -875,7 +1077,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
     ]);
     expect(isolatedProfile.exitCode).toBe(1);
     expect(JSON.parse(isolatedProfile.stdout).error).toContain(
-      'allagents mcp reauth profile --profile research',
+      'allagents mcp reauth --profile research profile',
     );
     expect(dummy.authorizeCallCount).toBe(2);
 

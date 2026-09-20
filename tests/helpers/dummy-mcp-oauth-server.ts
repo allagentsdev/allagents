@@ -29,6 +29,8 @@ export const RUNTIME_PRIMITIVE_TOOL_NAME = 'primitive_echo';
 export const RUNTIME_COMPLEX_TOOL_NAME = 'complex_echo';
 export const RUNTIME_FAILURE_TOOL_NAME = 'structured_failure';
 
+const REFLECTED_CREDENTIAL_HEADER = 'x-reflect-credential';
+
 export const RUNTIME_PRIMITIVE_INPUT_SCHEMA = {
   type: 'object' as const,
   properties: {
@@ -268,6 +270,7 @@ export async function startDummyMcpOAuthServer(
   const capturedCalls: CapturedMcpToolCall[] = [];
   const idpRequestHeaders: IncomingHttpHeaders[] = [];
   const mcpRequestHeaders: IncomingHttpHeaders[] = [];
+  let reflectedCredential: string | undefined;
 
   let idpIssuer = '';
   let mcpUrl = '';
@@ -444,6 +447,16 @@ export async function startDummyMcpOAuthServer(
       counters.callToolCount++;
       const args = structuredClone(request.params.arguments ?? {});
       capturedCalls.push({ name: request.params.name, arguments: args });
+      if (reflectedCredential !== undefined) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `reflected credential: ${reflectedCredential}`,
+            },
+          ],
+        };
+      }
       if (request.params.name === FIXTURE_TOOL_NAME) {
         return { content: [{ type: 'text', text: FIXTURE_ANSWER }] };
       }
@@ -491,6 +504,10 @@ export async function startDummyMcpOAuthServer(
     res: ServerResponse,
   ): Promise<void> {
     mcpRequestHeaders.push({ ...req.headers });
+    const reflectionHeader = req.headers[REFLECTED_CREDENTIAL_HEADER];
+    if (typeof reflectionHeader === 'string') {
+      reflectedCredential = reflectionHeader;
+    }
     const url = new URL(req.url ?? '/', mcpUrl);
 
     if (req.method === 'GET' && url.pathname === '/.well-known/oauth-protected-resource') {

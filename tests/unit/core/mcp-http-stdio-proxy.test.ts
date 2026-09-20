@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import {
   getBrowserOpenCommands,
   getMcpOAuthCacheDir,
@@ -11,6 +13,7 @@ import {
 import {
   connectMcpHttpClient,
   createOriginSafeMcpFetch,
+  isMcpAuthorizationFailure,
 } from '../../../src/core/mcp-http-client.js';
 
 
@@ -167,6 +170,23 @@ describe('createOriginSafeMcpFetch', () => {
   });
 });
 
+describe('MCP authorization failures', () => {
+  test('recognizes SDK unauthorized, invalid-grant, and interactive-consent failures', () => {
+    expect(isMcpAuthorizationFailure(new UnauthorizedError())).toBe(true);
+    expect(
+      isMcpAuthorizationFailure(new InvalidGrantError('refresh expired')),
+    ).toBe(true);
+    expect(
+      isMcpAuthorizationFailure(
+        new Error('OAuth authorization requires an interactive terminal'),
+      ),
+    ).toBe(true);
+    expect(isMcpAuthorizationFailure(new Error('network unavailable'))).toBe(
+      false,
+    );
+  });
+});
+
 describe('connectMcpHttpClient', () => {
   test('closes a created transport when initialization fails', async () => {
     let transportSignal: AbortSignal | undefined;
@@ -188,6 +208,82 @@ describe('connectMcpHttpClient', () => {
     ).rejects.toThrow('Streamable HTTP error');
 
     expect(transportSignal?.aborted).toBe(true);
+  });
+
+  test('propagates startup cancellation and closes the pending transport', async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    let transportSignal: AbortSignal | undefined;
+    const connection = connectMcpHttpClient('https://mcp.example/rpc', {
+      allowAuthorization: false,
+      signal: controller.signal,
+      fetch: async (_input, init) => {
+        if (init?.method === 'GET') {
+          return new Response(null, { status: 405 });
+        }
+        transportSignal = init?.signal ?? undefined;
+        started.resolve();
+        const pending = Promise.withResolvers<Response>();
+        init?.signal?.addEventListener(
+          'abort',
+          () => pending.reject(init.signal?.reason),
+          { once: true },
+        );
+        return pending.promise;
+      },
+    });
+
+    await started.promise;
+    controller.abort();
+
+    await expect(connection).rejects.toThrow();
+    expect(transportSignal?.aborted).toBe(true);
+  });
+
+  test('guards credential components from configured authorization headers', async () => {
+    const connection = await connectMcpHttpClient(
+      'https://mcp.example/rpc',
+      {
+        allowAuthorization: false,
+        headers: {
+          Authorization: 'Bearer header-secret',
+          'Proxy-Authorization': 'Basic proxy-secret',
+        },
+        fetch: async (_input, init) => {
+          if (init?.method === 'GET') {
+            return new Response(null, { status: 405 });
+          }
+          const message = JSON.parse(String(init?.body)) as {
+            id?: string | number;
+            method: string;
+            params?: { protocolVersion?: string };
+          };
+          if (message.method === 'initialize') {
+            return Response.json({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: message.params?.protocolVersion,
+                capabilities: {},
+                serverInfo: { name: 'runtime-test', version: '0.0.0' },
+              },
+            });
+          }
+          return new Response(null, { status: 202 });
+        },
+      },
+    );
+
+    try {
+      expect(() =>
+        connection.credentialGuard.assertSafe('echoed header-secret'),
+      ).toThrow('MCP output contained a configured credential value');
+      expect(() =>
+        connection.credentialGuard.assertSafe('echoed proxy-secret'),
+      ).toThrow('MCP output contained a configured credential value');
+    } finally {
+      await connection.close();
+    }
   });
 });
 

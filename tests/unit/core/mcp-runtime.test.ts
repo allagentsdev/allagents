@@ -1,19 +1,30 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  watch,
+  writeFileSync,
+} from 'node:fs';
 import {
   createServer,
   type IncomingMessage,
   type Server as HttpServer,
 } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpCredentialGuard } from '../../../src/core/mcp-http-client.js';
 import {
   callMcpTool,
   connectManagedMcpServer,
   findMcpTool,
   listAllMcpTools,
+  McpRuntimeAuthorizationError,
+  McpRuntimeCancelledError,
   resolveConfiguredMcpServer,
   runManagedMcpSession,
   type ManagedMcpSession,
@@ -37,6 +48,93 @@ function makeProjectDestination(mcpYaml: string): McpDestination {
   );
   directories.push(workspacePath);
   return { kind: 'project', workspacePath, configPath };
+}
+
+function makeUserDestination(mcpYaml: string): McpDestination {
+  const homePath = join(
+    tmpdir(),
+    `mcp-runtime-user-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const configPath = join(homePath, '.allagents', 'workspace.yaml');
+  mkdirSync(join(homePath, '.allagents'), { recursive: true });
+  writeFileSync(
+    configPath,
+    `repositories: []\nplugins: []\nclients: []\nmcpServers:\n${mcpYaml}`,
+    'utf8',
+  );
+  directories.push(homePath);
+  return { kind: 'user', configPath };
+}
+
+function makeInlineStdioDestination(script: string): McpDestination {
+  const indentedScript = script
+    .split('\n')
+    .map((line) => `        ${line}`)
+    .join('\n');
+  return makeProjectDestination(
+    `  local:\n    command: ${JSON.stringify(process.execPath)}\n    args:\n      - -e\n      - |\n${indentedScript}\n`,
+  );
+}
+
+async function waitForFile(path: string): Promise<void> {
+  if (existsSync(path)) return;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const watcher = watch(dirname(path), { persistent: false }, () => {
+    if (!existsSync(path)) return;
+    watcher.close();
+    resolve();
+  });
+  watcher.once('error', (error) => {
+    watcher.close();
+    reject(error);
+  });
+  if (existsSync(path)) {
+    watcher.close();
+    resolve();
+  }
+  return promise;
+}
+
+function createStatelessRuntimeServer(): HttpServer {
+  const server = createServer(async (request, response) => {
+    if (request.method === 'GET') {
+      response.statusCode = 405;
+      response.end();
+      return;
+    }
+    if (request.method === 'DELETE') {
+      response.statusCode = 200;
+      response.end();
+      return;
+    }
+    const message = JSON.parse(await readRequestBody(request)) as {
+      id?: string | number;
+      method: string;
+      params?: { protocolVersion?: string };
+    };
+    if (message.method === 'initialize') {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'mcp-session-id': 'runtime-auth-session',
+      });
+      response.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: 'runtime-test', version: '0.0.0' },
+          },
+        }),
+      );
+      return;
+    }
+    response.statusCode = 202;
+    response.end();
+  });
+  servers.push(server);
+  return server;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
@@ -156,6 +254,189 @@ await server.connect(new StdioServerTransport());
       }
     }
   });
+
+  test('accepts a 16 MiB parsed result through the bounded stdio wire frame', async () => {
+    const script = `
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+const server = new Server(
+  { name: 'large-result', version: '0.0.0' },
+  { capabilities: { tools: {} } },
+);
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [{ name: 'large', inputSchema: { type: 'object' } }],
+}));
+server.setRequestHandler(CallToolRequestSchema, async () => {
+  const base = { content: [], padding: '' };
+  const budget = 16 * 1024 * 1024;
+  return {
+    ...base,
+    padding: 'x'.repeat(budget - Buffer.byteLength(JSON.stringify(base), 'utf8')),
+  };
+});
+await server.connect(new StdioServerTransport());
+`.trim();
+    const destination = makeInlineStdioDestination(script);
+    const session = await connectManagedMcpServer(destination, 'local');
+
+    try {
+      const catalog = await listAllMcpTools(session.client);
+      const result = await callMcpTool(
+        session.client,
+        findMcpTool(catalog, 'large'),
+        {},
+      );
+      expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBe(
+        16 * 1024 * 1024,
+      );
+    } finally {
+      await session.close();
+    }
+  }, 15_000);
+
+
+  test('accepts a 16 MiB parsed result through the bounded HTTP wire response', async () => {
+    const baseResult = { content: [], padding: '' };
+    const largeResult = {
+      ...baseResult,
+      padding: 'x'.repeat(
+        16 * 1024 * 1024 -
+          Buffer.byteLength(JSON.stringify(baseResult), 'utf8'),
+      ),
+    };
+    const server = createServer(async (request, response) => {
+      if (request.method === 'GET') {
+        response.statusCode = 405;
+        response.end();
+        return;
+      }
+      if (request.method === 'DELETE') {
+        response.statusCode = 200;
+        response.end();
+        return;
+      }
+      const message = JSON.parse(await readRequestBody(request)) as {
+        id?: string | number;
+        method: string;
+        params?: { protocolVersion?: string };
+      };
+      if (message.id === undefined) {
+        response.statusCode = 202;
+        response.end();
+        return;
+      }
+      const result =
+        message.method === 'initialize'
+          ? {
+              protocolVersion: message.params?.protocolVersion,
+              capabilities: { tools: {} },
+              serverInfo: { name: 'runtime-test', version: '0.0.0' },
+            }
+          : message.method === 'tools/list'
+            ? {
+                tools: [
+                  { name: 'large', inputSchema: { type: 'object' as const } },
+                ],
+              }
+            : largeResult;
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'mcp-session-id': 'runtime-large-session',
+      });
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const destination = makeProjectDestination(
+      `  direct:\n    url: http://127.0.0.1:${port}/mcp\n`,
+    );
+    const session = await connectManagedMcpServer(destination, 'direct');
+
+    try {
+      const catalog = await listAllMcpTools(session.client);
+      const result = await callMcpTool(
+        session.client,
+        findMcpTool(catalog, 'large'),
+        {},
+      );
+      expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBe(
+        16 * 1024 * 1024,
+      );
+    } finally {
+      await session.close();
+    }
+  }, 15_000);
+  test('cancels stdio initialization and observes the spawned child exit', async () => {
+    const markerRoot = join(
+      tmpdir(),
+      `mcp-runtime-cancel-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(markerRoot, { recursive: true });
+    directories.push(markerRoot);
+    const startedPath = join(markerRoot, 'started');
+    const exitedPath = join(markerRoot, 'exited');
+    const script = `
+import { writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+writeFileSync(${JSON.stringify(startedPath)}, String(process.pid));
+createServer().listen(0, '127.0.0.1');
+process.once('SIGTERM', () => {
+  writeFileSync(${JSON.stringify(exitedPath)}, 'observed');
+  process.exit(0);
+});
+`.trim();
+    const destination = makeInlineStdioDestination(script);
+    const controller = new AbortController();
+    const connection = connectManagedMcpServer(destination, 'local', {
+      signal: controller.signal,
+    });
+    await waitForFile(startedPath);
+
+    controller.abort();
+
+    await expect(connection).rejects.toBeInstanceOf(McpRuntimeCancelledError);
+    expect(readFileSync(exitedPath, 'utf8')).toBe('observed');
+    const childPid = Number.parseInt(readFileSync(startedPath, 'utf8'), 10);
+    expect(() => process.kill(childPid, 0)).toThrow();
+  }, 10_000);
+
+  test('normalizes HTTP initialization cancellation and closes the request', async () => {
+    const sawInitialize = Promise.withResolvers<void>();
+    const sawRequestClose = Promise.withResolvers<void>();
+    const server = createServer(async (request, response) => {
+      if (request.method === 'GET') {
+        response.statusCode = 405;
+        response.end();
+        return;
+      }
+      const message = JSON.parse(await readRequestBody(request)) as {
+        method: string;
+      };
+      if (message.method !== 'initialize') {
+        response.statusCode = 202;
+        response.end();
+        return;
+      }
+      response.once('close', () => sawRequestClose.resolve());
+      sawInitialize.resolve();
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const destination = makeProjectDestination(
+      `  direct:\n    url: http://127.0.0.1:${port}/mcp\n`,
+    );
+    const controller = new AbortController();
+    const connection = connectManagedMcpServer(destination, 'direct', {
+      signal: controller.signal,
+    });
+    await sawInitialize.promise;
+
+    controller.abort();
+
+    await expect(connection).rejects.toBeInstanceOf(McpRuntimeCancelledError);
+    await sawRequestClose.promise;
+  });
 });
 
 
@@ -270,6 +551,40 @@ describe('finite managed lifecycle', () => {
     expect(result.cleanup).toEqual({ status: 'fulfilled' });
   });
 
+
+  test('normalizes call-time invalid grants to an exact destination reauth command', async () => {
+    const server = createStatelessRuntimeServer();
+    const port = await listen(server);
+    const serverName = '-server name';
+    const destination = makeUserDestination(
+      `  ${JSON.stringify(serverName)}:\n    url: http://127.0.0.1:${port}/mcp\n`,
+    );
+    const session = await connectManagedMcpServer(destination, serverName);
+    const failingClient = {
+      async callTool() {
+        throw new InvalidGrantError('refresh token expired');
+      },
+    } as unknown as Client;
+    const tool: Tool = {
+      name: 'protected',
+      inputSchema: { type: 'object' },
+    };
+
+    const result = await runManagedMcpSession(session, ({ signal }) =>
+      callMcpTool(failingClient, tool, {}, { signal }),
+    );
+
+    expect(result.operation.status).toBe('rejected');
+    if (result.operation.status === 'rejected') {
+      expect(result.operation.error).toBeInstanceOf(
+        McpRuntimeAuthorizationError,
+      );
+      expect(result.operation.error.message).toContain(
+        "allagents mcp reauth --scope user -- '-server name'",
+      );
+    }
+    expect(result.cleanup).toEqual({ status: 'fulfilled' });
+  });
   test('bounds HTTP termination, aborts the hanging DELETE, and keeps the result', async () => {
     let deleteRequests = 0;
     let deleteClosed = false;
@@ -389,7 +704,7 @@ describe('bounded MCP tool catalog', () => {
       },
     } as unknown as Client;
     await expect(listAllMcpTools(repeatedCursorClient)).rejects.toThrow(
-      "repeated cursor 'same'",
+      'repeated a pagination cursor',
     );
     expect(repeatedPage).toBe(2);
 
@@ -473,7 +788,8 @@ describe('bounded MCP tool catalog', () => {
       },
     ];
     const fixedBytes = Buffer.byteLength(JSON.stringify(baseTools), 'utf8');
-    const paddingBytes = budget - fixedBytes;
+    const paddingBytes =
+      budget - fixedBytes - Buffer.byteLength('second', 'utf8');
     const exactTools = [
       { ...baseTools[0], description: 'x'.repeat(Math.floor(paddingBytes / 2)) },
       { ...baseTools[1], description: 'x'.repeat(Math.ceil(paddingBytes / 2)) },
@@ -498,6 +814,25 @@ describe('bounded MCP tool catalog', () => {
     await expect(
       listAllMcpTools(clientForTools(overflowTools)),
     ).rejects.toThrow('exceeds 16777216 serialized bytes');
+  });
+
+
+  test('counts cumulative opaque cursor bytes against the catalog budget', async () => {
+    const cursorBytes = 9 * 1024 * 1024;
+    const cursors = ['a'.repeat(cursorBytes), 'b'.repeat(cursorBytes)];
+    let calls = 0;
+    const client = {
+      async listTools() {
+        const nextCursor = cursors[calls];
+        calls += 1;
+        return { tools: [], ...(nextCursor === undefined ? {} : { nextCursor }) };
+      },
+    } as unknown as Client;
+
+    await expect(listAllMcpTools(client)).rejects.toThrow(
+      'MCP tool catalog exceeds 16777216 serialized bytes',
+    );
+    expect(calls).toBe(2);
   });
 
   test('accepts an exact tools page byte budget and rejects one byte above it', async () => {
@@ -585,7 +920,7 @@ describe('bounded MCP tool catalog', () => {
         return { content: [{ type: 'text' as const, text: 'ok' }] };
       },
     } as unknown as Client;
-    const catalog = [
+    const catalog: Tool[] = [
       {
         name: 'required-task',
         inputSchema: { type: 'object' as const },
@@ -595,21 +930,73 @@ describe('bounded MCP tool catalog', () => {
     ];
 
     await expect(
-      callMcpTool(client, catalog, 'required-task', {}),
+      callMcpTool(client, catalog[0] as Tool, {}),
     ).rejects.toThrow('requires task-based execution');
     expect(calls).toEqual([]);
 
     await expect(
-      callMcpTool(client, catalog, 'ordinary', { exact: true }),
+      callMcpTool(client, catalog[1] as Tool, { exact: true }),
     ).resolves.toEqual({ content: [{ type: 'text', text: 'ok' }] });
     expect(calls).toEqual([
       { name: 'ordinary', arguments: { exact: true } },
     ]);
   });
 
+
+  test('preserves complete structured results that match the selected aggregate tool schema', async () => {
+    const tool: Tool = {
+      name: 'earlier-page-tool',
+      inputSchema: { type: 'object' },
+      outputSchema: {
+        type: 'object',
+        properties: { received: { type: 'string' } },
+        required: ['received'],
+      },
+    };
+    const completeResult = {
+      content: [{ type: 'text' as const, text: 'complete' }],
+      structuredContent: { received: 'exact', retained: false },
+      isError: false,
+      _meta: { page: 1, retained: true },
+    };
+    const client = {
+      async callTool() {
+        return completeResult;
+      },
+    } as unknown as Client;
+
+    await expect(callMcpTool(client, tool, {})).resolves.toEqual(
+      completeResult,
+    );
+  });
+
+  test('rejects structured results that violate an earlier aggregate page schema', async () => {
+    const tool: Tool = {
+      name: 'earlier-page-tool',
+      inputSchema: { type: 'object' },
+      outputSchema: {
+        type: 'object',
+        properties: { count: { type: 'integer' } },
+        required: ['count'],
+      },
+    };
+    const client = {
+      async callTool() {
+        return {
+          content: [],
+          structuredContent: { count: 'not-an-integer' },
+        };
+      },
+    } as unknown as Client;
+
+    await expect(callMcpTool(client, tool, {})).rejects.toThrow(
+      "Structured content does not match the tool's output schema",
+    );
+  });
+
   test('accepts an exact call result byte budget and rejects one byte above it', async () => {
     const budget = 16 * 1024 * 1024;
-    const catalog = [
+    const catalog: Tool[] = [
       { name: 'bounded', inputSchema: { type: 'object' as const } },
     ];
     const baseResult = { content: [], padding: '' };
@@ -624,7 +1011,7 @@ describe('bounded MCP tool catalog', () => {
       },
     } as unknown as Client;
     await expect(
-      callMcpTool(exactClient, catalog, 'bounded', {}),
+      callMcpTool(exactClient, catalog[0] as Tool, {}),
     ).resolves.toEqual(exactResult);
 
     const overflowClient = {
@@ -636,7 +1023,7 @@ describe('bounded MCP tool catalog', () => {
       },
     } as unknown as Client;
     await expect(
-      callMcpTool(overflowClient, catalog, 'bounded', {}),
+      callMcpTool(overflowClient, catalog[0] as Tool, {}),
     ).rejects.toThrow(
       'MCP tools/call result exceeds 16777216 serialized bytes',
     );

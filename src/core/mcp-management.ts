@@ -10,6 +10,7 @@ import {
 } from './mcp-http-client.js';
 import {
   addMcpServer,
+  formatMcpDestination,
   getMcpServer,
   listMcpServers,
   type McpDestination,
@@ -50,17 +51,6 @@ export class McpUpdateError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'McpUpdateError';
-  }
-}
-
-function destinationDisplay(destination: McpDestination): string {
-  switch (destination.kind) {
-    case 'project':
-      return 'workspace.yaml';
-    case 'user':
-      return 'the user workspace';
-    case 'profile':
-      return `profile '${destination.name}'`;
   }
 }
 
@@ -165,7 +155,7 @@ export async function addManagedMcpServer(
   const existing = await getMcpServer(destination, name);
   if (existing && !force) {
     throw new Error(
-      `MCP server '${name}' already exists in ${destinationDisplay(destination)}. Use --force to replace it.`,
+      `MCP server '${name}' already exists in ${formatMcpDestination(destination)}. Use --force to replace it.`,
     );
   }
   await validateProfileAddCandidate(destination, name, config);
@@ -226,7 +216,7 @@ export async function reauthenticateManagedMcpServer(
   const config = await getMcpServer(destination, name);
   if (!config) {
     throw new Error(
-      `MCP server '${name}' is not defined in ${destinationDisplay(destination)}`,
+      `MCP server '${name}' is not defined in ${formatMcpDestination(destination)}`,
     );
   }
   if (!('url' in config)) {

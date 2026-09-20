@@ -652,6 +652,16 @@ allagents --json --jq '.data.result.structuredContent' \
   mcp call trading quote --profile markets --symbol AAPL
 ```
 
+Server and tool names are exact protocol data. If either name begins with `-`,
+put every runtime option before `--`, then place the remaining server or tool
+name after the separator:
+
+```bash
+allagents mcp tools --scope user -- --staging
+allagents mcp call --help --profile markets -- --trading -quote
+allagents mcp call --input '{"symbol":"AAPL"}' trading -- -quote
+```
+
 Fully qualified help is live: `mcp call <server> <tool> --help` connects to the
 selected HTTP server or starts the configured stdio process, discovers the
 current descriptor, and closes the connection without invoking the tool. Human

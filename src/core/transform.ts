@@ -20,8 +20,9 @@ import {
   CLIENT_MAPPINGS,
   isUniversalClient,
   resolveClientMappings,
+  type ClientMapping,
+  type ClientMappings,
 } from '../models/client-mapping.js';
-import type { ClientMapping } from '../models/client-mapping.js';
 import type { MarketplaceFileArtifacts } from '../models/marketplace-manifest.js';
 import type {
   ClientType,
@@ -105,7 +106,7 @@ export interface CopyOptions {
   /** Simulate copy without making changes */
   dryRun?: boolean;
   /** Override client path mappings (defaults to CLIENT_MAPPINGS) */
-  clientMappings?: Record<string, ClientMapping>;
+  clientMappings?: ClientMappings;
   /** Selected filesystem root that bounds this client's external writes. */
   writeRoot?: string;
   /**
@@ -241,16 +242,19 @@ export interface WorkspaceCopyOptions extends CopyOptions {
 }
 
 /**
- * Get the client mapping, using override if provided, otherwise falling back to CLIENT_MAPPINGS
+ * Get the client mapping, using the supplied scope map when present.
  */
 function getMapping(
   client: ClientType,
-  options?: { clientMappings?: Record<string, ClientMapping> },
+  options?: { clientMappings?: ClientMappings },
 ): ClientMapping {
-  return (
-    (options?.clientMappings as Record<ClientType, ClientMapping>)?.[client] ??
-    CLIENT_MAPPINGS[client]
-  );
+  const mapping = options?.clientMappings
+    ? options.clientMappings[client]
+    : CLIENT_MAPPINGS[client];
+  if (!mapping) {
+    throw new Error(`Client '${client}' has no mapping for this scope`);
+  }
+  return mapping;
 }
 
 /**
@@ -998,7 +1002,7 @@ async function readAgentSourceEntries(
 export async function planAgentOutputs(
   plugins: readonly AgentOutputPlugin[],
   workspacePath: string,
-  clientMappings: Record<string, ClientMapping> = CLIENT_MAPPINGS,
+  clientMappings: ClientMappings = CLIENT_MAPPINGS,
 ): Promise<AgentOutputPlan> {
   const outputs: AgentOutput[] = [];
   const conflicts: AgentOutputConflict[] = [];
@@ -1476,7 +1480,7 @@ async function hasIncludedFiles(
 
 interface PlannedAgentCopyOptions {
   dryRun: boolean;
-  clientMappings: Record<string, ClientMapping>;
+  clientMappings: ClientMappings;
   skillNameMap?: Map<string, string>;
   writeRoot?: string;
 }

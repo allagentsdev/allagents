@@ -23,115 +23,65 @@ import {
 import type { SyncState } from '../../../src/models/sync-state.js';
 
 describe('deduplicateClientsByPath', () => {
-  it('should group clients that share the same skillsPath after resolution', () => {
-    // After resolution, copilot and vscode both use .github/skills/
-    const clients = ['copilot', 'vscode'] as const;
-    const resolvedMappings = resolveClientMappings([...clients], CLIENT_MAPPINGS);
-    const result = deduplicateClientsByPath([...clients], resolvedMappings);
-
-    // Should have only one representative client
-    expect(result.representativeClients).toHaveLength(1);
-    expect(result.representativeClients[0]).toBe('copilot');
-
-    // The group should contain both clients
-    const group = result.clientGroups.get('copilot');
-    expect(group).toBeDefined();
-    expect(group).toHaveLength(2);
-    expect(group).toContain('copilot');
-    expect(group).toContain('vscode');
-  });
-
-  it('should keep clients with different skillsPaths separate', () => {
-    // claude uses .claude/skills/, cursor uses .cursor/skills/, codex uses .codex/skills/
-    const clients = ['claude', 'cursor', 'codex'] as const;
-    const result = deduplicateClientsByPath([...clients], CLIENT_MAPPINGS);
-
-    expect(result.representativeClients).toHaveLength(3);
-    expect(result.representativeClients).toContain('claude');
-    expect(result.representativeClients).toContain('cursor');
-    expect(result.representativeClients).toContain('codex');
-
-    // Each group should have only one client
-    expect(result.clientGroups.get('claude')).toEqual(['claude']);
-    expect(result.clientGroups.get('cursor')).toEqual(['cursor']);
-    expect(result.clientGroups.get('codex')).toEqual(['codex']);
-  });
-
-  it('should handle mixed unique and shared paths after resolution', () => {
-    // claude (unique .claude/skills/), copilot+vscode (shared .github/skills/ after resolution), codex (unique .codex/skills/)
-    const clients = ['claude', 'copilot', 'vscode', 'codex'] as const;
-    const resolvedMappings = resolveClientMappings([...clients], CLIENT_MAPPINGS);
-    const result = deduplicateClientsByPath([...clients], resolvedMappings);
-
-    // Should have 3 representative clients
-    expect(result.representativeClients).toHaveLength(3);
-    expect(result.representativeClients).toContain('claude');
-    expect(result.representativeClients).toContain('codex');
-    // copilot should be representative for the shared group
-    expect(result.representativeClients).toContain('copilot');
-
-    // copilot group should have both copilot and vscode
-    const copilotGroup = result.clientGroups.get('copilot');
-    expect(copilotGroup).toHaveLength(2);
-    expect(copilotGroup).toContain('copilot');
-    expect(copilotGroup).toContain('vscode');
-  });
-
-  it('should work with USER_CLIENT_MAPPINGS', () => {
-    // copilot uses .copilot/skills/, codex uses .codex/skills/, opencode uses .opencode/skills/
-    const clients = ['copilot', 'codex', 'opencode'] as const;
-    const result = deduplicateClientsByPath([...clients], USER_CLIENT_MAPPINGS);
-
-    // All three have different user-level paths, so no grouping
-    expect(result.representativeClients).toHaveLength(3);
-    expect(result.clientGroups.get('copilot')).toEqual(['copilot']);
-    expect(result.clientGroups.get('codex')).toEqual(['codex']);
-    expect(result.clientGroups.get('opencode')).toEqual(['opencode']);
-  });
-
-  it('should handle empty clients array', () => {
-    const result = deduplicateClientsByPath([], CLIENT_MAPPINGS);
-
-    expect(result.representativeClients).toHaveLength(0);
-    expect(result.clientGroups.size).toBe(0);
-  });
-
-  it('should handle single client', () => {
-    const result = deduplicateClientsByPath(['claude'], CLIENT_MAPPINGS);
-
-    expect(result.representativeClients).toHaveLength(1);
-    expect(result.representativeClients[0]).toBe('claude');
-    expect(result.clientGroups.get('claude')).toEqual(['claude']);
-  });
-
-  it('should group vscode with copilot after resolution', () => {
+  it('groups clients that share a resolved project skill path', () => {
     const clients = ['copilot', 'vscode', 'codex'] as const;
     const resolvedMappings = resolveClientMappings([...clients], CLIENT_MAPPINGS);
     const result = deduplicateClientsByPath([...clients], resolvedMappings);
 
-    // After resolution, copilot and vscode share .github/skills/, codex uses .codex/skills/
-    expect(result.representativeClients).toHaveLength(2);
-    expect(result.representativeClients).toContain('copilot');
-    expect(result.representativeClients).toContain('codex');
-
-    const copilotGroup = result.clientGroups.get('copilot');
-    expect(copilotGroup).toHaveLength(2);
-    expect(copilotGroup).toContain('copilot');
-    expect(copilotGroup).toContain('vscode');
-
-    const codexGroup = result.clientGroups.get('codex');
-    expect(codexGroup).toHaveLength(1);
-    expect(codexGroup).toContain('codex');
+    expect(result.representativeClients).toEqual(['copilot', 'codex']);
+    expect(result.clientGroups.get('copilot')).toEqual([
+      'copilot',
+      'vscode',
+    ]);
+    expect(result.clientGroups.get('codex')).toEqual(['codex']);
   });
 
-  it('should not group vscode with copilot in unresolved CLIENT_MAPPINGS', () => {
-    const result = deduplicateClientsByPath(['copilot', 'vscode'], CLIENT_MAPPINGS);
-    // Without resolution, vscode uses .agents/skills/ and copilot uses .github/skills/
-    expect(result.representativeClients).toHaveLength(2);
-    expect(result.representativeClients).toContain('copilot');
-    expect(result.representativeClients).toContain('vscode');
+  it('keeps provider-specific project skill paths separate', () => {
+    const clients = ['claude', 'pi', 'roo'] as const;
+    const result = deduplicateClientsByPath([...clients], CLIENT_MAPPINGS);
+
+    expect(result.representativeClients).toEqual(['claude', 'pi', 'roo']);
+    expect(result.clientGroups.get('claude')).toEqual(['claude']);
+    expect(result.clientGroups.get('pi')).toEqual(['pi']);
+    expect(result.clientGroups.get('roo')).toEqual(['roo']);
   });
-});
+
+  it('handles mixed provider-specific and shared project paths', () => {
+    const clients = ['claude', 'copilot', 'vscode', 'codex'] as const;
+    const resolvedMappings = resolveClientMappings([...clients], CLIENT_MAPPINGS);
+    const result = deduplicateClientsByPath([...clients], resolvedMappings);
+
+    expect(result.representativeClients).toEqual([
+      'claude',
+      'copilot',
+      'codex',
+    ]);
+    expect(result.clientGroups.get('copilot')).toEqual([
+      'copilot',
+      'vscode',
+    ]);
+  });
+
+  it('uses distinct declared user destinations', () => {
+    const clients = ['copilot', 'codex', 'opencode'] as const;
+    const result = deduplicateClientsByPath([...clients], USER_CLIENT_MAPPINGS);
+
+    expect(result.representativeClients).toEqual([
+      'copilot',
+      'codex',
+      'opencode',
+    ]);
+  });
+
+  it('handles empty and single-client inputs', () => {
+    expect(
+      deduplicateClientsByPath([], CLIENT_MAPPINGS).representativeClients,
+    ).toEqual([]);
+    expect(
+      deduplicateClientsByPath(['claude'], CLIENT_MAPPINGS)
+        .representativeClients,
+    ).toEqual(['claude']);
+  });
 
   it('keeps Pi and OMP materialization distinct from shared discovery paths', () => {
     const clients = ['pi', 'omp', 'universal'] as const;
@@ -144,9 +94,22 @@ describe('deduplicateClientsByPath', () => {
     ]);
   });
 
+  it('chooses universal when a shared-path client is declared first', () => {
+    const result = deduplicateClientsByPath(
+      ['warp', 'universal'],
+      CLIENT_MAPPINGS,
+    );
+
+    expect(result.representativeClients).toEqual(['universal']);
+    expect(result.clientGroups.get('universal')).toEqual([
+      'warp',
+      'universal',
+    ]);
+  });
+});
+
 describe('collectSyncedPaths with shared paths', () => {
-  it('should track file for all clients sharing the same skillsPath after resolution', () => {
-    // After resolution, copilot and vscode both use .github/skills/
+  it('tracks one shared skill for every client using its destination', () => {
     const copyResults: CopyResult[] = [
       {
         source: '/some/plugin/skills/my-skill',
@@ -154,17 +117,21 @@ describe('collectSyncedPaths with shared paths', () => {
         action: 'copied',
       },
     ];
-
     const clients = ['copilot', 'vscode'] as const;
     const resolvedMappings = resolveClientMappings([...clients], CLIENT_MAPPINGS);
-    const result = collectSyncedPaths(copyResults, '/workspace', [...clients], resolvedMappings);
+    const result = collectSyncedPaths(
+      copyResults,
+      '/workspace',
+      [...clients],
+      resolvedMappings,
+    );
 
-    // Both clients should track the same skill
-    expect(result.copilot).toContain('.github/skills/my-skill/');
-    expect(result.vscode).toContain('.github/skills/my-skill/');
+    for (const client of clients) {
+      expect(result[client]).toContain('.github/skills/my-skill/');
+    }
   });
 
-  it('should track files correctly when clients have different paths', () => {
+  it('tracks provider-specific and shared destinations independently', () => {
     const copyResults: CopyResult[] = [
       {
         source: '/some/plugin/skills/skill1',
@@ -177,17 +144,15 @@ describe('collectSyncedPaths with shared paths', () => {
         action: 'copied',
       },
     ];
+    const result = collectSyncedPaths(
+      copyResults,
+      '/workspace',
+      ['claude', 'copilot'],
+      CLIENT_MAPPINGS,
+    );
 
-    const clients = ['claude', 'copilot'] as const;
-    const result = collectSyncedPaths(copyResults, '/workspace', [...clients], CLIENT_MAPPINGS);
-
-    // claude should only track .claude/skills/skill1
-    expect(result.claude).toContain('.claude/skills/skill1/');
-    expect(result.claude).not.toContain('.github/skills/skill2/');
-
-    // copilot should only track .github/skills/skill2
-    expect(result.copilot).toContain('.github/skills/skill2/');
-    expect(result.copilot).not.toContain('.claude/skills/skill1/');
+    expect(result.claude).toEqual(['.claude/skills/skill1/']);
+    expect(result.copilot).toEqual(['.github/skills/skill2/']);
   });
 });
 
@@ -295,10 +260,10 @@ description: A test skill
     return pluginDir;
   }
 
-  it('should copy skill only once when multiple clients share .github/skills/', async () => {
+  it('should copy a shared .github skill only once', async () => {
     const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
 
-    // Setup workspace config with clients that share .github/skills/
+    // Copilot and VS Code share Copilot's project skill destination.
     await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
     await writeFile(
       join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
@@ -318,7 +283,7 @@ clients:
     // Should only copy once (not 2 times)
     expect(result.totalCopied).toBe(1);
 
-    // Skill should exist in .github/skills/
+    // Skill should exist in the shared destination.
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
 
     // Verify sync state tracks the skill for both clients
@@ -342,8 +307,8 @@ plugins:
   - ${pluginDir}
 clients:
   - claude
-  - cursor
-  - copilot
+  - pi
+  - roo
 `,
     );
 
@@ -355,8 +320,8 @@ clients:
 
     // Skills should exist in each client's directory
     expect(existsSync(join(testDir, '.claude', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
-    expect(existsSync(join(testDir, '.cursor', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
-    expect(existsSync(join(testDir, '.github', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(testDir, '.pi', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(testDir, '.roo', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
   });
 
   it('materializes Pi native and universal shared skills exactly once each', async () => {
@@ -387,10 +352,33 @@ syncMode: copy
     ).toBe(true);
   });
 
+  it('materializes universal skills when a shared-path client comes first', async () => {
+    const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
+    await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
+    await writeFile(
+      join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
+      `
+repositories: []
+plugins:
+  - ${pluginDir}
+clients:
+  - warp
+  - universal
+`,
+    );
+
+    const result = await syncWorkspace(testDir);
+
+    expect(result.success).toBe(true);
+    expect(
+      existsSync(join(testDir, '.agents', 'skills', 'test-skill', 'SKILL.md')),
+    ).toBe(true);
+  });
+
   it('should properly purge when a client sharing path is removed', async () => {
     const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
 
-    // First sync with copilot and vscode (both share .github/skills/)
+    // First sync with Copilot and VS Code on their shared destination.
     await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
     await writeFile(
       join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
@@ -436,7 +424,7 @@ clients:
   it('should purge shared path when all clients using it are removed', async () => {
     const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
 
-    // First sync with copilot and vscode (using copy mode for predictable behavior)
+    // First sync with Copilot and VS Code in copy mode.
     await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
     await writeFile(
       join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
@@ -469,7 +457,7 @@ syncMode: copy
 
     await syncWorkspace(testDir);
 
-    // .github/skills/test-skill should be purged
+    // The shared skill should be purged once no configured client owns it.
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill'))).toBe(false);
 
     // .claude/skills/test-skill should exist
@@ -520,7 +508,7 @@ clients:
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill', 'SKILL.md'))).toBe(false);
   });
 
-  it('should place skills in .github/ when copilot and vscode are both configured', async () => {
+  it('should keep Copilot and VS Code skills in .github/', async () => {
     const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
 
     await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
@@ -544,7 +532,7 @@ syncMode: copy
     expect(result.totalCopied).toBe(1);
   });
 
-  it('should place skills in .agents/ with .github symlink when universal + copilot + vscode', async () => {
+  it('should share universal content with Copilot and VS Code', async () => {
     const pluginDir = await createPluginWithSkill('my-plugin', 'test-skill');
 
     await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
@@ -563,9 +551,7 @@ clients:
 
     const result = await syncWorkspace(testDir);
     expect(result.success).toBe(true);
-    // Canonical in .agents
     expect(existsSync(join(testDir, '.agents', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
-    // .github should exist (symlink or copy from copilot+vscode)
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill', 'SKILL.md'))).toBe(true);
   });
 

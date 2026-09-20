@@ -1,331 +1,285 @@
-import { describe, expect, it, test } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import {
   AGENT_HOSTS,
+  CLIENT_ALIASES,
   CLIENT_MAPPINGS,
+  CLIENT_TYPES,
   USER_CLIENT_MAPPINGS,
+  canonicalizeClientId,
+  clientIdsForScope,
   findHostById,
-  getMapping,
-  resolveClientMappings,
   getDisplayName,
+  getMapping,
+  mcpClientIdsForScope,
+  resolveClientMappings,
   uniqueProjectSkillsPaths,
 } from '../../../src/models/client-mapping.js';
 import { ClientTypeSchema } from '../../../src/models/workspace-config.js';
 
-describe('CLIENT_MAPPINGS', () => {
-  test('defines project-level paths for all supported clients', () => {
-    const expectedClients = [
+const SKILLS_1_7_DESTINATION_IDS = [
+  'aider-desk',
+  'amp',
+  'antigravity',
+  'antigravity-cli',
+  'astrbot',
+  'autohand-code',
+  'augment',
+  'bob',
+  'claude-code',
+  'openclaw',
+  'cline',
+  'codearts-agent',
+  'codebuddy',
+  'codemaker',
+  'codestudio',
+  'codex',
+  'command-code',
+  'continue',
+  'cortex',
+  'crush',
+  'cursor',
+  'deepagents',
+  'devin',
+  'dexto',
+  'droid',
+  'eve',
+  'firebender',
+  'forgecode',
+  'fx',
+  'gemini-cli',
+  'github-copilot',
+  'goose',
+  'grok',
+  'hermes-agent',
+  'inference-sh',
+  'iflow-cli',
+  'jazz',
+  'junie',
+  'kilo',
+  'kimchi',
+  'kimi-code-cli',
+  'kiro-cli',
+  'kode',
+  'lingma',
+  'loaf',
+  'mcpjam',
+  'minimax-code',
+  'mistral-vibe',
+  'moxby',
+  'mux',
+  'neovate',
+  'opencode',
+  'openhands',
+  'ona',
+  'pi',
+  'posit-assistant',
+  'qoder',
+  'qoder-cn',
+  'qwen-code',
+  'replit',
+  'reasonix',
+  'roo',
+  'rovodev',
+  'sarvam-code',
+  'tabnine-cli',
+  'terramind',
+  'tinycloud',
+  'trae',
+  'trae-cn',
+  'warp',
+  'windsurf',
+  'zed',
+  'zcode',
+  'zencoder',
+  'zenflow',
+  'pochi',
+  'promptscript',
+  'adal',
+  'universal',
+] as const;
+
+describe('canonical client registry', () => {
+  it('defines every canonical identity exactly once and derives the input schema', () => {
+    const hostIds = AGENT_HOSTS.map((host) => host.id);
+    expect(new Set(hostIds).size).toBe(AGENT_HOSTS.length);
+    expect(hostIds).toEqual(CLIENT_TYPES);
+    expect(CLIENT_TYPES).toHaveLength(81);
+
+    for (const client of CLIENT_TYPES) {
+      expect(ClientTypeSchema.parse(client)).toBe(client);
+      expect(CLIENT_MAPPINGS[client]).toBe(AGENT_HOSTS.find((host) => host.id === client)?.project);
+    }
+  });
+
+  it('accepts all 79 skills@1.7.0 IDs directly or through one of seven aliases', () => {
+    expect(SKILLS_1_7_DESTINATION_IDS).toHaveLength(79);
+    expect(CLIENT_ALIASES).toEqual({
+      'claude-code': 'claude',
+      'github-copilot': 'copilot',
+      'gemini-cli': 'gemini',
+      droid: 'factory',
+      amp: 'ampcode',
+      'kiro-cli': 'kiro',
+      'kimi-code-cli': 'kimi',
+    });
+
+    for (const id of SKILLS_1_7_DESTINATION_IDS) {
+      const canonical = canonicalizeClientId(id);
+      expect(canonical).toBeDefined();
+      expect(CLIENT_TYPES).toContain(canonical);
+      expect(ClientTypeSchema.parse(id)).toBe(canonical);
+    }
+  });
+
+  it('keeps aliases out of canonical product counts and resolves host lookups', () => {
+    for (const [alias, canonical] of Object.entries(CLIENT_ALIASES)) {
+      expect(CLIENT_TYPES).not.toContain(alias);
+      expect(findHostById(alias)?.id).toBe(canonical);
+    }
+    expect(findHostById('not-a-client')).toBeUndefined();
+  });
+});
+
+describe('capability-aware mappings', () => {
+  it('preserves Claude Code rich destinations and runtime capabilities', () => {
+    const claude = findHostById('claude');
+    expect(claude?.project).toEqual({
+      commandsPath: '.claude/commands/',
+      skillsPath: '.claude/skills/',
+      agentsPath: '.claude/agents/',
+      agentFile: 'CLAUDE.md',
+      agentFileFallback: 'AGENTS.md',
+      hooksPath: '.claude/hooks/',
+    });
+    expect(claude?.user).toEqual(claude?.project);
+    expect(claude?.mcp).toEqual({ project: true, user: true });
+  });
+
+  it('preserves every pre-existing AllAgents name and skill destination', () => {
+    const expected = [
+      ['claude', 'Claude Code', '.claude/skills/', '.claude/skills/'],
+      ['copilot', 'GitHub Copilot', '.github/skills/', '.copilot/skills/'],
+      ['codex', 'Codex', '.codex/skills/', '.codex/skills/'],
+      ['pi', 'Pi', '.pi/skills/', '.pi/agent/skills/'],
+      ['omp', 'OMP', '.omp/skills/', '.omp/agent/skills/'],
+      ['cursor', 'Cursor', '.cursor/skills/', '.cursor/skills/'],
+      ['opencode', 'OpenCode', '.opencode/skills/', '.opencode/skills/'],
+      ['gemini', 'Gemini', '.gemini/skills/', '.gemini/skills/'],
+      ['factory', 'Factory', '.factory/skills/', '.factory/skills/'],
+      ['ampcode', 'AmpCode', '.ampcode/skills/', '.ampcode/skills/'],
+      ['vscode', 'VS Code', '.agents/skills/', '.agents/skills/'],
+      ['openclaw', 'OpenClaw', 'skills/', 'skills/'],
+      ['windsurf', 'Windsurf', '.windsurf/skills/', '.codeium/windsurf/skills/'],
+      ['cline', 'Cline', '.cline/skills/', '.cline/skills/'],
+      ['continue', 'Continue', '.continue/skills/', '.continue/skills/'],
+      ['roo', 'Roo Code', '.roo/skills/', '.roo/skills/'],
+      ['kilo', 'Kilo Code', '.kilocode/skills/', '.kilocode/skills/'],
+      ['trae', 'Trae', '.trae/skills/', '.trae/skills/'],
+      ['augment', 'Augment', '.augment/skills/', '.augment/skills/'],
+      ['zencoder', 'Zencoder', '.zencoder/skills/', '.zencoder/skills/'],
+      ['junie', 'Junie', '.junie/skills/', '.junie/skills/'],
+      ['openhands', 'OpenHands', '.openhands/skills/', '.openhands/skills/'],
+      ['kiro', 'Kiro', '.kiro/skills/', '.kiro/skills/'],
+      ['replit', 'Replit', '.replit/skills/', '.replit/skills/'],
+      ['kimi', 'Kimi', '.kimi/skills/', '.kimi/skills/'],
+      ['universal', 'Universal', '.agents/skills/', '.agents/skills/'],
+    ] as const;
+
+    for (const [id, name, projectSkillsPath, userSkillsPath] of expected) {
+      const host = findHostById(id);
+      expect(host?.name).toBe(name);
+      expect(host?.project.skillsPath).toBe(projectSkillsPath);
+      expect(host?.user?.skillsPath).toBe(userSkillsPath);
+    }
+
+    expect(CLIENT_MAPPINGS.copilot.githubPath).toBe('.github/');
+    expect(CLIENT_MAPPINGS.copilot.agentsPath).toBe('.github/agents/');
+    expect(CLIENT_MAPPINGS.factory.hooksPath).toBe('.factory/hooks/');
+    expect(CLIENT_MAPPINGS.opencode.commandsPath).toBe('.opencode/commands/');
+  });
+
+  it('represents new universal and provider-specific clients as skills-only', () => {
+    expect(getMapping('warp', 'project')).toEqual({ skillsPath: '.agents/skills/' });
+    expect(getMapping('aider-desk', 'project')).toEqual({
+      skillsPath: '.aider-desk/skills/',
+    });
+    expect(getMapping('aider-desk', 'user')).toEqual({
+      skillsPath: '.aider-desk/skills/',
+    });
+
+    for (const client of ['warp', 'aider-desk'] as const) {
+      const host = findHostById(client);
+      expect(host?.project.agentFile).toBeUndefined();
+      expect(host?.project.commandsPath).toBeUndefined();
+      expect(host?.project.agentsPath).toBeUndefined();
+      expect(host?.project.hooksPath).toBeUndefined();
+      expect(host?.project.githubPath).toBeUndefined();
+      expect(host?.mcp).toBeUndefined();
+    }
+    expect(mcpClientIdsForScope('project')).toEqual([
       'claude',
       'copilot',
       'codex',
-      'pi',
-      'omp',
-      'cursor',
-      'opencode',
-      'gemini',
-      'factory',
-      'ampcode',
       'vscode',
-      'openclaw',
-      'windsurf',
-      'cline',
-      'continue',
-      'roo',
-      'kilo',
-      'trae',
-      'augment',
-      'zencoder',
-      'junie',
-      'openhands',
-      'kiro',
-      'replit',
-      'kimi',
       'universal',
-    ];
-    for (const client of expectedClients) {
-      expect(CLIENT_MAPPINGS).toHaveProperty(client);
+    ]);
+    expect(mcpClientIdsForScope('user')).toEqual([
+      'claude',
+      'copilot',
+      'codex',
+      'vscode',
+      'universal',
+    ]);
+  });
+
+  it('rejects user scope for project-only clients', () => {
+    expect(clientIdsForScope('project')).toContain('eve');
+    expect(clientIdsForScope('project')).toContain('promptscript');
+    expect(clientIdsForScope('user')).not.toContain('eve');
+    expect(clientIdsForScope('user')).not.toContain('promptscript');
+
+    for (const client of ['eve', 'promptscript'] as const) {
+      expect(findHostById(client)?.user).toBeUndefined();
+      expect(USER_CLIENT_MAPPINGS[client]).toBeUndefined();
+      expect(() => getMapping(client, 'user')).toThrow(
+        `Client '${client}' does not support user scope`,
+      );
     }
   });
 
-  test('claude uses provider-specific .claude/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.claude.skillsPath).toBe('.claude/skills/');
-    expect(CLIENT_MAPPINGS.claude.commandsPath).toBe('.claude/commands/');
-    expect(CLIENT_MAPPINGS.claude.hooksPath).toBe('.claude/hooks/');
-    expect(CLIENT_MAPPINGS.claude.agentsPath).toBe('.claude/agents/');
-  });
-
-  test('cursor uses provider-specific .cursor/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.cursor.skillsPath).toBe('.cursor/skills/');
-  });
-
-  test('factory uses provider-specific .factory/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.factory.skillsPath).toBe('.factory/skills/');
-    expect(CLIENT_MAPPINGS.factory.hooksPath).toBe('.factory/hooks/');
-  });
-
-  test('copilot uses provider-specific .github/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.copilot.skillsPath).toBe('.github/skills/');
-  });
-
-  test('codex uses provider-specific .codex/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.codex.skillsPath).toBe('.codex/skills/');
-  });
-
-  test('pi and OMP use native project skill paths', () => {
-    expect(CLIENT_MAPPINGS.pi.skillsPath).toBe('.pi/skills/');
-    expect(CLIENT_MAPPINGS.omp.skillsPath).toBe('.omp/skills/');
-    expect(CLIENT_MAPPINGS.omp.hooksPath).toBe('.omp/hooks/');
-  });
-
-  test('opencode uses provider-specific .opencode/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.opencode.skillsPath).toBe('.opencode/skills/');
-  });
-
-  test('gemini uses provider-specific .gemini/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.gemini.skillsPath).toBe('.gemini/skills/');
-  });
-
-  test('ampcode uses provider-specific .ampcode/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.ampcode.skillsPath).toBe('.ampcode/skills/');
-  });
-
-  test('vscode defaults to .agents/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.vscode.skillsPath).toBe('.agents/skills/');
-    expect(CLIENT_MAPPINGS.vscode.githubPath).toBeUndefined();
-  });
-
-  test('openclaw uses root-level skills/ path (no dot prefix)', () => {
-    expect(CLIENT_MAPPINGS.openclaw.skillsPath).toBe('skills/');
-  });
-
-  test('windsurf uses provider-specific .windsurf/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.windsurf.skillsPath).toBe('.windsurf/skills/');
-  });
-
-  test('cline uses provider-specific .cline/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.cline.skillsPath).toBe('.cline/skills/');
-  });
-
-  test('continue uses provider-specific .continue/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.continue.skillsPath).toBe('.continue/skills/');
-  });
-
-  test('roo uses provider-specific .roo/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.roo.skillsPath).toBe('.roo/skills/');
-  });
-
-  test('kilo uses provider-specific .kilocode/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.kilo.skillsPath).toBe('.kilocode/skills/');
-  });
-
-  test('replit uses provider-specific .replit/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.replit.skillsPath).toBe('.replit/skills/');
-  });
-
-  test('kimi uses provider-specific .kimi/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.kimi.skillsPath).toBe('.kimi/skills/');
-  });
-
-  test('universal uses .agents/skills/ path', () => {
-    expect(CLIENT_MAPPINGS.universal.skillsPath).toBe('.agents/skills/');
-  });
-
-  test('project paths are relative (no leading /)', () => {
-    for (const [, mapping] of Object.entries(CLIENT_MAPPINGS)) {
+  it('keeps every mapping relative to its selected root', () => {
+    for (const mapping of [
+      ...Object.values(CLIENT_MAPPINGS),
+      ...Object.values(USER_CLIENT_MAPPINGS),
+    ]) {
       expect(mapping.skillsPath).not.toMatch(/^\//);
       if (mapping.commandsPath) expect(mapping.commandsPath).not.toMatch(/^\//);
+      if (mapping.agentFile) expect(mapping.agentFile).not.toMatch(/^\//);
     }
   });
 });
 
-describe('USER_CLIENT_MAPPINGS', () => {
-  test('defines user-level paths for all clients in CLIENT_MAPPINGS', () => {
-    for (const client of Object.keys(CLIENT_MAPPINGS)) {
-      expect(USER_CLIENT_MAPPINGS).toHaveProperty(client);
-    }
+describe('mapping helpers', () => {
+  it('routes VS Code through Copilot artifacts and legacy skill destination', () => {
+    const project = resolveClientMappings(['copilot', 'vscode'], CLIENT_MAPPINGS);
+    expect(project.vscode.skillsPath).toBe('.github/skills/');
+    expect(project.vscode.githubPath).toBe('.github/');
+
+    const user = resolveClientMappings(['copilot', 'vscode'], USER_CLIENT_MAPPINGS);
+    expect(user.vscode?.skillsPath).toBe('.copilot/skills/');
+    expect(user.vscode?.githubPath).toBe('.copilot/');
   });
 
-  test('claude uses ~/.claude/ paths', () => {
-    expect(USER_CLIENT_MAPPINGS.claude.skillsPath).toBe('.claude/skills/');
-    expect(USER_CLIENT_MAPPINGS.claude.commandsPath).toBe('.claude/commands/');
-    expect(USER_CLIENT_MAPPINGS.claude.hooksPath).toBe('.claude/hooks/');
-    expect(USER_CLIENT_MAPPINGS.claude.agentsPath).toBe('.claude/agents/');
+  it('leaves mappings unchanged when VS Code and Copilot are not both selected', () => {
+    expect(resolveClientMappings(['vscode'], CLIENT_MAPPINGS)).toBe(CLIENT_MAPPINGS);
+    expect(resolveClientMappings(['copilot'], CLIENT_MAPPINGS)).toBe(CLIENT_MAPPINGS);
   });
 
-  test('cursor uses provider-specific ~/.cursor/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.cursor.skillsPath).toBe('.cursor/skills/');
-  });
-
-  test('factory uses provider-specific ~/.factory/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.factory.skillsPath).toBe('.factory/skills/');
-    expect(USER_CLIENT_MAPPINGS.factory.hooksPath).toBe('.factory/hooks/');
-  });
-
-  test('copilot uses provider-specific ~/.copilot/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.copilot.skillsPath).toBe('.copilot/skills/');
-  });
-
-  test('codex uses provider-specific ~/.codex/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.codex.skillsPath).toBe('.codex/skills/');
-  });
-
-  test('pi and OMP use native default user skill paths', () => {
-    expect(USER_CLIENT_MAPPINGS.pi.skillsPath).toBe('.pi/agent/skills/');
-    expect(USER_CLIENT_MAPPINGS.omp.skillsPath).toBe('.omp/agent/skills/');
-    expect(USER_CLIENT_MAPPINGS.omp.hooksPath).toBe('.omp/agent/hooks/');
-  });
-
-  test('opencode uses provider-specific ~/.opencode/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.opencode.skillsPath).toBe('.opencode/skills/');
-  });
-
-  test('gemini uses provider-specific ~/.gemini/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.gemini.skillsPath).toBe('.gemini/skills/');
-  });
-
-  test('ampcode uses provider-specific ~/.ampcode/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.ampcode.skillsPath).toBe('.ampcode/skills/');
-  });
-
-  test('vscode defaults to .agents/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.vscode.skillsPath).toBe('.agents/skills/');
-    expect(USER_CLIENT_MAPPINGS.vscode.githubPath).toBeUndefined();
-  });
-
-  test('openclaw uses root-level skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.openclaw.skillsPath).toBe('skills/');
-  });
-
-  test('windsurf uses ~/.codeium/windsurf/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.windsurf.skillsPath).toBe('.codeium/windsurf/skills/');
-  });
-
-  test('cline uses ~/.cline/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.cline.skillsPath).toBe('.cline/skills/');
-  });
-
-  test('replit uses provider-specific ~/.replit/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.replit.skillsPath).toBe('.replit/skills/');
-  });
-
-  test('kimi uses provider-specific ~/.kimi/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.kimi.skillsPath).toBe('.kimi/skills/');
-  });
-
-  test('universal uses ~/.agents/skills/ path', () => {
-    expect(USER_CLIENT_MAPPINGS.universal.skillsPath).toBe('.agents/skills/');
-  });
-
-  test('user paths are relative to home directory (no leading /)', () => {
-    for (const [, mapping] of Object.entries(USER_CLIENT_MAPPINGS)) {
-      expect(mapping.skillsPath).not.toMatch(/^\//);
-      if (mapping.commandsPath) expect(mapping.commandsPath).not.toMatch(/^\//);
-    }
-  });
-});
-
-describe('resolveClientMappings', () => {
-  describe('project-level (CLIENT_MAPPINGS)', () => {
-    it('should default vscode to .agents/skills/ when no copilot', () => {
-      const resolved = resolveClientMappings(['vscode'], CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.agents/skills/');
-      expect(resolved.vscode.githubPath).toBeUndefined();
-    });
-
-    it('should resolve vscode to .github/skills/ when copilot is present', () => {
-      const resolved = resolveClientMappings(['copilot', 'vscode'], CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.github/skills/');
-      expect(resolved.vscode.githubPath).toBe('.github/');
-    });
-
-    it('should resolve vscode to .github/skills/ when both copilot and universal are present', () => {
-      const resolved = resolveClientMappings(['universal', 'copilot', 'vscode'], CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.github/skills/');
-      expect(resolved.vscode.githubPath).toBe('.github/');
-    });
-
-    it('should resolve vscode to .agents/skills/ when universal is present but not copilot', () => {
-      const resolved = resolveClientMappings(['universal', 'vscode'], CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.agents/skills/');
-      expect(resolved.vscode.githubPath).toBeUndefined();
-    });
-
-    it('should not modify non-vscode client mappings', () => {
-      const resolved = resolveClientMappings(['copilot', 'vscode', 'claude'], CLIENT_MAPPINGS);
-      expect(resolved.copilot).toEqual(CLIENT_MAPPINGS.copilot);
-      expect(resolved.claude).toEqual(CLIENT_MAPPINGS.claude);
-    });
-
-    it('should return baseMappings unchanged when vscode is not in clients', () => {
-      const resolved = resolveClientMappings(['copilot', 'claude'], CLIENT_MAPPINGS);
-      expect(resolved).toBe(CLIENT_MAPPINGS); // same reference
-    });
-  });
-
-  describe('user-level (USER_CLIENT_MAPPINGS)', () => {
-    it('should default vscode to .agents/skills/ when no copilot', () => {
-      const resolved = resolveClientMappings(['vscode'], USER_CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.agents/skills/');
-    });
-
-    it('should resolve vscode to .copilot/skills/ when copilot is present', () => {
-      const resolved = resolveClientMappings(['copilot', 'vscode'], USER_CLIENT_MAPPINGS);
-      expect(resolved.vscode.skillsPath).toBe('.copilot/skills/');
-      expect(resolved.vscode.githubPath).toBe('.copilot/');
-    });
-  });
-});
-
-describe('getDisplayName', () => {
-  it('should return copilot for vscode', () => {
+  it('deduplicates shared project paths and groups VS Code display output with Copilot', () => {
+    expect(uniqueProjectSkillsPaths()).toContain('.agents/skills/');
+    expect(uniqueProjectSkillsPaths().length).toBeLessThan(AGENT_HOSTS.length);
     expect(getDisplayName('vscode')).toBe('copilot');
-  });
-
-  it('should return the same name for non-aliased clients', () => {
-    expect(getDisplayName('claude')).toBe('claude');
-    expect(getDisplayName('copilot')).toBe('copilot');
-    expect(getDisplayName('codex')).toBe('codex');
-  });
-});
-
-describe('AGENT_HOSTS (single source of truth)', () => {
-  it('covers every ClientType exactly once', () => {
-    const ids = new Set(AGENT_HOSTS.map((h) => h.id));
-    expect(ids.size).toBe(AGENT_HOSTS.length); // no duplicates
-    const enumValues = new Set(ClientTypeSchema.options);
-    expect(ids.size).toBe(enumValues.size);
-    for (const value of enumValues) {
-      expect(ids.has(value)).toBe(true);
-    }
-  });
-
-  it('findHostById returns the entry for known clients and undefined otherwise', () => {
-    expect(findHostById('claude')?.id).toBe('claude');
-    // Casting to bypass the strict ClientType for the negative case.
-    expect(findHostById('nonexistent' as 'claude')).toBeUndefined();
-  });
-
-  it('getMapping yields identical content to the derived legacy records for every (client, scope) pair', () => {
-    for (const id of ClientTypeSchema.options) {
-      expect(getMapping(id, 'project')).toEqual(CLIENT_MAPPINGS[id]);
-      expect(getMapping(id, 'user')).toEqual(USER_CLIENT_MAPPINGS[id]);
-    }
-  });
-
-  it('preserves intentional windsurf project/user delta', () => {
-    expect(getMapping('windsurf', 'project').skillsPath).toBe('.windsurf/skills/');
-    expect(getMapping('windsurf', 'user').skillsPath).toBe('.codeium/windsurf/skills/');
-  });
-
-  it('preserves intentional copilot project/user delta', () => {
-    expect(getMapping('copilot', 'project').githubPath).toBe('.github/');
-    expect(getMapping('copilot', 'user').githubPath).toBe('.copilot/');
-  });
-
-  it('uniqueProjectSkillsPaths deduplicates shared paths (universal == vscode)', () => {
-    const paths = uniqueProjectSkillsPaths();
-    // universal and vscode both default to .agents/skills/, so the set is
-    // smaller than the host count by at least one.
-    expect(paths.length).toBeLessThan(AGENT_HOSTS.length);
-    expect(paths).toContain('.agents/skills/');
+    expect(getDisplayName('claude-code')).toBe('claude');
+    expect(getDisplayName('warp')).toBe('warp');
   });
 });

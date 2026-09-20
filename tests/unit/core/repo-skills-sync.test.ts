@@ -53,6 +53,25 @@ describe('updateAgentFiles with skills', () => {
     expect(agentsContent).not.toContain('<available_skills>');
   });
 
+  it('canonicalizes client aliases before skill discovery and rule injection', async () => {
+    makeSkill(join(repoDir, '.claude', 'skills'), 'aliased-skill', 'Alias proof');
+    writeFileSync(
+      join(workspaceDir, '.allagents', 'workspace.yaml'),
+      'repositories:\n  - path: ./my-repo\n    skills: true\nplugins: []\nclients:\n  - claude-code\n',
+    );
+
+    await updateAgentFiles(workspaceDir);
+
+    const indexContent = readFileSync(
+      join(workspaceDir, '.allagents', 'skills-index', 'my-repo.md'),
+      'utf-8',
+    );
+    expect(indexContent).toContain('<name>aliased-skill</name>');
+    expect(readFileSync(join(workspaceDir, 'CLAUDE.md'), 'utf-8')).toContain(
+      '.allagents/skills-index/my-repo.md',
+    );
+  });
+
   it('uses custom skill paths from workspace.yaml', async () => {
     makeSkill(join(repoDir, 'plugins', 'my-plugin', 'skills'), 'custom', 'Custom skill');
 

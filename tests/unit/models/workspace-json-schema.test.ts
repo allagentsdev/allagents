@@ -37,7 +37,7 @@ describe('published workspace JSON Schemas', () => {
 profiles:
   review:
     clients:
-      - name: claude
+      - name: claude-code
         launcher: claude-review
         settings:
           model: sonnet
@@ -93,6 +93,31 @@ profiles:
     clients:
       - name: claude
 `);
+    const projectWithAliasesAndProjectOnlyClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - claude-code
+  - eve
+`);
+    const userWithAliases = parsedYaml(`
+clients:
+  - claude-code
+  - warp
+`);
+    const userWithProjectOnlyClient = parsedYaml(`
+clients:
+  - eve
+`);
+    const userWithProjectOnlyNestedSelectors = parsedYaml(`
+plugins:
+  - source: owner/plugin
+    clients: [eve]
+mcpServers:
+  example:
+    command: example-mcp
+    clients: [promptscript]
+`);
 
     expect(validateUser(userWorkspace)).toBe(true);
     expect(UserWorkspaceConfigSchema.safeParse(userWorkspace).success).toBe(
@@ -118,6 +143,25 @@ profiles:
     expect(validateUser(userWithInvalidProfileName)).toBe(false);
     expect(
       UserWorkspaceConfigSchema.safeParse(userWithInvalidProfileName).success,
+    ).toBe(false);
+    expect(validateProject(projectWithAliasesAndProjectOnlyClient)).toBe(true);
+    expect(
+      ProjectWorkspaceConfigSchema.safeParse(
+        projectWithAliasesAndProjectOnlyClient,
+      ).success,
+    ).toBe(true);
+    expect(validateUser(userWithAliases)).toBe(true);
+    expect(UserWorkspaceConfigSchema.safeParse(userWithAliases).success).toBe(
+      true,
+    );
+    expect(validateUser(userWithProjectOnlyClient)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithProjectOnlyClient).success,
+    ).toBe(false);
+    expect(validateUser(userWithProjectOnlyNestedSelectors)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithProjectOnlyNestedSelectors)
+        .success,
     ).toBe(false);
   });
 });

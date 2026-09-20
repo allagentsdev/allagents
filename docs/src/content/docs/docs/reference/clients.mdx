@@ -3,27 +3,67 @@ title: Supported Clients
 description: AI coding assistant clients supported by AllAgents.
 ---
 
-AllAgents supports 25+ AI coding clients, including **Claude Code**,
-**GitHub Copilot**, **Cursor**, **Codex**, **OpenCode**, and 20+ more. The
-support matrix is organized into universal clients (sharing `.agents/skills/`)
-and provider-specific clients.
+import {
+  AGENT_HOSTS,
+  CLIENT_ALIASES,
+} from '../../../../../../src/models/client-mapping.ts';
 
-## Universal Clients
+export const namedClientCount = AGENT_HOSTS.filter(
+  (host) => host.id !== 'universal',
+).length;
 
-These clients primarily share the canonical `.agents/skills/` directory. The
-Hooks column records artifacts AllAgents materializes; it is not a complete
-inventory of each runtime's native extension APIs.
+AllAgents supports **{namedClientCount} canonical client destinations** plus the
+shared `universal` destination. It also accepts the following compatibility
+aliases without creating duplicate destinations:
 
-| Client | Skills | Agent File | Hooks | Commands | GitHub Overrides |
-|--------|--------|------------|-------|----------|------------------|
-| Copilot | `.github/skills/` | `AGENTS.md` | `.github/hooks/` | No | `.github/` |
-| Codex | `.codex/skills/` | `AGENTS.md` | `.codex/hooks.json` (generated) | No | No |
-| OpenCode | `.agents/skills/` | `AGENTS.md` | No | `.opencode/commands/` | No |
-| Gemini | `.agents/skills/` | `GEMINI.md` | No | No | No |
-| Amp Code | `.agents/skills/` | `AGENTS.md` | No | No | No |
-| VSCode | `.agents/skills/` | `AGENTS.md` | No | No | `.github/` |
-| Replit | `.agents/skills/` | `AGENTS.md` | No | No | No |
-| Kimi | `.agents/skills/` | `AGENTS.md` | No | No | No |
+<ul>
+  {Object.entries(CLIENT_ALIASES).map(([alias, canonical]) => (
+    <li><code>{alias}</code> → <code>{canonical}</code></li>
+  ))}
+</ul>
+
+Destination-ID parity does not rewrite established AllAgents paths. Aliases use
+their canonical AllAgents product's existing destinations; only newly added
+canonical clients use the pinned `skills@1.7.0` paths.
+
+The registry separates skill destinations from each richer file or MCP
+capability it owns. A path or capability shown as “No” is intentionally
+unsupported rather than inferred from another client.
+
+<table>
+  <thead>
+    <tr>
+      <th>Client ID</th>
+      <th>Product</th>
+      <th>Project skills</th>
+      <th>User skills</th>
+      <th>Instructions</th>
+      <th>Commands</th>
+      <th>Agents</th>
+      <th>Hooks</th>
+      <th>GitHub overlays</th>
+      <th>MCP</th>
+    </tr>
+  </thead>
+  <tbody>
+    {AGENT_HOSTS.map((host) => (
+      <tr>
+        <td><code>{host.id}</code></td>
+        <td>{host.name}</td>
+        <td><code>{host.project.skillsPath}</code></td>
+        <td>{host.user ? <code>{host.user.skillsPath}</code> : 'No'}</td>
+        <td>{host.project.agentFile ? <code>{host.project.agentFile}</code> : 'No'}</td>
+        <td>{host.project.commandsPath ? <code>{host.project.commandsPath}</code> : 'No'}</td>
+        <td>{host.project.agentsPath ? <code>{host.project.agentsPath}</code> : 'No'}</td>
+        <td>{host.project.hooksPath ? <code>{host.project.hooksPath}</code> : 'No'}</td>
+        <td>{host.project.githubPath ? <code>{host.project.githubPath}</code> : 'No'}</td>
+        <td>{host.mcp ? Object.keys(host.mcp).join(' + ') : 'No'}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+
+## Rich Client Integrations
 
 ### OpenCode
 
@@ -139,31 +179,6 @@ Recursive cleanup is limited to a client root AllAgents created for this
 profile; removing that profile intentionally removes its isolated runtime
 state. Ambient `~/.codex`, project files, and operating-system keyrings remain
 outside the cleanup boundary.
-
-## Provider-Specific Clients
-
-These clients use their own skills directory. As above, Hooks lists
-AllAgents-managed destinations rather than every native extension mechanism:
-
-| Client | Skills | Agent File | Hooks | Commands |
-|--------|--------|------------|-------|----------|
-| Claude | `.claude/skills/` | `CLAUDE.md` | `.claude/hooks/` | `.claude/commands/` |
-| Pi | `.pi/skills/` | `AGENTS.md` | No—use Pi extensions | No |
-| OMP | `.omp/skills/` | `AGENTS.md` | `.omp/hooks/` | No |
-| Cursor | `.cursor/skills/` | `AGENTS.md` | No | No |
-| Factory | `.factory/skills/` | `AGENTS.md` | `.factory/hooks/` | No |
-| OpenClaw | `skills/` | `AGENTS.md` | No | No |
-| Windsurf | `.windsurf/skills/` | `AGENTS.md` | No | No |
-| Cline | `.cline/skills/` | `AGENTS.md` | No | No |
-| Continue | `.continue/skills/` | `AGENTS.md` | No | No |
-| Roo | `.roo/skills/` | `AGENTS.md` | No | No |
-| Kilo | `.kilocode/skills/` | `AGENTS.md` | No | No |
-| Trae | `.trae/skills/` | `AGENTS.md` | No | No |
-| Augment | `.augment/skills/` | `AGENTS.md` | No | No |
-| Zencoder | `.zencoder/skills/` | `AGENTS.md` | No | No |
-| Junie | `.junie/skills/` | `AGENTS.md` | No | No |
-| OpenHands | `.openhands/skills/` | `AGENTS.md` | No | No |
-| Kiro | `.kiro/skills/` | `AGENTS.md` | No | No |
 
 :::note
 Skills are the cross-client way to share reusable prompts. GitHub overrides (`.github/prompts/`, `.github/agents/`, `.github/hooks/`, `copilot-instructions.md`) are copied to the workspace's `.github/` folder for Copilot/VSCode; package-only `.github/plugin/` metadata is omitted. Root `agents/` and `hooks/` also map to `.github/agents/` and `.github/hooks/` for Copilot. At project scope, plugin hook declarations from `hooks.json` or `hooks/hooks.json` are combined in `.github/hooks/allagents.json`. This translation does not require marketplace registration or `plugin.json`; a missing or disabled declaration adds no managed entries. AllAgents warns and omits a declaration that cannot be read or parsed, lacks the version-1 `hooks` object envelope, or—unless disabled—has a non-array event value. Skipping a declaration does not itself suppress other eligible plugin artifacts or valid declarations from other plugins. At user scope, root `hooks/` maps to `~/.copilot/hooks/`, while repository `.github/hooks/` remains project-scoped.

@@ -7,8 +7,8 @@ import {
 import {
   CLIENT_MAPPINGS,
   USER_CLIENT_MAPPINGS,
+  clientIdsForScope,
 } from '../../../src/models/client-mapping.js';
-import { ClientTypeSchema } from '../../../src/models/workspace-config.js';
 
 describe('resolveClientContext', () => {
   const homeDir = '/users/tester';
@@ -210,29 +210,40 @@ describe('resolveClientContext', () => {
     });
   });
 
-  it('preserves every existing client mapping and root', () => {
-    const existingClients = ClientTypeSchema.options.filter(
+  it('preserves every ordinary client mapping and root', () => {
+    const projectClients = clientIdsForScope('project').filter(
       (client) => client !== 'pi' && client !== 'omp',
     );
-    const project = resolveClientContexts(existingClients, 'project', {
+    const userClients = clientIdsForScope('user').filter(
+      (client) => client !== 'pi' && client !== 'omp',
+    );
+    const project = resolveClientContexts(projectClients, 'project', {
       homeDir,
       cwd: repoRoot,
       env: {},
     });
-    const user = resolveClientContexts(existingClients, 'user', {
+    const user = resolveClientContexts(userClients, 'user', {
       homeDir,
       cwd,
       env: {},
     });
 
-    for (const client of existingClients) {
+    for (const client of projectClients) {
       expect(project.get(client)?.writeRoot).toBe(resolve(repoRoot));
       expect(project.get(client)?.mapping).toBe(CLIENT_MAPPINGS[client]);
+    }
+    for (const client of userClients) {
       expect(user.get(client)?.writeRoot).toBe(resolve(homeDir));
       expect(user.get(client)?.mapping).toBe(USER_CLIENT_MAPPINGS[client]);
       expect(user.get(client)?.skillDiscoveryRoots).toEqual([
-        resolve(homeDir, USER_CLIENT_MAPPINGS[client].skillsPath),
+        resolve(homeDir, USER_CLIENT_MAPPINGS[client]?.skillsPath ?? ''),
       ]);
     }
+  });
+
+  it('rejects a project-only client before resolving a user destination', () => {
+    expect(() =>
+      resolveClientContext('eve', 'user', { homeDir, cwd, env: {} }),
+    ).toThrow("Client 'eve' does not support user scope");
   });
 });

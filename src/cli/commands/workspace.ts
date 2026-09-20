@@ -36,9 +36,11 @@ import {
 import { runWorkspaceSetup } from '../../core/workspace-setup.js';
 import { initWorkspace } from '../../core/workspace.js';
 import {
+  CLIENT_INPUT_TYPES,
   type ClientEntry,
   ClientEntrySchema,
   ClientTypeSchema,
+  deduplicateClientEntries,
   InstallModeSchema,
 } from '../../models/workspace-config.js';
 import { formatPluginSource } from '../../utils/plugin-path.js';
@@ -90,14 +92,14 @@ export function parseClientEntries(input: string): ClientEntry[] {
       const colonIdx = part.indexOf(':');
       if (colonIdx === -1) {
         throw new Error(
-          `Invalid client(s): ${part}\n  Valid clients: ${ClientTypeSchema.options.join(', ')}`,
+          `Invalid client(s): ${part}\n  Valid clients: ${CLIENT_INPUT_TYPES.join(', ')}`,
         );
       }
       const name = part.slice(0, colonIdx);
       const mode = part.slice(colonIdx + 1);
-      if (!(ClientTypeSchema.options as readonly string[]).includes(name)) {
+      if (!ClientTypeSchema.safeParse(name).success) {
         throw new Error(
-          `Invalid client(s): ${name}\n  Valid clients: ${ClientTypeSchema.options.join(', ')}`,
+          `Invalid client(s): ${name}\n  Valid clients: ${CLIENT_INPUT_TYPES.join(', ')}`,
         );
       }
       throw new Error(
@@ -107,7 +109,7 @@ export function parseClientEntries(input: string): ClientEntry[] {
     entries.push(result.data);
   }
 
-  return entries;
+  return deduplicateClientEntries(entries);
 }
 
 const initCmd = command({

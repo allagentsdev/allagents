@@ -1,4 +1,5 @@
 import type { SyncState } from '../models/sync-state.js';
+import { mcpClientIdsForScope } from '../models/client-mapping.js';
 import type {
   ClientType,
   WorkspaceConfig,
@@ -18,13 +19,9 @@ import {
   syncVscodeMcpConfig,
 } from './vscode-mcp.js';
 
-const USER_MCP_CLIENTS: Partial<Record<ClientType, true>> = {
-  claude: true,
-  codex: true,
-  vscode: true,
-  copilot: true,
-  universal: true,
-};
+const USER_MCP_CLIENTS: ReadonlySet<ClientType> = new Set(
+  mcpClientIdsForScope('user'),
+);
 
 export interface SyncUserMcpAdaptersOptions {
   validPlugins: ValidatedPlugin[];
@@ -124,7 +121,7 @@ export async function syncUserMcpAdapters({
   const allServers = collectMcpServers(validPlugins, config.mcpServers).servers;
   if (allServers.size > 0) {
     for (const client of syncClients) {
-      if (!USER_MCP_CLIENTS[client]) {
+      if (!USER_MCP_CLIENTS.has(client)) {
         warnings.push(
           `MCP servers not synced for ${client} (not supported at user scope)`,
         );

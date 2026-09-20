@@ -10,6 +10,8 @@ import {
   isUserConfigPath,
 } from '../core/user-workspace.js';
 import {
+  CLIENT_INPUT_TYPES,
+  CLIENT_TYPES,
   ClientTypeSchema,
   getClientTypes,
   getPluginSource,
@@ -17,6 +19,7 @@ import {
   type ClientType,
   type PluginEntry,
 } from '../models/workspace-config.js';
+import { supportsClientScope } from '../models/client-mapping.js';
 
 export type InstallScope = 'project' | 'user';
 export type InstallTargetDisposition = 'initialize' | 'inherit' | 'override';
@@ -163,13 +166,13 @@ export function canonicalizeInstallClients(
     const parsed = ClientTypeSchema.safeParse(client);
     if (!parsed.success) {
       throw new InstallTargetValidationError(
-        `Invalid client '${client}'. Expected one of: ${ClientTypeSchema.options.join(', ')}.`,
+        `Invalid client '${client}'. Expected one of: ${CLIENT_INPUT_TYPES.join(', ')}.`,
       );
     }
     selected.add(parsed.data);
   }
 
-  return ClientTypeSchema.options.filter((client) => selected.has(client));
+  return CLIENT_TYPES.filter((client) => selected.has(client));
 }
 
 function canonicalizeEntries(
@@ -325,6 +328,17 @@ export async function resolveInstallTarget(
       }
     } else {
       clients = initialValues;
+    }
+  }
+
+  if (scope === 'user') {
+    const unsupported = clients.filter(
+      (client) => !supportsClientScope(client, 'user'),
+    );
+    if (unsupported.length > 0) {
+      throw new InstallTargetValidationError(
+        `User scope is unavailable for: ${unsupported.join(', ')}`,
+      );
     }
   }
 

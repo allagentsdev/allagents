@@ -1,45 +1,57 @@
-import { ClientTypeSchema, type ClientType } from './workspace-config.js';
-
 /**
- * Client-specific path and file configuration
+ * Filesystem destinations supported by one client at one scope.
+ *
+ * A skill destination is the only required capability. Every other artifact
+ * destination is independent so skill-only clients never imply instructions,
+ * commands, agents, hooks, or GitHub overlays.
  */
 export interface ClientMapping {
-  /** Path for commands (Claude, OpenCode) */
-  commandsPath?: string;
   skillsPath: string;
+  commandsPath?: string;
   agentsPath?: string;
-  agentFile: string;
+  agentFile?: string;
   agentFileFallback?: string;
   hooksPath?: string;
-  /** Path for GitHub-specific content (prompts, copilot-instructions.md) */
   githubPath?: string;
 }
 
-/**
- * Single source of truth for every supported AI client/agent host.
- *
- * Each entry pairs a project-scope mapping (paths relative to the project root)
- * with a user-scope mapping (paths relative to ~). Most hosts use identical
- * paths in both scopes; a few — notably `copilot`, `windsurf`, and `vscode` —
- * intentionally diverge. Keeping both maps on one entry surfaces those
- * differences at a glance instead of forcing reviewers to diff two ~130-line
- * records.
- *
- * The legacy `CLIENT_MAPPINGS` and `USER_CLIENT_MAPPINGS` records below are
- * derived from this array so existing call sites keep working while
- * `getMapping(id, scope)` becomes the preferred accessor going forward.
- *
- * Pattern is modelled after `cli/cli`'s `internal/skills/registry/registry.go`.
- */
-export interface AgentHost {
-  id: ClientType;
-  /** Display name used in help / sync output (e.g. "Windsurf"). */
-  name: string;
-  project: ClientMapping;
-  user: ClientMapping;
+export interface ScopeCapability {
+  project?: true;
+  user?: true;
 }
 
-export const AGENT_HOSTS: readonly AgentHost[] = [
+/** A canonical product identity and its independently evidenced capabilities. */
+export interface AgentHost {
+  id: string;
+  name: string;
+  project: ClientMapping;
+  user?: ClientMapping;
+  mcp?: ScopeCapability;
+}
+
+function skillsOnlyHost<const Id extends string>(
+  id: Id,
+  name: string,
+  projectSkillsPath: string,
+  userSkillsPath?: string,
+): AgentHost & { readonly id: Id } {
+  return {
+    id,
+    name,
+    project: { skillsPath: projectSkillsPath },
+    ...(userSkillsPath ? { user: { skillsPath: userSkillsPath } } : {}),
+  };
+}
+
+/**
+ * Canonical client capability registry.
+ *
+ * Skill destinations match the declared registry in `skills@1.7.0`. Existing
+ * AllAgents clients retain their richer artifact destinations and runtime
+ * capabilities. `omp` is an AllAgents-only product identity and `vscode` is an
+ * explicit target with Copilot-aware routing; neither is a Skills alias.
+ */
+const AGENT_HOST_DEFINITIONS = [
   {
     id: 'claude',
     name: 'Claude Code',
@@ -59,6 +71,7 @@ export const AGENT_HOSTS: readonly AgentHost[] = [
       agentFileFallback: 'AGENTS.md',
       hooksPath: '.claude/hooks/',
     },
+    mcp: { project: true, user: true },
   },
   {
     id: 'copilot',
@@ -71,20 +84,20 @@ export const AGENT_HOSTS: readonly AgentHost[] = [
       githubPath: '.github/',
     },
     user: {
-      // User-scope Copilot stores under `.copilot/` because `.github/` is
-      // owned by individual repositories.
       skillsPath: '.copilot/skills/',
       agentsPath: '.copilot/agents/',
       hooksPath: '.copilot/hooks/',
       agentFile: 'AGENTS.md',
       githubPath: '.copilot/',
     },
+    mcp: { project: true, user: true },
   },
   {
     id: 'codex',
     name: 'Codex',
     project: { skillsPath: '.codex/skills/', agentFile: 'AGENTS.md' },
     user: { skillsPath: '.codex/skills/', agentFile: 'AGENTS.md' },
+    mcp: { project: true, user: true },
   },
   {
     id: 'pi',
@@ -166,10 +179,9 @@ export const AGENT_HOSTS: readonly AgentHost[] = [
   {
     id: 'vscode',
     name: 'VS Code',
-    // Defaults to the canonical universal location at both scopes. The
-    // copilot-sibling override is applied dynamically by resolveClientMappings.
     project: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
     user: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
+    mcp: { project: true, user: true },
   },
   {
     id: 'openclaw',
@@ -181,9 +193,10 @@ export const AGENT_HOSTS: readonly AgentHost[] = [
     id: 'windsurf',
     name: 'Windsurf',
     project: { skillsPath: '.windsurf/skills/', agentFile: 'AGENTS.md' },
-    // Windsurf's user-scope home is the Codeium parent dir, not `.windsurf/`.
-    // Surfaced explicitly so the divergence is obvious in code review.
-    user: { skillsPath: '.codeium/windsurf/skills/', agentFile: 'AGENTS.md' },
+    user: {
+      skillsPath: '.codeium/windsurf/skills/',
+      agentFile: 'AGENTS.md',
+    },
   },
   {
     id: 'cline',
@@ -261,141 +274,242 @@ export const AGENT_HOSTS: readonly AgentHost[] = [
     id: 'universal',
     name: 'Universal',
     project: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
-    user: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
+    user: {
+      skillsPath: '.agents/skills/',
+      agentFile: 'AGENTS.md',
+    },
+    mcp: { project: true, user: true },
   },
-] as const;
 
-/**
- * Look up an agent host by ClientType id.
- *
- * Returns the canonical entry; callers wanting the legacy `CLIENT_MAPPINGS`
- * shape should use `getMapping(id, scope)` instead.
- */
-export function findHostById(id: ClientType): AgentHost | undefined {
-  return AGENT_HOSTS.find((h) => h.id === id);
+  // Skill-destination parity with skills@1.7.0. These entries intentionally do
+  // not claim instruction or non-skill artifact support.
+  skillsOnlyHost('aider-desk', 'AiderDesk', '.aider-desk/skills/', '.aider-desk/skills/'),
+  skillsOnlyHost('antigravity', 'Antigravity', '.agents/skills/', '.gemini/antigravity/skills/'),
+  skillsOnlyHost(
+    'antigravity-cli',
+    'Antigravity CLI',
+    '.agents/skills/',
+    '.gemini/antigravity-cli/skills/',
+  ),
+  skillsOnlyHost('astrbot', 'AstrBot', 'data/skills/', '.astrbot/data/skills/'),
+  skillsOnlyHost('autohand-code', 'Autohand Code CLI', '.autohand/skills/', '.autohand/skills/'),
+  skillsOnlyHost('bob', 'IBM Bob', '.bob/skills/', '.bob/skills/'),
+  skillsOnlyHost(
+    'codearts-agent',
+    'CodeArts Agent',
+    '.codeartsdoer/skills/',
+    '.codeartsdoer/skills/',
+  ),
+  skillsOnlyHost('codebuddy', 'CodeBuddy', '.codebuddy/skills/', '.codebuddy/skills/'),
+  skillsOnlyHost('codemaker', 'Codemaker', '.codemaker/skills/', '.codemaker/skills/'),
+  skillsOnlyHost('codestudio', 'Code Studio', '.codestudio/skills/', '.codestudio/skills/'),
+  skillsOnlyHost('command-code', 'Command Code', '.commandcode/skills/', '.commandcode/skills/'),
+  skillsOnlyHost('cortex', 'Cortex Code', '.cortex/skills/', '.snowflake/cortex/skills/'),
+  skillsOnlyHost('crush', 'Crush', '.crush/skills/', '.config/crush/skills/'),
+  skillsOnlyHost('deepagents', 'Deep Agents', '.agents/skills/', '.deepagents/agent/skills/'),
+  skillsOnlyHost('devin', 'Devin for Terminal', '.devin/skills/', '.config/devin/skills/'),
+  skillsOnlyHost('dexto', 'Dexto', '.agents/skills/', '.agents/skills/'),
+  skillsOnlyHost('eve', 'Eve', 'agent/skills/'),
+  skillsOnlyHost('firebender', 'Firebender', '.agents/skills/', '.firebender/skills/'),
+  skillsOnlyHost('forgecode', 'ForgeCode', '.forge/skills/', '.forge/skills/'),
+  skillsOnlyHost('fx', 'fx', '.fx/skills/', '.fx/skills/'),
+  skillsOnlyHost('goose', 'Goose', '.goose/skills/', '.config/goose/skills/'),
+  skillsOnlyHost('grok', 'Grok Build', '.grok/skills/', '.grok/skills/'),
+  skillsOnlyHost('hermes-agent', 'Hermes Agent', '.hermes/skills/', '.hermes/skills/'),
+  skillsOnlyHost('inference-sh', 'inference.sh', '.inferencesh/skills/', '.inferencesh/skills/'),
+  skillsOnlyHost('iflow-cli', 'iFlow CLI', '.iflow/skills/', '.iflow/skills/'),
+  skillsOnlyHost('jazz', 'Jazz', '.jazz/skills/', '.jazz/skills/'),
+  skillsOnlyHost('kimchi', 'Kimchi', '.kimchi/skills/', '.config/kimchi/harness/skills/'),
+  skillsOnlyHost('kode', 'Kode', '.kode/skills/', '.kode/skills/'),
+  skillsOnlyHost('lingma', 'Lingma', '.lingma/skills/', '.lingma/skills/'),
+  skillsOnlyHost('loaf', 'Loaf', '.agents/skills/', '.agents/skills/'),
+  skillsOnlyHost('mcpjam', 'MCPJam', '.mcpjam/skills/', '.mcpjam/skills/'),
+  skillsOnlyHost('minimax-code', 'MiniMax Code', '.minimax/skills/', '.minimax/skills/'),
+  skillsOnlyHost('mistral-vibe', 'Mistral Vibe', '.vibe/skills/', '.vibe/skills/'),
+  skillsOnlyHost('moxby', 'Moxby', '.moxby/skills/', '.moxby/skills/'),
+  skillsOnlyHost('mux', 'Mux', '.mux/skills/', '.mux/skills/'),
+  skillsOnlyHost('neovate', 'Neovate', '.neovate/skills/', '.neovate/skills/'),
+  skillsOnlyHost('ona', 'Ona', '.ona/skills/', '.ona/skills/'),
+  skillsOnlyHost(
+    'posit-assistant',
+    'Posit Assistant',
+    '.posit/assistant/skills/',
+    '.posit/assistant/skills/',
+  ),
+  skillsOnlyHost('qoder', 'Qoder', '.qoder/skills/', '.qoder/skills/'),
+  skillsOnlyHost('qoder-cn', 'Qoder CN', '.qoder/skills/', '.qoder-cn/skills/'),
+  skillsOnlyHost('qwen-code', 'Qwen Code', '.qwen/skills/', '.qwen/skills/'),
+  skillsOnlyHost('reasonix', 'Reasonix', '.reasonix/skills/', '.reasonix/skills/'),
+  skillsOnlyHost('rovodev', 'Rovo Dev', '.rovodev/skills/', '.rovodev/skills/'),
+  skillsOnlyHost('sarvam-code', 'Sarvam Code', '.agents/skills/', '.agents/skills/'),
+  skillsOnlyHost(
+    'tabnine-cli',
+    'Tabnine CLI',
+    '.tabnine/agent/skills/',
+    '.tabnine/agent/skills/',
+  ),
+  skillsOnlyHost('terramind', 'Terramind', '.terramind/skills/', '.terramind/skills/'),
+  skillsOnlyHost('tinycloud', 'Tinycloud', '.tinycloud/skills/', '.tinycloud/skills/'),
+  skillsOnlyHost('trae-cn', 'Trae CN', '.trae/skills/', '.trae-cn/skills/'),
+  skillsOnlyHost('warp', 'Warp', '.agents/skills/', '.agents/skills/'),
+  skillsOnlyHost('zed', 'Zed', '.agents/skills/', '.agents/skills/'),
+  skillsOnlyHost('zcode', 'ZCode', '.zcode/skills/', '.zcode/skills/'),
+  skillsOnlyHost('zenflow', 'Zenflow', '.zencoder/skills/', '.zencoder/skills/'),
+  skillsOnlyHost('pochi', 'Pochi', '.pochi/skills/', '.pochi/skills/'),
+  skillsOnlyHost('promptscript', 'PromptScript', '.agents/skills/'),
+  skillsOnlyHost('adal', 'AdaL', '.adal/skills/', '.adal/skills/'),
+] as const satisfies readonly AgentHost[];
+
+export type CanonicalClientId = (typeof AGENT_HOST_DEFINITIONS)[number]['id'];
+
+export type CanonicalAgentHost = AgentHost & {
+  readonly id: CanonicalClientId;
+};
+
+export const AGENT_HOSTS: readonly CanonicalAgentHost[] =
+  AGENT_HOST_DEFINITIONS;
+
+export const CLIENT_TYPES = AGENT_HOSTS.map(
+  (host) => host.id,
+) as [CanonicalClientId, ...CanonicalClientId[]];
+
+export const USER_CLIENT_TYPES = AGENT_HOSTS
+  .filter((host) => host.user !== undefined)
+  .map((host) => host.id) as [CanonicalClientId, ...CanonicalClientId[]];
+
+/** Skills-compatible names that map to an existing AllAgents product identity. */
+export const CLIENT_ALIASES = Object.freeze({
+  'claude-code': 'claude',
+  'github-copilot': 'copilot',
+  'gemini-cli': 'gemini',
+  droid: 'factory',
+  amp: 'ampcode',
+  'kiro-cli': 'kiro',
+  'kimi-code-cli': 'kimi',
+} as const satisfies Record<string, CanonicalClientId>);
+
+export type ClientAlias = keyof typeof CLIENT_ALIASES;
+
+const CANONICAL_CLIENT_LOOKUP: Readonly<Record<string, CanonicalClientId>> =
+  Object.freeze(Object.fromEntries(CLIENT_TYPES.map((id) => [id, id])));
+
+export function canonicalizeClientId(
+  id: string,
+): CanonicalClientId | undefined {
+  return CANONICAL_CLIENT_LOOKUP[id] ?? CLIENT_ALIASES[id as ClientAlias];
 }
 
-/**
- * Resolve the `ClientMapping` for a given (client, scope) pair.
- *
- * Falls back to throwing rather than returning undefined: every ClientType
- * value is guaranteed to have a host entry (enforced by
- * `client-mapping.test.ts`). Returning undefined would silently mask the
- * "added to enum but not registered" bug we just removed.
- */
+export function findHostById(id: string): AgentHost | undefined {
+  const canonical = canonicalizeClientId(id);
+  return canonical === undefined
+    ? undefined
+    : AGENT_HOSTS.find((host) => host.id === canonical);
+}
+
 export function getMapping(
-  id: ClientType,
+  id: CanonicalClientId,
   scope: 'project' | 'user',
 ): ClientMapping {
   const host = findHostById(id);
   if (!host) {
     throw new Error(`Unknown agent host: ${id} (no entry in AGENT_HOSTS)`);
   }
-  return scope === 'user' ? host.user : host.project;
+  if (scope === 'project') return host.project;
+  const user = host.user;
+  if (!user) {
+    throw new Error(`Client '${id}' does not support user scope`);
+  }
+  return user;
 }
 
-/**
- * The set of distinct skills paths used at project scope. Useful for the
- * dedup logic that the symlink-mode sync runs against `.agents/skills/`.
- */
+export function supportsClientScope(
+  id: CanonicalClientId,
+  scope: 'project' | 'user',
+): boolean {
+  const host = findHostById(id);
+  return scope === 'project' ? host !== undefined : host?.user !== undefined;
+}
+
+export function clientIdsForScope(
+  scope: 'project' | 'user',
+): CanonicalClientId[] {
+  return [...(scope === 'project' ? CLIENT_TYPES : USER_CLIENT_TYPES)];
+}
+
+export function mcpClientIdsForScope(
+  scope: 'project' | 'user',
+): CanonicalClientId[] {
+  return AGENT_HOSTS.filter((host) => host.mcp?.[scope]).map(
+    (host) => host.id,
+  );
+}
+
 export function uniqueProjectSkillsPaths(): string[] {
-  return Array.from(new Set(AGENT_HOSTS.map((h) => h.project.skillsPath)));
+  return Array.from(new Set(AGENT_HOSTS.map((host) => host.project.skillsPath)));
 }
 
-/**
- * Render an agent help list: `"<id> — <name>"` per host, alphabetised.
- * Used by user-facing help output.
- */
 export function agentHelpList(): string {
   return [...AGENT_HOSTS]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((h) => `${h.id} — ${h.name}`)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((host) => `${host.id} — ${host.name}`)
     .join('\n');
 }
 
-/**
- * Project-level client path mappings for all supported AI clients.
- * Paths are relative to the project root directory.
- *
- * Derived from `AGENT_HOSTS` so it can never drift from the user-scope record.
- * Kept as a separate export for backward compatibility with existing call sites.
- */
-export const CLIENT_MAPPINGS: Record<ClientType, ClientMapping> = Object.freeze(
-  Object.fromEntries(AGENT_HOSTS.map((h) => [h.id, h.project])),
-) as Record<ClientType, ClientMapping>;
+export type ClientMappings = Partial<
+  Record<CanonicalClientId, ClientMapping>
+>;
 
-/**
- * User-level client path mappings for all supported AI clients.
- * Paths are relative to the user's home directory (~/).
- *
- * Derived from `AGENT_HOSTS`. See note on `CLIENT_MAPPINGS`.
- */
-export const USER_CLIENT_MAPPINGS: Record<ClientType, ClientMapping> = Object.freeze(
-  Object.fromEntries(AGENT_HOSTS.map((h) => [h.id, h.user])),
-) as Record<ClientType, ClientMapping>;
+export const CLIENT_MAPPINGS: Record<CanonicalClientId, ClientMapping> =
+  Object.freeze(
+    Object.fromEntries(AGENT_HOSTS.map((host) => [host.id, host.project])),
+  ) as Record<CanonicalClientId, ClientMapping>;
 
-/**
- * The canonical skills path used by the universal client.
- * When universal is in the clients list, skills are copied here first,
- * then symlinked from non-universal client paths.
- */
+export const USER_CLIENT_MAPPINGS: ClientMappings = Object.freeze(
+  Object.fromEntries(
+    AGENT_HOSTS.flatMap((host) =>
+      host.user ? [[host.id, host.user] as const] : [],
+    ),
+  ),
+) as ClientMappings;
+
 export const CANONICAL_SKILLS_PATH = '.agents/skills/';
 
-/**
- * Check if a client is the universal client (uses .agents/skills/).
- * Only the 'universal' client type returns true.
- */
-export function isUniversalClient(client: ClientType): boolean {
+export function isUniversalClient(client: CanonicalClientId): boolean {
   return client === 'universal';
 }
 
-/**
- * Resolve vscode client mapping based on sibling clients.
- * When copilot is present, vscode follows copilot's paths.
- * When copilot is absent, vscode defaults to .agents/ (universal behavior).
- *
- * Returns baseMappings unchanged if vscode is not in the clients list.
- */
 export function resolveClientMappings(
-  clients: ClientType[],
-  baseMappings: Record<ClientType, ClientMapping>,
-): Record<ClientType, ClientMapping> {
-  if (!clients.includes('vscode')) return baseMappings;
-  if (!clients.includes('copilot')) return baseMappings;
-
-  // vscode follows copilot's mapping
+  clients: readonly CanonicalClientId[],
+  baseMappings: Record<CanonicalClientId, ClientMapping>,
+): Record<CanonicalClientId, ClientMapping>;
+export function resolveClientMappings(
+  clients: readonly CanonicalClientId[],
+  baseMappings: ClientMappings,
+): ClientMappings;
+export function resolveClientMappings(
+  clients: readonly CanonicalClientId[],
+  baseMappings: ClientMappings,
+): ClientMappings {
+  if (!clients.includes('vscode') || !clients.includes('copilot')) {
+    return baseMappings;
+  }
+  const copilot = baseMappings.copilot;
+  if (!copilot) return baseMappings;
   return {
     ...baseMappings,
-    vscode: { ...baseMappings.copilot },
+    vscode: { ...copilot },
   };
 }
 
-/**
- * Display name aliases for CLI output.
- * vscode is displayed as copilot for artifact counts since VS Code's AI features
- * are delivered through GitHub Copilot and they share skill paths.
- */
-export const CLIENT_DISPLAY_ALIASES: Partial<Record<ClientType, string>> = {
+/** Display grouping is distinct from accepted input aliases. */
+export const CLIENT_DISPLAY_ALIASES: Partial<
+  Record<CanonicalClientId, CanonicalClientId>
+> = {
   vscode: 'copilot',
 };
 
-/**
- * Get the display name for a client type.
- * Applies CLIENT_DISPLAY_ALIASES so aliased clients (e.g. vscode → copilot)
- * show their canonical display name.
- */
 export function getDisplayName(client: string): string {
-  return CLIENT_DISPLAY_ALIASES[client as ClientType] ?? client;
+  const canonical = canonicalizeClientId(client);
+  if (!canonical) return client;
+  return CLIENT_DISPLAY_ALIASES[canonical] ?? canonical;
 }
-
-// Compile-time sanity: every ClientType value must have exactly one host entry.
-// Runtime coverage is verified by `client-mapping.test.ts`.
-type _HostsCoverEveryClient = Exclude<
-  ClientType,
-  (typeof AGENT_HOSTS)[number]['id']
-> extends never
-  ? true
-  : never;
-const _check: _HostsCoverEveryClient = true;
-void _check;
-void ClientTypeSchema;

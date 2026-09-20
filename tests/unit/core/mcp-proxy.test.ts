@@ -6,7 +6,10 @@ import {
   shouldProxy,
   applyMcpProxy,
 } from '../../../src/core/mcp-proxy.js';
-import type { McpProxyConfig } from '../../../src/models/workspace-config.js';
+import {
+  type McpProxyConfig,
+  WorkspaceConfigSchema,
+} from '../../../src/models/workspace-config.js';
 import packageJson from '../../../package.json';
 
 const packageRef = `allagents@${packageJson.version}`;
@@ -60,6 +63,41 @@ describe('shouldProxy', () => {
       servers: { 'other-api': { proxy: ['codex'] } },
     };
     expect(shouldProxy('my-api', 'codex', config)).toBe(false);
+  });
+
+  test('honors aliases after workspace parsing', () => {
+    const config = WorkspaceConfigSchema.parse({
+      repositories: [],
+      plugins: [],
+      clients: ['copilot', 'claude'],
+      mcpProxy: {
+        clients: [
+          'github-copilot',
+          'copilot',
+          'future-client',
+          'future-client',
+        ],
+        servers: {
+          'my-api': { proxy: ['claude-code', 'claude', '*'] },
+        },
+      },
+    }).mcpProxy!;
+
+    expect(config.clients).toEqual([
+      'copilot',
+      'copilot',
+      'future-client',
+      'future-client',
+    ]);
+    expect(config.servers?.['my-api']?.proxy).toEqual([
+      'claude',
+      'claude',
+      '*',
+    ]);
+    expect(shouldProxy('other-api', 'copilot', config)).toBe(true);
+    expect(shouldProxy('other-api', 'future-client', config)).toBe(true);
+    expect(shouldProxy('my-api', 'claude', config)).toBe(true);
+    expect(shouldProxy('my-api', 'other-unknown-client', config)).toBe(true);
   });
 });
 

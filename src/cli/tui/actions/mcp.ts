@@ -13,12 +13,12 @@ import {
   resolveMcpDestination,
 } from '../../../core/mcp-servers.js';
 import { getUserWorkspaceConfig } from '../../../core/user-workspace.js';
-import {
-  type ClientType,
-  ClientTypeSchema,
-  type McpServerConfig,
-  type UserWorkspaceConfig,
+import type {
+  ClientType,
+  McpServerConfig,
+  UserWorkspaceConfig,
 } from '../../../models/workspace-config.js';
+import { mcpClientIdsForScope } from '../../../models/client-mapping.js';
 import { terminalSafe } from '../../terminal-output.js';
 import type { TuiCache } from '../cache.js';
 import type { TuiContext } from '../context.js';
@@ -155,7 +155,7 @@ async function buildDestinationChoices(
         cwd: context.workspacePath,
         scope: 'project',
       }),
-      clients: ClientTypeSchema.options,
+      clients: mcpClientIdsForScope('project'),
     });
   }
 
@@ -164,7 +164,7 @@ async function buildDestinationChoices(
     label: 'User',
     hint: 'global user configuration',
     destination: dependencies.resolveDestination({ scope: 'user' }),
-    clients: ClientTypeSchema.options,
+    clients: mcpClientIdsForScope('user'),
   });
 
   const userConfig = await dependencies.getUserConfig();

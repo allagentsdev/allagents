@@ -100,6 +100,29 @@ describe('resolveInstallTarget', () => {
     expect(calls.confirmations).toHaveLength(0);
   });
 
+  test('canonicalizes aliases and rejects project-only clients at user scope', async () => {
+    const aliased = await resolveInstallTarget(
+      options({
+        scope: 'project',
+        clients: 'claude-code,claude,droid',
+        yes: true,
+        prompts: promptPort(makeCalls()),
+      }),
+    );
+    expect(aliased?.clients).toEqual(['claude', 'factory']);
+
+    await expect(
+      resolveInstallTarget(
+        options({
+          scope: 'user',
+          clients: 'eve',
+          yes: true,
+          prompts: promptPort(makeCalls()),
+        }),
+      ),
+    ).rejects.toThrow('User scope is unavailable for: eve');
+  });
+
   test('loads only the explicitly selected scope state', async () => {
     let projectLoads = 0;
     let userLoads = 0;

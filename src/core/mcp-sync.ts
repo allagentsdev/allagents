@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR, getHomeDir, WORKSPACE_CONFIG_FILE } from '../constants.js';
+import { mcpClientIdsForScope } from '../models/client-mapping.js';
 import type { SyncState } from '../models/sync-state.js';
 import type {
   ClientType,
@@ -28,13 +29,9 @@ import { migrateWorkspaceSkillsV1toV2 } from './workspace-modify.js';
 /**
  * Clients that support project-scoped MCP server sync.
  */
-const PROJECT_MCP_CLIENTS: ReadonlySet<ClientType> = new Set<ClientType>([
-  'claude',
-  'codex',
-  'vscode',
-  'copilot',
-  'universal',
-]);
+const PROJECT_MCP_CLIENTS: ReadonlySet<ClientType> = new Set(
+  mcpClientIdsForScope('project'),
+);
 
 /**
  * Result of running the MCP sync pipeline across all scopes.

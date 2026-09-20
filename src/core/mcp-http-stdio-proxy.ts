@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
-  type CallToolResult,
+  type CompatibilityCallToolResult,
   CallToolRequestSchema as CallToolSchema,
   GetPromptRequestSchema as GetPromptSchema,
   ListPromptsRequestSchema as ListPromptsSchema,
@@ -29,7 +29,10 @@ export type {
   OAuthCallbackUrlReader,
 } from './mcp-http-client.js';
 
-function parseCallToolResponse(result: CallToolResult) {
+function parseCallToolResponse(result: CompatibilityCallToolResult) {
+  if (!('content' in result)) {
+    throw new Error('MCP task-based tool results cannot be proxied over stdio');
+  }
   return {
     content: result.content,
     ...(result.structuredContent !== undefined && {

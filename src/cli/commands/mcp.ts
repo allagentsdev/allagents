@@ -9,6 +9,10 @@ import {
   positional,
   string,
 } from 'cmd-ts';
+import type {
+  CompatibilityCallToolResult,
+  Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 import { dump } from 'js-yaml';
 import {
   runHttpMcpStdioProxy,
@@ -31,6 +35,15 @@ import {
   resolveMcpDestination,
 } from '../../core/mcp-servers.js';
 import {
+  callMcpTool,
+  findMcpTool,
+  listAllMcpTools,
+  type ManagedMcpOperation,
+  type ManagedMcpOperationOptions,
+  type ManagedMcpOperationResult,
+  runManagedMcpOperation as runManagedMcpRuntimeOperation,
+} from '../../core/mcp-runtime.js';
+import {
   type ClientType,
   ClientTypeSchema,
   type McpServerConfig,
@@ -38,13 +51,26 @@ import {
 import { buildProfileData, formatProfileResult } from '../format-profile.js';
 import { formatMcpResult } from '../format-sync.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
-import { isJsonMode, jsonOutput } from '../json-output.js';
+import {
+  isJsonMode,
+  jsonFieldAllowlist,
+  jsonOutput,
+  setJsonMode,
+} from '../json-output.js';
+import {
+  classifyMcpToolInputSchema,
+  type McpToolInputClassification,
+  type McpToolInputOption,
+  parseMcpToolArguments,
+} from '../mcp-runtime-args.js';
 import {
   mcpAddMeta,
+  mcpCallMeta,
   mcpGetMeta,
   mcpListMeta,
   mcpReauthMeta,
   mcpRemoveMeta,
+  mcpToolsMeta,
   mcpUpdateMeta,
 } from '../metadata/mcp.js';
 import { terminalSafe } from '../terminal-output.js';
@@ -424,6 +450,874 @@ function serverToDisplay(name: string, config: McpServerConfig): string[] {
   }
   return lines;
 }
+
+export type McpRuntimeCommandKind = 'tools' | 'call';
+type McpRuntimeSignal = 'SIGINT' | 'SIGTERM';
+
+interface RuntimeOutputOptions {
+  json: boolean;
+  jsonFields?: string[];
+  jqExpr?: string;
+}
+
+interface ParsedRuntimeRequest {
+  kind: McpRuntimeCommandKind;
+  server?: string;
+  tool?: string;
+  scope?: string;
+  profile?: string;
+  search?: string;
+  help: boolean;
+  toolArguments: string[];
+  output: RuntimeOutputOptions;
+}
+
+export type McpRuntimeManagedOperationRunner = <T>(
+  destination: McpDestination,
+  serverName: string,
+  operation: ManagedMcpOperation<T>,
+  options: ManagedMcpOperationOptions,
+) => Promise<ManagedMcpOperationResult<T>>;
+
+export interface McpRuntimeCliDependencies {
+  runManagedOperation: McpRuntimeManagedOperationRunner;
+}
+
+class McpRuntimeUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpRuntimeUsageError';
+  }
+}
+
+const defaultMcpRuntimeDependencies: McpRuntimeCliDependencies = {
+  runManagedOperation: (destination, serverName, operation, options) =>
+    runManagedMcpRuntimeOperation(
+      destination,
+      serverName,
+      operation,
+      options,
+    ),
+};
+
+function outputFields(value: string): string[] | undefined {
+  const fields = value
+    .split(',')
+    .map((field) => field.trim())
+    .filter(Boolean);
+  return fields.length > 0 ? fields : undefined;
+}
+
+function consumeLeadingOutputOptions(
+  args: readonly string[],
+): { index: number; legal: boolean } {
+  let index = 0;
+  while (index < args.length) {
+    const argument = args[index];
+    if (argument === '--json' || argument?.startsWith('--json=')) {
+      index += 1;
+      continue;
+    }
+    if (argument === '--jq') {
+      if (args[index + 1] === undefined) return { index, legal: false };
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return { index, legal: true };
+}
+
+export function classifyMcpRuntimeCommand(
+  args: readonly string[],
+): McpRuntimeCommandKind | undefined {
+  const leading = consumeLeadingOutputOptions(args);
+  if (!leading.legal || args[leading.index] !== 'mcp') return undefined;
+  const command = args[leading.index + 1];
+  return command === 'tools' || command === 'call' ? command : undefined;
+}
+
+function takeOptionValue(
+  args: readonly string[],
+  index: number,
+  name: string,
+): string {
+  const value = args[index + 1];
+  if (value === undefined) {
+    throw new McpRuntimeUsageError(`Missing value for ${name}`);
+  }
+  return value;
+}
+
+function setUniqueOption(
+  request: ParsedRuntimeRequest,
+  property: 'scope' | 'profile' | 'search',
+  value: string,
+  flag: string,
+): void {
+  if (request[property] !== undefined) {
+    throw new McpRuntimeUsageError(`${flag} may only be specified once`);
+  }
+  request[property] = value;
+}
+
+function consumeRuntimeOutputOption(
+  args: readonly string[],
+  index: number,
+  output: RuntimeOutputOptions,
+): number | undefined {
+  const argument = args[index];
+  if (argument === '--json') {
+    output.json = true;
+    return index;
+  }
+  if (argument?.startsWith('--json=')) {
+    output.json = true;
+    const fields = outputFields(argument.slice('--json='.length));
+    if (fields === undefined) delete output.jsonFields;
+    else output.jsonFields = fields;
+    return index;
+  }
+  if (argument === '--jq') {
+    if (output.jqExpr !== undefined) {
+      throw new McpRuntimeUsageError('--jq may only be specified once');
+    }
+    output.jqExpr = takeOptionValue(args, index, '--jq');
+    return index + 1;
+  }
+  return undefined;
+}
+
+function newParsedRuntimeRequest(
+  kind: McpRuntimeCommandKind,
+): ParsedRuntimeRequest {
+  return {
+    kind,
+    help: false,
+    toolArguments: [],
+    output: { json: false },
+  };
+}
+
+function parseMcpRuntimeRequest(
+  args: readonly string[],
+  existingRequest?: ParsedRuntimeRequest,
+): ParsedRuntimeRequest {
+  const kind = classifyMcpRuntimeCommand(args);
+  if (!kind) throw new McpRuntimeUsageError('Not an MCP runtime command');
+  const leading = consumeLeadingOutputOptions(args);
+  const request = existingRequest ?? newParsedRuntimeRequest(kind);
+
+  for (let index = 0; index < leading.index; index += 1) {
+    const consumed = consumeRuntimeOutputOption(args, index, request.output);
+    if (consumed === undefined) {
+      throw new McpRuntimeUsageError(`Unknown output option '${args[index]}'`);
+    }
+    index = consumed;
+  }
+
+  for (let index = leading.index + 2; index < args.length; index += 1) {
+    const argument = args[index];
+    const outputIndex = consumeRuntimeOutputOption(
+      args,
+      index,
+      request.output,
+    );
+    if (outputIndex !== undefined) {
+      index = outputIndex;
+      continue;
+    }
+    if (argument === '--help' || argument === '-h') {
+      request.help = true;
+      continue;
+    }
+
+    if (argument === '--scope' || argument?.startsWith('--scope=')) {
+      const attached = argument.startsWith('--scope=');
+      const value = attached
+        ? argument.slice('--scope='.length)
+        : takeOptionValue(args, index, '--scope');
+      setUniqueOption(request, 'scope', value, '--scope');
+      if (!attached) index += 1;
+      continue;
+    }
+    if (argument === '--profile' || argument?.startsWith('--profile=')) {
+      const attached = argument.startsWith('--profile=');
+      const value = attached
+        ? argument.slice('--profile='.length)
+        : takeOptionValue(args, index, '--profile');
+      setUniqueOption(request, 'profile', value, '--profile');
+      if (!attached) index += 1;
+      continue;
+    }
+
+    if (
+      kind === 'tools' &&
+      (argument === '--search' || argument?.startsWith('--search='))
+    ) {
+      const attached = argument.startsWith('--search=');
+      const value = attached
+        ? argument.slice('--search='.length)
+        : takeOptionValue(args, index, '--search');
+      setUniqueOption(request, 'search', value, '--search');
+      if (!attached) index += 1;
+      continue;
+    }
+
+    if (
+      kind === 'call' &&
+      (argument === '--input' || argument?.startsWith('--input='))
+    ) {
+      request.toolArguments.push(argument);
+      if (argument === '--input') {
+        request.toolArguments.push(
+          takeOptionValue(args, index, '--input'),
+        );
+        index += 1;
+      }
+      continue;
+    }
+
+    if (argument !== undefined && !argument.startsWith('-')) {
+      if (request.server === undefined) {
+        request.server = argument;
+        continue;
+      }
+      if (kind === 'call' && request.tool === undefined) {
+        request.tool = argument;
+        continue;
+      }
+      if (kind === 'tools') {
+        throw new McpRuntimeUsageError(
+          `Unexpected argument '${argument}' for mcp tools`,
+        );
+      }
+      request.toolArguments.push(argument);
+      continue;
+    }
+
+    if (kind === 'tools') {
+      throw new McpRuntimeUsageError(
+        `Unknown option '${argument ?? ''}' for mcp tools`,
+      );
+    }
+
+    if (argument !== undefined) {
+      request.toolArguments.push(argument);
+      if (argument.startsWith('--') && !argument.includes('=')) {
+        const value = args[index + 1];
+        if (value !== undefined) {
+          request.toolArguments.push(value);
+          index += 1;
+        }
+      }
+    }
+  }
+
+  return request;
+}
+
+export function shouldHandleMcpRuntimeCommand(
+  args: readonly string[],
+): boolean {
+  const kind = classifyMcpRuntimeCommand(args);
+  if (!kind) return false;
+  try {
+    const request = parseMcpRuntimeRequest(args);
+    if (!request.help) return true;
+    return (
+      request.kind === 'call' &&
+      request.server !== undefined &&
+      request.tool !== undefined
+    );
+  } catch {
+    return true;
+  }
+}
+
+function validateRuntimeOutput(request: ParsedRuntimeRequest): void {
+  if (request.output.jqExpr !== undefined && !request.output.json) {
+    throw new McpRuntimeUsageError('--jq requires --json');
+  }
+  if (request.help && request.output.jsonFields !== undefined) {
+    throw new McpRuntimeUsageError(
+      '--json=<fields> is not supported with --help; use --json',
+    );
+  }
+  if (request.output.jsonFields === undefined) return;
+
+  const meta = request.kind === 'tools' ? mcpToolsMeta : mcpCallMeta;
+  const allowed = jsonFieldAllowlist(meta);
+  const unknown = request.output.jsonFields.find(
+    (field) => !allowed.includes(field),
+  );
+  if (unknown) {
+    throw new McpRuntimeUsageError(
+      `Unknown JSON field: "${unknown}". Available fields: ${[...allowed]
+        .sort()
+        .join(', ')}`,
+    );
+  }
+}
+
+function runtimeDestination(request: ParsedRuntimeRequest): McpDestination {
+  try {
+    return resolveMcpDestination({
+      cwd: process.cwd(),
+      ...(request.scope === undefined ? {} : { scope: request.scope }),
+      ...(request.profile === undefined ? {} : { profile: request.profile }),
+    });
+  } catch (error) {
+    throw new McpRuntimeUsageError(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function signalExitCode(signal: McpRuntimeSignal): number {
+  return signal === 'SIGINT' ? 130 : 143;
+}
+
+interface ManagedExecution<T> {
+  result?: ManagedMcpOperationResult<T>;
+  error?: Error;
+  signal?: McpRuntimeSignal;
+}
+
+async function executeManagedRuntime<T>(
+  destination: McpDestination,
+  server: string,
+  operation: ManagedMcpOperation<T>,
+  dependencies: McpRuntimeCliDependencies,
+): Promise<ManagedExecution<T>> {
+  const controller = new AbortController();
+  let receivedSignal: McpRuntimeSignal | undefined;
+  const handleSignal = (signal: McpRuntimeSignal) => {
+    if (receivedSignal !== undefined) {
+      process.exit(signalExitCode(signal));
+    }
+    receivedSignal = signal;
+    controller.abort();
+  };
+  const onSigint = () => handleSignal('SIGINT');
+  const onSigterm = () => handleSignal('SIGTERM');
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+
+  try {
+    const result = await dependencies.runManagedOperation(
+      destination,
+      server,
+      operation,
+      { signal: controller.signal },
+    );
+    return {
+      result,
+      ...(receivedSignal === undefined ? {} : { signal: receivedSignal }),
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error : new Error(String(error)),
+      ...(receivedSignal === undefined ? {} : { signal: receivedSignal }),
+    };
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+  }
+}
+
+function writeRuntimeEnvelope(
+  success: boolean,
+  command: string,
+  data?: unknown,
+  error?: string,
+): void {
+  jsonOutput({
+    success,
+    command,
+    ...(data === undefined ? {} : { data }),
+    ...(error === undefined ? {} : { error }),
+  });
+}
+
+function reportRuntimeError(
+  command: string,
+  error: Error,
+  json: boolean,
+): void {
+  if (json) {
+    writeRuntimeEnvelope(false, command, undefined, error.message);
+  } else {
+    console.error(`Error: ${terminalSafe(error.message)}`);
+  }
+}
+
+function cleanupErrorMessage(error: Error): string {
+  return `MCP cleanup failed: ${error.message}`;
+}
+
+function applyRuntimeExit(
+  exitCode: number | undefined,
+  signal: McpRuntimeSignal | undefined,
+): void {
+  if (signal !== undefined) {
+    process.exitCode = signalExitCode(signal);
+  } else if (exitCode !== undefined) {
+    process.exitCode = exitCode;
+  }
+}
+
+function singleLineTerminalText(value: string): string {
+  return terminalSafe(value.replace(/[\r\n]+/g, ' ')).trim();
+}
+
+function shellToken(value: string): string {
+  const safe = terminalSafe(value);
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(safe)) return safe;
+  return `'${safe.replaceAll("'", "'\\''")}'`;
+}
+function terminalJson(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+    .split('\n')
+    .map((line) => terminalSafe(line))
+    .join('\n');
+}
+
+function renderTools(
+  server: string,
+  tools: readonly Tool[],
+  search: string | undefined,
+): void {
+  if (tools.length === 0) {
+    if (search === undefined) {
+      console.log(
+        `MCP server '${terminalSafe(server)}' exposes no tools.`,
+      );
+    } else {
+      console.log(
+        `No MCP tools matched '${terminalSafe(search)}' on server '${terminalSafe(server)}'.`,
+      );
+    }
+    return;
+  }
+
+  for (const [index, tool] of tools.entries()) {
+    console.log(terminalSafe(tool.name));
+    if (tool.title !== undefined) {
+      console.log(`  Title: ${singleLineTerminalText(tool.title)}`);
+    }
+    if (tool.description !== undefined) {
+      console.log(
+        `  Description: ${singleLineTerminalText(tool.description)}`,
+      );
+    }
+    console.log(
+      `  Help: allagents mcp call ${shellToken(server)} ${shellToken(tool.name)} --help`,
+    );
+    if (index < tools.length - 1) console.log('');
+  }
+}
+
+function matchesToolSearch(tool: Tool, search: string): boolean {
+  const needle = search.toLowerCase();
+  return [tool.name, tool.title, tool.description].some(
+    (value) => value?.toLowerCase().includes(needle) ?? false,
+  );
+}
+
+function requiredToolFields(tool: Tool): string[] {
+  const required = tool.inputSchema.required;
+  return Array.isArray(required)
+    ? required.filter((value): value is string => typeof value === 'string')
+    : [];
+}
+
+function liveInputData(
+  tool: Tool,
+  classification: McpToolInputClassification,
+): Record<string, unknown> {
+  const required = requiredToolFields(tool);
+  return classification.mode === 'generated'
+    ? {
+        mode: 'generated',
+        required,
+        options: classification.options,
+      }
+    : {
+        mode: 'input-only',
+        required,
+        reason: classification.reason,
+      };
+}
+
+function optionValueLabel(option: McpToolInputOption): string {
+  const base =
+    option.kind === 'enum'
+      ? option.enumValues?.map(String).join(' | ') ?? option.valueKind
+      : option.valueKind;
+  return option.kind === 'array' ? `${base} (repeatable)` : base;
+}
+
+function renderLiveHelp(
+  server: string,
+  tool: Tool,
+  classification: McpToolInputClassification,
+): void {
+  console.log(
+    `Usage: allagents mcp call ${shellToken(server)} ${shellToken(tool.name)} [options]`,
+  );
+  console.log('');
+  console.log(`Tool: ${terminalSafe(tool.name)}`);
+  if (tool.title !== undefined) {
+    console.log(`Title: ${singleLineTerminalText(tool.title)}`);
+  }
+  if (tool.description !== undefined) {
+    console.log(`Description: ${singleLineTerminalText(tool.description)}`);
+  }
+  const required = requiredToolFields(tool);
+  console.log(
+    `Required fields: ${required.length > 0 ? required.map(terminalSafe).join(', ') : 'none'}`,
+  );
+  console.log('Input schema:');
+  console.log(terminalJson(tool.inputSchema));
+  console.log('');
+  console.log('Input options:');
+  console.log('  --input <json>  Exact JSON object input');
+  if (classification.mode === 'input-only') {
+    console.log(
+      `  Generated options unavailable: ${terminalSafe(classification.reason)}`,
+    );
+    return;
+  }
+  for (const option of classification.options) {
+    const requirement = option.required ? 'required' : 'optional';
+    const description =
+      option.description === undefined
+        ? ''
+        : ` - ${singleLineTerminalText(option.description)}`;
+    console.log(
+      `  --${terminalSafe(option.name)} <${terminalSafe(optionValueLabel(option))}> (${requirement})${description}`,
+    );
+  }
+}
+
+function renderCallResult(result: CompatibilityCallToolResult): void {
+  const record = result as Record<string, unknown>;
+  const content = record.content;
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).type === 'text' &&
+        typeof (item as Record<string, unknown>).text === 'string'
+      ) {
+        console.log(
+          terminalSafe((item as Record<string, unknown>).text),
+        );
+      } else {
+        console.log(terminalJson(item));
+      }
+    }
+  } else if (Object.hasOwn(record, 'toolResult')) {
+    console.log(terminalJson(record.toolResult));
+  }
+  if (Object.hasOwn(record, 'structuredContent')) {
+    console.log('Structured content:');
+    console.log(terminalJson(record.structuredContent));
+  }
+}
+
+interface CallHelpOperation {
+  kind: 'help';
+  tool: Tool;
+  classification: McpToolInputClassification;
+}
+
+interface CallResultOperation {
+  kind: 'call';
+  result: CompatibilityCallToolResult;
+}
+
+type CallOperation = CallHelpOperation | CallResultOperation;
+
+async function runToolsRuntime(
+  request: ParsedRuntimeRequest,
+  destination: McpDestination,
+  dependencies: McpRuntimeCliDependencies,
+): Promise<void> {
+  const server = request.server;
+  if (server === undefined) {
+    throw new McpRuntimeUsageError(
+      'Usage: allagents mcp tools <server> [options]',
+    );
+  }
+  const execution = await executeManagedRuntime(
+    destination,
+    server,
+    ({ client, signal }) => listAllMcpTools(client, { signal }),
+    dependencies,
+  );
+  if (execution.error) {
+    reportRuntimeError('mcp tools', execution.error, request.output.json);
+    applyRuntimeExit(1, execution.signal);
+    return;
+  }
+
+  const managed = execution.result as ManagedMcpOperationResult<
+    readonly Tool[]
+  >;
+  if (managed.operation.status === 'rejected') {
+    reportRuntimeError(
+      'mcp tools',
+      managed.operation.error,
+      request.output.json,
+    );
+    if (managed.cleanup.status === 'rejected') {
+      console.error(
+        `Error: ${terminalSafe(cleanupErrorMessage(managed.cleanup.error))}`,
+      );
+    }
+    applyRuntimeExit(
+      managed.operation.error instanceof McpRuntimeUsageError &&
+          managed.cleanup.status === 'fulfilled'
+        ? 2
+        : 1,
+      execution.signal,
+    );
+    return;
+  }
+
+  const tools =
+    request.search === undefined
+      ? managed.operation.value
+      : managed.operation.value.filter((tool) =>
+          matchesToolSearch(tool, request.search as string),
+        );
+  const data = {
+    destination: serializeDestination(destination),
+    server,
+    ...(request.search === undefined ? {} : { search: request.search }),
+    tools,
+    total: tools.length,
+  };
+  const cleanupMessage =
+    managed.cleanup.status === 'rejected'
+      ? cleanupErrorMessage(managed.cleanup.error)
+      : undefined;
+  if (request.output.json) {
+    writeRuntimeEnvelope(
+      cleanupMessage === undefined,
+      'mcp tools',
+      data,
+      cleanupMessage,
+    );
+  } else {
+    renderTools(server, tools, request.search);
+  }
+  if (cleanupMessage !== undefined) {
+    console.error(`Error: ${terminalSafe(cleanupMessage)}`);
+  }
+  applyRuntimeExit(
+    cleanupMessage === undefined ? undefined : 1,
+    execution.signal,
+  );
+}
+
+async function runCallRuntime(
+  request: ParsedRuntimeRequest,
+  destination: McpDestination,
+  dependencies: McpRuntimeCliDependencies,
+): Promise<void> {
+  const { server, tool: toolName } = request;
+  if (server === undefined || toolName === undefined) {
+    throw new McpRuntimeUsageError(
+      'Usage: allagents mcp call <server> <tool> [options]',
+    );
+  }
+  const execution = await executeManagedRuntime<CallOperation>(
+    destination,
+    server,
+    async ({ client, signal }) => {
+      const catalog = await listAllMcpTools(client, { signal });
+      const tool = findMcpTool(catalog, toolName);
+      const classification = classifyMcpToolInputSchema(tool.inputSchema);
+      if (request.help) return { kind: 'help', tool, classification };
+      let parsedArguments: Record<string, unknown>;
+      try {
+        parsedArguments = parseMcpToolArguments(
+          classification,
+          request.toolArguments,
+        );
+      } catch (error) {
+        throw new McpRuntimeUsageError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      const result = await callMcpTool(
+        client,
+        catalog,
+        toolName,
+        parsedArguments,
+        { signal },
+      );
+      return { kind: 'call', result };
+    },
+    dependencies,
+  );
+  if (execution.error) {
+    reportRuntimeError('mcp call', execution.error, request.output.json);
+    applyRuntimeExit(1, execution.signal);
+    return;
+  }
+
+  const managed = execution.result as ManagedMcpOperationResult<CallOperation>;
+  if (managed.operation.status === 'rejected') {
+    reportRuntimeError(
+      'mcp call',
+      managed.operation.error,
+      request.output.json,
+    );
+    if (managed.cleanup.status === 'rejected') {
+      console.error(
+        `Error: ${terminalSafe(cleanupErrorMessage(managed.cleanup.error))}`,
+      );
+    }
+    applyRuntimeExit(
+      managed.operation.error instanceof McpRuntimeUsageError &&
+          managed.cleanup.status === 'fulfilled'
+        ? 2
+        : 1,
+      execution.signal,
+    );
+    return;
+  }
+
+  const operation = managed.operation.value;
+  const data =
+    operation.kind === 'help'
+      ? {
+          destination: serializeDestination(destination),
+          server,
+          tool: toolName,
+          descriptor: operation.tool,
+          input: liveInputData(operation.tool, operation.classification),
+        }
+      : {
+          destination: serializeDestination(destination),
+          server,
+          tool: toolName,
+          result: operation.result,
+        };
+  const cleanupMessage =
+    managed.cleanup.status === 'rejected'
+      ? cleanupErrorMessage(managed.cleanup.error)
+      : undefined;
+  const toolFailed =
+    operation.kind === 'call' &&
+    (operation.result as Record<string, unknown>).isError === true;
+  if (request.output.json) {
+    writeRuntimeEnvelope(
+      !toolFailed && cleanupMessage === undefined,
+      'mcp call',
+      data,
+      cleanupMessage,
+    );
+  } else if (operation.kind === 'help') {
+    renderLiveHelp(server, operation.tool, operation.classification);
+  } else {
+    renderCallResult(operation.result);
+  }
+  if (cleanupMessage !== undefined) {
+    console.error(`Error: ${terminalSafe(cleanupMessage)}`);
+  }
+  applyRuntimeExit(
+    toolFailed || cleanupMessage !== undefined ? 1 : undefined,
+    execution.signal,
+  );
+}
+
+export async function runMcpRuntimeCommand(
+  args: readonly string[],
+  dependencies: McpRuntimeCliDependencies = defaultMcpRuntimeDependencies,
+): Promise<void> {
+  let request: ParsedRuntimeRequest | undefined;
+  try {
+    const kind = classifyMcpRuntimeCommand(args);
+    if (!kind) throw new McpRuntimeUsageError('Not an MCP runtime command');
+    request = newParsedRuntimeRequest(kind);
+    request = parseMcpRuntimeRequest(args, request);
+    validateRuntimeOutput(request);
+    setJsonMode(request.output.json, {
+      ...(request.output.jsonFields === undefined
+        ? {}
+        : { fields: request.output.jsonFields }),
+      ...(request.output.jqExpr === undefined
+        ? {}
+        : { jqExpr: request.output.jqExpr }),
+    });
+    const destination = runtimeDestination(request);
+    if (request.kind === 'tools') {
+      await runToolsRuntime(request, destination, dependencies);
+    } else {
+      await runCallRuntime(request, destination, dependencies);
+    }
+  } catch (error) {
+    const normalized =
+      error instanceof Error ? error : new Error(String(error));
+    const command =
+      classifyMcpRuntimeCommand(args) === 'tools'
+        ? 'mcp tools'
+        : 'mcp call';
+    const json = request?.output.json ?? false;
+    if (request !== undefined) {
+      setJsonMode(request.output.json, {
+        ...(request.output.jsonFields === undefined
+          ? {}
+          : { fields: request.output.jsonFields }),
+        ...(request.output.jqExpr === undefined
+          ? {}
+          : { jqExpr: request.output.jqExpr }),
+      });
+    }
+    reportRuntimeError(command, normalized, json);
+    process.exitCode =
+      normalized instanceof McpRuntimeUsageError ? 2 : 1;
+  }
+}
+
+const mcpToolsCmd = command({
+  name: 'tools',
+  description: buildDescription(mcpToolsMeta),
+  args: {
+    server: positional({ type: string, displayName: 'server' }),
+    search: option({
+      type: optional(string),
+      long: 'search',
+      description:
+        'Case-insensitive substring filter over tool name, title, and description',
+    }),
+    ...destinationArgs,
+  },
+  handler: async () => runMcpRuntimeCommand(process.argv.slice(2)),
+});
+
+const mcpCallCmd = command({
+  name: 'call',
+  description: buildDescription(mcpCallMeta),
+  args: {
+    server: positional({ type: string, displayName: 'server' }),
+    tool: positional({ type: string, displayName: 'tool' }),
+    input: option({
+      type: optional(string),
+      long: 'input',
+      description:
+        'Exact JSON object input; mutually exclusive with generated tool options',
+    }),
+    ...destinationArgs,
+  },
+  handler: async () => runMcpRuntimeCommand(process.argv.slice(2)),
+});
 
 // =============================================================================
 // mcp add
@@ -847,6 +1741,8 @@ export const mcpCmd = conciseSubcommands(
     cmds: {
       add: mcpAddCmd,
       reauth: mcpReauthCmd,
+      tools: mcpToolsCmd,
+      call: mcpCallCmd,
       proxy: mcpProxyCmd,
       remove: mcpRemoveCmd,
       list: mcpListCmd,

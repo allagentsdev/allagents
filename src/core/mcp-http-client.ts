@@ -69,7 +69,6 @@ function containsCredential(
   if (value instanceof Error) {
     if (
       containsCredential(value.message, credentials, seen) ||
-      containsCredential(value.stack, credentials, seen) ||
       containsCredential(value.cause, credentials, seen) ||
       (value instanceof AggregateError &&
         containsCredential(value.errors, credentials, seen))
@@ -251,10 +250,89 @@ const UNSAFE_CONFIGURED_HEADERS: Record<string, true> = {
   upgrade: true,
 };
 
+export interface McpFetchResponseLimitOptions {
+  maxResponseBytes?: number;
+}
+
+function boundMcpResponse(
+  response: Response,
+  maxResponseBytes: number,
+): Response {
+  if (!response.body) return response;
+  const isEventStream = response.headers
+    .get('content-type')
+    ?.toLowerCase()
+    .startsWith('text/event-stream');
+  let responseBytes = 0;
+  let eventBytes = 0;
+  let lineBytes = 0;
+  let pendingCarriageReturn = false;
+
+  const finishEventLine = (lineEndingBytes: number): void => {
+    if (lineBytes === 0) {
+      eventBytes = 0;
+      return;
+    }
+    eventBytes += lineBytes + lineEndingBytes;
+    lineBytes = 0;
+    if (eventBytes > maxResponseBytes) {
+      throw new Error(
+        `MCP HTTP SSE event exceeds ${maxResponseBytes} bytes`,
+      );
+    }
+  };
+  const boundedBody = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (!isEventStream) {
+          responseBytes += chunk.byteLength;
+          if (responseBytes > maxResponseBytes) {
+            throw new Error(
+              `MCP HTTP response exceeds ${maxResponseBytes} bytes`,
+            );
+          }
+          controller.enqueue(chunk);
+          return;
+        }
+
+        for (const byte of chunk) {
+          if (pendingCarriageReturn) {
+            finishEventLine(byte === 0x0a ? 2 : 1);
+            pendingCarriageReturn = false;
+            if (byte === 0x0a) continue;
+          }
+          if (byte === 0x0d) {
+            pendingCarriageReturn = true;
+          } else if (byte === 0x0a) {
+            finishEventLine(1);
+          } else {
+            lineBytes += 1;
+            if (eventBytes + lineBytes > maxResponseBytes) {
+              throw new Error(
+                `MCP HTTP SSE event exceeds ${maxResponseBytes} bytes`,
+              );
+            }
+          }
+        }
+        controller.enqueue(chunk);
+      },
+      flush() {
+        if (pendingCarriageReturn) finishEventLine(1);
+      },
+    }),
+  );
+  return new Response(boundedBody, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 export function createOriginSafeMcpFetch(
   serverUrl: string,
   headers: Record<string, string>,
   fetchFn: FetchLike = fetch,
+  options: McpFetchResponseLimitOptions = {},
 ): FetchLike {
   const serverOrigin = new URL(serverUrl).origin;
   const configuredHeaders = new Headers();
@@ -264,22 +342,33 @@ export function createOriginSafeMcpFetch(
     }
   }
 
+  const maxResponseBytes = options.maxResponseBytes;
+  if (
+    maxResponseBytes !== undefined &&
+    (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 0)
+  ) {
+    throw new Error('MCP HTTP response byte limit must be a safe integer');
+  }
+
   return async (input, init) => {
     const requestUrl = new URL(input.toString());
-    if (requestUrl.origin !== serverOrigin) {
-      return fetchFn(input, init);
+    let requestInit = init;
+    if (requestUrl.origin === serverOrigin) {
+      const mergedHeaders = new Headers(configuredHeaders);
+      new Headers(init?.headers).forEach((value, key) => {
+        mergedHeaders.set(key, value);
+      });
+      requestInit = {
+        ...init,
+        headers: mergedHeaders,
+        redirect: 'error',
+      };
     }
+    const response = await fetchFn(input, requestInit);
 
-    const mergedHeaders = new Headers(configuredHeaders);
-    new Headers(init?.headers).forEach((value, key) => {
-      mergedHeaders.set(key, value);
-    });
-
-    return fetchFn(input, {
-      ...init,
-      headers: mergedHeaders,
-      redirect: 'error',
-    });
+    return maxResponseBytes === undefined
+      ? response
+      : boundMcpResponse(response, maxResponseBytes);
   };
 }
 
@@ -731,6 +820,7 @@ export interface ConnectMcpHttpClientOptions {
   profile?: string;
   environment?: NodeJS.ProcessEnv;
   fetch?: FetchLike;
+  maxResponseBytes?: number;
 }
 
 export interface McpHttpClientConnection {
@@ -776,8 +866,14 @@ export async function connectMcpHttpClient(
   );
   const buildTransport = () => {
     const mcpFetch =
-      Object.keys(headers).length > 0 || options.fetch
-        ? createOriginSafeMcpFetch(serverUrl, headers, options.fetch)
+      Object.keys(headers).length > 0 ||
+      options.fetch ||
+      options.maxResponseBytes !== undefined
+        ? createOriginSafeMcpFetch(serverUrl, headers, options.fetch, {
+            ...(options.maxResponseBytes === undefined
+              ? {}
+              : { maxResponseBytes: options.maxResponseBytes }),
+          })
         : undefined;
     return new StreamableHTTPClientTransport(new URL(serverUrl), {
       authProvider: provider,

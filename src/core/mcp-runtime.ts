@@ -20,7 +20,8 @@ const DEFAULT_HTTP_CLEANUP_TIMEOUT_MS = 2_000;
 const DEFAULT_STDIO_EXIT_TIMEOUT_MS = 1_000;
 const MAX_MCP_TOOL_PAGES = 100;
 const MAX_MCP_TOOLS = 10_000;
-const MAX_MCP_TOOL_METADATA_BYTES = 16 * 1024 * 1024;
+const MAX_MCP_PROTOCOL_MESSAGE_BYTES = 16 * 1024 * 1024;
+const MAX_MCP_TOOL_METADATA_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES;
 const MAX_MCP_SCHEMA_DEPTH = 64;
 const MAX_MCP_SCHEMA_NODES = 100_000;
 
@@ -90,6 +91,24 @@ export class McpRuntimeCancelledError extends Error {
     this.name = 'McpRuntimeCancelledError';
   }
 }
+
+function assertBoundedMcpProtocolValue(
+  value: unknown,
+  label: string,
+): void {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error(`MCP ${label} could not be serialized`);
+  }
+  if (
+    Buffer.byteLength(serialized, 'utf8') > MAX_MCP_PROTOCOL_MESSAGE_BYTES
+  ) {
+    throw new Error(
+      `MCP ${label} exceeds ${MAX_MCP_PROTOCOL_MESSAGE_BYTES} serialized bytes`,
+    );
+  }
+}
+
 function assertBoundedMcpSchema(schema: object, toolName: string): void {
   const stack: { value: unknown; depth: number }[] = [
     { value: schema, depth: 1 },
@@ -146,6 +165,7 @@ export async function listAllMcpTools(
       cursor === undefined ? undefined : { cursor },
       options,
     );
+    assertBoundedMcpProtocolValue(page, 'tools/list page');
     pages += 1;
     for (const tool of page.tools) {
       if (names.has(tool.name)) {
@@ -210,11 +230,13 @@ export async function callMcpTool(
       `MCP tool '${toolName}' requires task-based execution and cannot be called synchronously`,
     );
   }
-  return client.callTool(
+  const result = await client.callTool(
     { name: tool.name, arguments: args },
     undefined,
     options,
   );
+  assertBoundedMcpProtocolValue(result, 'tools/call result');
+  return result;
 }
 
 class ObservedStdioClientTransport extends StdioClientTransport {
@@ -245,11 +267,17 @@ function reauthorizationCommand(
   return `allagents mcp reauth ${serverName}`;
 }
 
+interface ResolvedMcpEnvironment {
+  values: Record<string, string>;
+  credentialValues: Set<string>;
+}
+
 function resolveEnvironmentReferences(
   configured: Record<string, string>,
   environment: NodeJS.ProcessEnv,
-): Record<string, string> {
-  return Object.fromEntries(
+): ResolvedMcpEnvironment {
+  const credentialValues = new Set<string>();
+  const values = Object.fromEntries(
     Object.entries(configured).map(([key, value]) => {
       const reference = ENVIRONMENT_REFERENCE.exec(value);
       if (!reference) return [key, value];
@@ -260,9 +288,11 @@ function resolveEnvironmentReferences(
           `MCP environment '${key}' references missing environment variable '${variable}'`,
         );
       }
+      credentialValues.add(resolved);
       return [key, resolved];
     }),
   );
+  return { values, credentialValues };
 }
 
 function rejectArgumentReferences(args: readonly string[]): void {
@@ -300,15 +330,17 @@ async function connectStdioSession(
 ): Promise<ManagedMcpSession> {
   const args = config.args ?? [];
   rejectArgumentReferences(args);
-  const environment = resolveEnvironmentReferences(
+  const resolvedEnvironment = resolveEnvironmentReferences(
     config.env ?? {},
     options.environment ?? process.env,
   );
-  const credentialGuard = createMcpCredentialGuard(Object.values(environment));
+  const credentialGuard = createMcpCredentialGuard(
+    resolvedEnvironment.credentialValues,
+  );
   const transport = new ObservedStdioClientTransport({
     command: config.command,
     args,
-    env: environment,
+    env: resolvedEnvironment.values,
     stderr: 'pipe',
   });
   // Keep child diagnostics from reaching the parent and retain no unbounded copy.
@@ -399,6 +431,7 @@ export async function connectManagedMcpServer(
     const connection = await connectMcpHttpClient(config.url, {
       headers: config.headers ?? {},
       allowAuthorization: false,
+      maxResponseBytes: MAX_MCP_PROTOCOL_MESSAGE_BYTES,
       ...(destination.kind === 'profile'
         ? { profile: destination.name }
         : {}),

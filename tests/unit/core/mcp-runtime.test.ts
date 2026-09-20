@@ -460,32 +460,71 @@ describe('bounded MCP tool catalog', () => {
 
   test('accepts the exact aggregate byte budget and rejects one byte above it', async () => {
     const budget = 16 * 1024 * 1024;
-    const baseTool = {
-      name: 'sized',
-      description: '',
-      inputSchema: { type: 'object' as const },
-    };
-    const fixedBytes = Buffer.byteLength(JSON.stringify([baseTool]), 'utf8');
-    const exactTool = {
-      ...baseTool,
-      description: 'x'.repeat(budget - fixedBytes),
+    const baseTools = [
+      {
+        name: 'sized-first',
+        description: '',
+        inputSchema: { type: 'object' as const },
+      },
+      {
+        name: 'sized-second',
+        description: '',
+        inputSchema: { type: 'object' as const },
+      },
+    ];
+    const fixedBytes = Buffer.byteLength(JSON.stringify(baseTools), 'utf8');
+    const paddingBytes = budget - fixedBytes;
+    const exactTools = [
+      { ...baseTools[0], description: 'x'.repeat(Math.floor(paddingBytes / 2)) },
+      { ...baseTools[1], description: 'x'.repeat(Math.ceil(paddingBytes / 2)) },
+    ];
+    const clientForTools = (tools: typeof exactTools) =>
+      ({
+        async listTools(params?: { cursor?: string }) {
+          return params?.cursor === undefined
+            ? { tools: [tools[0]], nextCursor: 'second' }
+            : { tools: [tools[1]] };
+        },
+      }) as unknown as Client;
+
+    await expect(
+      listAllMcpTools(clientForTools(exactTools)),
+    ).resolves.toHaveLength(2);
+
+    const overflowTools = [
+      exactTools[0],
+      { ...exactTools[1], description: `${exactTools[1]?.description}x` },
+    ];
+    await expect(
+      listAllMcpTools(clientForTools(overflowTools)),
+    ).rejects.toThrow('exceeds 16777216 serialized bytes');
+  });
+
+  test('accepts an exact tools page byte budget and rejects one byte above it', async () => {
+    const budget = 16 * 1024 * 1024;
+    const basePage = { tools: [], _meta: { padding: '' } };
+    const fixedBytes = Buffer.byteLength(JSON.stringify(basePage), 'utf8');
+    const exactPage = {
+      tools: [],
+      _meta: { padding: 'x'.repeat(budget - fixedBytes) },
     };
     const exactClient = {
       async listTools() {
-        return { tools: [exactTool] };
+        return exactPage;
       },
     } as unknown as Client;
-    await expect(listAllMcpTools(exactClient)).resolves.toHaveLength(1);
+    await expect(listAllMcpTools(exactClient)).resolves.toEqual([]);
 
     const overflowClient = {
       async listTools() {
         return {
-          tools: [{ ...exactTool, description: `${exactTool.description}x` }],
+          ...exactPage,
+          _meta: { padding: `${exactPage._meta.padding}x` },
         };
       },
     } as unknown as Client;
     await expect(listAllMcpTools(overflowClient)).rejects.toThrow(
-      'exceeds 16777216 serialized bytes',
+      'MCP tools/list page exceeds 16777216 serialized bytes',
     );
   });
 
@@ -566,5 +605,40 @@ describe('bounded MCP tool catalog', () => {
     expect(calls).toEqual([
       { name: 'ordinary', arguments: { exact: true } },
     ]);
+  });
+
+  test('accepts an exact call result byte budget and rejects one byte above it', async () => {
+    const budget = 16 * 1024 * 1024;
+    const catalog = [
+      { name: 'bounded', inputSchema: { type: 'object' as const } },
+    ];
+    const baseResult = { content: [], padding: '' };
+    const fixedBytes = Buffer.byteLength(JSON.stringify(baseResult), 'utf8');
+    const exactResult = {
+      content: [],
+      padding: 'x'.repeat(budget - fixedBytes),
+    };
+    const exactClient = {
+      async callTool() {
+        return exactResult;
+      },
+    } as unknown as Client;
+    await expect(
+      callMcpTool(exactClient, catalog, 'bounded', {}),
+    ).resolves.toEqual(exactResult);
+
+    const overflowClient = {
+      async callTool() {
+        return {
+          ...exactResult,
+          padding: `${exactResult.padding}x`,
+        };
+      },
+    } as unknown as Client;
+    await expect(
+      callMcpTool(overflowClient, catalog, 'bounded', {}),
+    ).rejects.toThrow(
+      'MCP tools/call result exceeds 16777216 serialized bytes',
+    );
   });
 });

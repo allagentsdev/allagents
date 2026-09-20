@@ -11,6 +11,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -23,6 +24,124 @@ import {
 export const FIXTURE_TOOL_NAME = 'ask_question';
 export const FIXTURE_ANSWER =
   'To rename a company branch, go to Settings > Branches > Rename. (fixture response)';
+
+export const RUNTIME_PRIMITIVE_TOOL_NAME = 'primitive_echo';
+export const RUNTIME_COMPLEX_TOOL_NAME = 'complex_echo';
+export const RUNTIME_FAILURE_TOOL_NAME = 'structured_failure';
+
+export const RUNTIME_PRIMITIVE_INPUT_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    text: { type: 'string' },
+    number: { type: 'number' },
+    integer: { type: 'integer' },
+    enabled: { type: 'boolean' },
+    mode: { type: 'string', enum: ['fast', 'safe'] },
+    tags: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['text', 'number', 'integer', 'enabled', 'mode', 'tags'],
+};
+
+export const RUNTIME_COMPLEX_INPUT_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    payload: {
+      type: 'object',
+      properties: {
+        nested: { type: 'array', items: { type: ['string', 'null'] } },
+      },
+      required: ['nested'],
+    },
+    'unusual key': { type: ['string', 'null'] },
+  },
+  required: ['payload'],
+};
+
+export const RUNTIME_FAILURE_RESULT = {
+  content: [
+    { type: 'text' as const, text: 'first diagnostic' },
+    {
+      type: 'image' as const,
+      data: 'aW1hZ2U=',
+      mimeType: 'image/png',
+      _meta: { sequence: 2 },
+    },
+    { type: 'text' as const, text: 'last diagnostic' },
+  ],
+  structuredContent: {
+    code: 'E_FIXTURE',
+    details: { retryable: false, values: [1, null, 'λ'] },
+  },
+  isError: true,
+  _meta: { retryable: false, source: 'runtime-fixture' },
+  fixtureExtension: { preserved: true },
+};
+
+export interface CapturedMcpToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export function createRuntimeToolPages(): Tool[][] {
+  return [
+    [
+      {
+        name: FIXTURE_TOOL_NAME,
+        description: 'Fixture tool for OAuth e2e tests',
+        inputSchema: {
+          type: 'object',
+          properties: { question: { type: 'string' } },
+          required: ['question'],
+        },
+      },
+      {
+        name: RUNTIME_PRIMITIVE_TOOL_NAME,
+        title: 'Primitive Echo',
+        description: 'Current primitive fixture description',
+        inputSchema: RUNTIME_PRIMITIVE_INPUT_SCHEMA,
+        outputSchema: {
+          type: 'object',
+          properties: { received: { type: 'object' } },
+          required: ['received'],
+        },
+        annotations: {
+          title: 'Primitive Echo Annotation',
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        execution: { taskSupport: 'forbidden' },
+        icons: [
+          {
+            src: 'data:image/png;base64,aWNvbg==',
+            mimeType: 'image/png',
+            sizes: ['16x16'],
+            theme: 'light',
+          },
+        ],
+        _meta: {
+          fixture: { page: 1, unicode: 'λ' },
+        },
+      },
+    ],
+    [
+      {
+        name: RUNTIME_COMPLEX_TOOL_NAME,
+        title: 'Complex Echo',
+        description: 'Exact JSON input with nested and unusual values',
+        inputSchema: RUNTIME_COMPLEX_INPUT_SCHEMA,
+        _meta: { fixture: { page: 2 } },
+      },
+      {
+        name: RUNTIME_FAILURE_TOOL_NAME,
+        description: 'Returns an MCP tool-level structured failure',
+        inputSchema: { type: 'object' },
+        _meta: { fixture: { page: 2 } },
+      },
+    ],
+  ];
+}
 
 interface AuthCodeRecord {
   redirectUri: string;
@@ -39,6 +158,8 @@ export interface StartDummyMcpOAuthServerOptions {
   accessTokenTtlMs?: number;
   /** Disable authentication when a test only needs a reachable HTTP MCP server. */
   requireAuth?: boolean;
+  /** Expose the richer paginated catalog used by runtime CLI tests. */
+  runtimeTools?: boolean;
 }
 
 export interface DummyMcpOAuthServer {
@@ -49,6 +170,12 @@ export interface DummyMcpOAuthServer {
   readonly idpRequestHeaders: ReadonlyArray<IncomingHttpHeaders>;
   readonly mcpRequestHeaders: ReadonlyArray<IncomingHttpHeaders>;
   readonly activeSessionCount: number;
+  readonly listCallCount: number;
+  readonly callToolCount: number;
+  readonly capturedCalls: ReadonlyArray<CapturedMcpToolCall>;
+  setToolPages(pages: ReadonlyArray<ReadonlyArray<Tool>>): void;
+  updateTool(name: string, updates: Partial<Tool>): void;
+  expireAccessTokens(): void;
   stop(): Promise<void>;
 }
 
@@ -111,6 +238,21 @@ export async function startDummyMcpOAuthServer(
 ): Promise<DummyMcpOAuthServer> {
   const accessTokenTtlMs = options.accessTokenTtlMs ?? 60_000;
   const requireAuth = options.requireAuth ?? true;
+  let toolPages: Tool[][] = options.runtimeTools
+    ? createRuntimeToolPages()
+    : [
+        [
+          {
+            name: FIXTURE_TOOL_NAME,
+            description: 'Fixture tool for OAuth e2e tests',
+            inputSchema: {
+              type: 'object',
+              properties: { question: { type: 'string' } },
+              required: ['question'],
+            },
+          },
+        ],
+      ];
 
   const registeredClientIds = new Set<string>();
   const authCodes = new Map<string, AuthCodeRecord>();
@@ -120,7 +262,10 @@ export async function startDummyMcpOAuthServer(
   const counters = {
     authorizeCallCount: 0,
     tokenCallCounts: { authorization_code: 0, refresh_token: 0 },
+    listCallCount: 0,
+    callToolCount: 0,
   };
+  const capturedCalls: CapturedMcpToolCall[] = [];
   const idpRequestHeaders: IncomingHttpHeaders[] = [];
   const mcpRequestHeaders: IncomingHttpHeaders[] = [];
 
@@ -277,22 +422,49 @@ export async function startDummyMcpOAuthServer(
       { name: 'dummy-mcp-server', version: '0.0.1' },
       { capabilities: { tools: {} } },
     );
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: FIXTURE_TOOL_NAME,
-          description: 'Fixture tool for OAuth e2e tests',
-          inputSchema: {
-            type: 'object',
-            properties: { question: { type: 'string' } },
-            required: ['question'],
+    server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+      counters.listCallCount++;
+      const cursor = request.params?.cursor;
+      const pageIndex =
+        cursor === undefined
+          ? 0
+          : Number.parseInt(cursor.replace(/^fixture-page-/, ''), 10);
+      const tools =
+        Number.isSafeInteger(pageIndex) && pageIndex >= 0
+          ? (toolPages[pageIndex] ?? [])
+          : [];
+      return {
+        tools,
+        ...(pageIndex + 1 < toolPages.length
+          ? { nextCursor: `fixture-page-${pageIndex + 1}` }
+          : {}),
+      };
+    });
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      counters.callToolCount++;
+      const args = structuredClone(request.params.arguments ?? {});
+      capturedCalls.push({ name: request.params.name, arguments: args });
+      if (request.params.name === FIXTURE_TOOL_NAME) {
+        return { content: [{ type: 'text', text: FIXTURE_ANSWER }] };
+      }
+      if (request.params.name === RUNTIME_FAILURE_TOOL_NAME) {
+        return RUNTIME_FAILURE_RESULT;
+      }
+      return {
+        content: [
+          { type: 'text', text: `received ${request.params.name}` },
+          {
+            type: 'resource_link',
+            uri: 'file:///runtime-fixture/result.json',
+            name: 'captured arguments',
+            mimeType: 'application/json',
           },
-        },
-      ],
-    }));
-    server.setRequestHandler(CallToolRequestSchema, async () => ({
-      content: [{ type: 'text', text: FIXTURE_ANSWER }],
-    }));
+        ],
+        structuredContent: { received: args },
+        _meta: { fixture: true, explicitFalse: false },
+        fixtureExtension: { preserved: true },
+      };
+    });
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
@@ -382,6 +554,33 @@ export async function startDummyMcpOAuthServer(
     },
     get activeSessionCount() {
       return sessions.size;
+    },
+    get listCallCount() {
+      return counters.listCallCount;
+    },
+    get callToolCount() {
+      return counters.callToolCount;
+    },
+    get capturedCalls() {
+      return capturedCalls;
+    },
+    setToolPages(pages) {
+      toolPages = pages.map((page) => page.map((tool) => structuredClone(tool)));
+    },
+    updateTool(name, updates) {
+      for (const page of toolPages) {
+        const index = page.findIndex((tool) => tool.name === name);
+        if (index !== -1) {
+          page[index] = { ...page[index], ...structuredClone(updates) } as Tool;
+          return;
+        }
+      }
+      throw new Error(`Fixture tool '${name}' is not configured`);
+    },
+    expireAccessTokens() {
+      for (const record of accessTokens.values()) {
+        record.expiresAt = 0;
+      }
     },
     async stop() {
       await Promise.all([...sessions.values()].map((transport) => transport.close()));

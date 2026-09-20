@@ -94,6 +94,77 @@ describe('createOriginSafeMcpFetch', () => {
     expect(calls[0]?.get('x-configured')).toBeNull();
     expect(calls[0]?.get('accept')).toBe('application/json');
   });
+
+  test('bounds response bodies without changing response metadata or no-body responses', async () => {
+    const responses = [
+      new Response('1234', {
+        status: 201,
+        statusText: 'Created',
+        headers: { 'x-response': 'exact' },
+      }),
+      new Response('12345'),
+      new Response(null, {
+        status: 204,
+        headers: { 'content-length': '999' },
+      }),
+    ];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {},
+      async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('unexpected fetch');
+        return response;
+      },
+      { maxResponseBytes: 4 },
+    );
+
+    const exact = await mcpFetch(new URL('https://mcp.example/rpc'));
+    expect(exact.status).toBe(201);
+    expect(exact.statusText).toBe('Created');
+    expect(exact.headers.get('x-response')).toBe('exact');
+    await expect(exact.text()).resolves.toBe('1234');
+
+    const over = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(over.text()).rejects.toThrow(
+      'MCP HTTP response exceeds 4 bytes',
+    );
+
+    const noBody = await mcpFetch(new URL('https://mcp.example/rpc'));
+    expect(noBody.status).toBe(204);
+    await expect(noBody.text()).resolves.toBe('');
+  });
+
+  test('bounds each SSE event instead of the total event stream', async () => {
+    const responses = [
+      new Response('data:1234\n\ndata:5678\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+      new Response('data:12345\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    ];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {},
+      async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('unexpected fetch');
+        return response;
+      },
+      { maxResponseBytes: 10 },
+    );
+
+    const boundedStream = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(boundedStream.text()).resolves.toBe(
+      'data:1234\n\ndata:5678\n\n',
+    );
+
+    const oversizedEvent = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(oversizedEvent.text()).rejects.toThrow(
+      'MCP HTTP SSE event exceeds 10 bytes',
+    );
+  });
 });
 
 describe('connectMcpHttpClient', () => {

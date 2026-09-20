@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import type { AgentCommandMeta } from './help.js';
 
+const JQ_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 let jsonMode = false;
 let jsonFields: string[] | null = null;
 let jqExpr: string | null = null;
@@ -78,7 +80,13 @@ function projectFields(
  */
 function runJq(value: unknown, expr: string): string {
   const input = JSON.stringify(value);
-  const result = spawnSync('jq', [expr], { input, encoding: 'utf-8' });
+  const result = spawnSync('jq', [expr], {
+    input,
+    encoding: 'utf-8',
+    // Parsed MCP output may reach 16 MiB; leave bounded room for jq's
+    // whitespace formatting and the surrounding CLI envelope.
+    maxBuffer: JQ_MAX_BUFFER_BYTES,
+  });
   if (result.error || result.status !== 0) {
     const msg =
       result.stderr?.trim() || result.error?.message || 'jq invocation failed';

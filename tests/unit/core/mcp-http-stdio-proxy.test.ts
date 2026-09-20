@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import {
   getBrowserOpenCommands,
   getMcpOAuthCacheDir,
@@ -8,6 +10,12 @@ import {
   validateOAuthCallbackUrl,
   resolveMcpHeaderReferences,
 } from '../../../src/core/mcp-http-stdio-proxy.js';
+import {
+  connectMcpHttpClient,
+  createOriginSafeMcpFetch,
+  isMcpAuthorizationFailure,
+} from '../../../src/core/mcp-http-client.js';
+
 
 describe('resolveMcpHeaderReferences', () => {
   test('resolves exact environment references and preserves literal values', () => {
@@ -32,6 +40,250 @@ describe('resolveMcpHeaderReferences', () => {
         {},
       ),
     ).toThrow("missing environment variable 'TRADINGVIEW_TOKEN'");
+  });
+});
+
+describe('createOriginSafeMcpFetch', () => {
+  test('lets transport headers override configured headers at the MCP origin', async () => {
+    const calls: Array<{ url: string; headers: Headers; redirect?: RequestRedirect }> =
+      [];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {
+        Authorization: 'configured-secret',
+        'Content-Length': '999',
+        'X-Configured': 'same-origin-only',
+      },
+      async (input, init) => {
+        calls.push({
+          url: input.toString(),
+          headers: new Headers(init?.headers),
+          redirect: init?.redirect,
+        });
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    await mcpFetch(new URL('https://mcp.example/rpc'), {
+      headers: {
+        Authorization: 'Bearer sdk-token',
+        Accept: 'application/json',
+      },
+    });
+
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer sdk-token');
+    expect(calls[0]?.headers.get('accept')).toBe('application/json');
+    expect(calls[0]?.headers.get('content-length')).toBeNull();
+    expect(calls[0]?.headers.get('x-configured')).toBe('same-origin-only');
+    expect(calls[0]?.redirect).toBe('error');
+  });
+
+  test('never forwards configured headers to another origin', async () => {
+    const calls: Headers[] = [];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      { Authorization: 'configured-secret', 'X-Configured': 'private' },
+      async (_input, init) => {
+        calls.push(new Headers(init?.headers));
+        return new Response(null, { status: 204 });
+      },
+    );
+
+    await mcpFetch(new URL('https://identity.example/token'), {
+      headers: { Accept: 'application/json' },
+    });
+
+    expect(calls[0]?.get('authorization')).toBeNull();
+    expect(calls[0]?.get('x-configured')).toBeNull();
+    expect(calls[0]?.get('accept')).toBe('application/json');
+  });
+
+  test('bounds response bodies without changing response metadata or no-body responses', async () => {
+    const responses = [
+      new Response('1234', {
+        status: 201,
+        statusText: 'Created',
+        headers: { 'x-response': 'exact' },
+      }),
+      new Response('12345'),
+      new Response(null, {
+        status: 204,
+        headers: { 'content-length': '999' },
+      }),
+    ];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {},
+      async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('unexpected fetch');
+        return response;
+      },
+      { maxResponseBytes: 4 },
+    );
+
+    const exact = await mcpFetch(new URL('https://mcp.example/rpc'));
+    expect(exact.status).toBe(201);
+    expect(exact.statusText).toBe('Created');
+    expect(exact.headers.get('x-response')).toBe('exact');
+    await expect(exact.text()).resolves.toBe('1234');
+
+    const over = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(over.text()).rejects.toThrow(
+      'MCP HTTP response exceeds 4 bytes',
+    );
+
+    const noBody = await mcpFetch(new URL('https://mcp.example/rpc'));
+    expect(noBody.status).toBe(204);
+    await expect(noBody.text()).resolves.toBe('');
+  });
+
+  test('bounds each SSE event instead of the total event stream', async () => {
+    const responses = [
+      new Response('data:1234\n\ndata:5678\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+      new Response('data:12345\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    ];
+    const mcpFetch = createOriginSafeMcpFetch(
+      'https://mcp.example/rpc',
+      {},
+      async () => {
+        const response = responses.shift();
+        if (!response) throw new Error('unexpected fetch');
+        return response;
+      },
+      { maxResponseBytes: 10 },
+    );
+
+    const boundedStream = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(boundedStream.text()).resolves.toBe(
+      'data:1234\n\ndata:5678\n\n',
+    );
+
+    const oversizedEvent = await mcpFetch(new URL('https://mcp.example/rpc'));
+    await expect(oversizedEvent.text()).rejects.toThrow(
+      'MCP HTTP SSE event exceeds 10 bytes',
+    );
+  });
+});
+
+describe('MCP authorization failures', () => {
+  test('recognizes SDK unauthorized, invalid-grant, and interactive-consent failures', () => {
+    expect(isMcpAuthorizationFailure(new UnauthorizedError())).toBe(true);
+    expect(
+      isMcpAuthorizationFailure(new InvalidGrantError('refresh expired')),
+    ).toBe(true);
+    expect(
+      isMcpAuthorizationFailure(
+        new Error('OAuth authorization requires an interactive terminal'),
+      ),
+    ).toBe(true);
+    expect(isMcpAuthorizationFailure(new Error('network unavailable'))).toBe(
+      false,
+    );
+  });
+});
+
+describe('connectMcpHttpClient', () => {
+  test('closes a created transport when initialization fails', async () => {
+    let transportSignal: AbortSignal | undefined;
+
+    await expect(
+      connectMcpHttpClient('https://mcp.example/rpc', {
+        allowAuthorization: false,
+        fetch: async (_input, init) => {
+          transportSignal = init?.signal ?? undefined;
+          if (init?.method === 'GET') {
+            return new Response(null, { status: 405 });
+          }
+          return new Response('initialization failed', {
+            status: 500,
+            statusText: 'Internal Server Error',
+          });
+        },
+      }),
+    ).rejects.toThrow('Streamable HTTP error');
+
+    expect(transportSignal?.aborted).toBe(true);
+  });
+
+  test('propagates startup cancellation and closes the pending transport', async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    let transportSignal: AbortSignal | undefined;
+    const connection = connectMcpHttpClient('https://mcp.example/rpc', {
+      allowAuthorization: false,
+      signal: controller.signal,
+      fetch: async (_input, init) => {
+        if (init?.method === 'GET') {
+          return new Response(null, { status: 405 });
+        }
+        transportSignal = init?.signal ?? undefined;
+        started.resolve();
+        const pending = Promise.withResolvers<Response>();
+        init?.signal?.addEventListener(
+          'abort',
+          () => pending.reject(init.signal?.reason),
+          { once: true },
+        );
+        return pending.promise;
+      },
+    });
+
+    await started.promise;
+    controller.abort();
+
+    await expect(connection).rejects.toThrow();
+    expect(transportSignal?.aborted).toBe(true);
+  });
+
+  test('guards credential components from configured authorization headers', async () => {
+    const connection = await connectMcpHttpClient(
+      'https://mcp.example/rpc',
+      {
+        allowAuthorization: false,
+        headers: {
+          Authorization: 'Bearer header-secret',
+          'Proxy-Authorization': 'Basic proxy-secret',
+        },
+        fetch: async (_input, init) => {
+          if (init?.method === 'GET') {
+            return new Response(null, { status: 405 });
+          }
+          const message = JSON.parse(String(init?.body)) as {
+            id?: string | number;
+            method: string;
+            params?: { protocolVersion?: string };
+          };
+          if (message.method === 'initialize') {
+            return Response.json({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: message.params?.protocolVersion,
+                capabilities: {},
+                serverInfo: { name: 'runtime-test', version: '0.0.0' },
+              },
+            });
+          }
+          return new Response(null, { status: 202 });
+        },
+      },
+    );
+
+    try {
+      expect(() =>
+        connection.credentialGuard.assertSafe('echoed header-secret'),
+      ).toThrow('MCP output contained a configured credential value');
+      expect(() =>
+        connection.credentialGuard.assertSafe('echoed proxy-secret'),
+      ).toThrow('MCP output contained a configured credential value');
+    } finally {
+      await connection.close();
+    }
   });
 });
 

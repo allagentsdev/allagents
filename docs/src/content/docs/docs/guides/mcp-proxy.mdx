@@ -94,6 +94,34 @@ tokens, then runs a fresh connection and login. It does not revoke the grant at
 the remote provider. Reconnect the AI client afterward if it already had an MCP
 session open.
 
+## Use a Server from the CLI
+
+Runtime discovery and calls reuse the same project, ordinary user, or named
+profile declarations managed by `mcp add`:
+
+```bash
+allagents mcp tools tradingview
+allagents mcp call tradingview quote --symbol AAPL
+allagents mcp tools tradingview --scope user
+allagents mcp call tradingview quote --profile markets --symbol AAPL
+```
+
+Unlike an external AI client, `mcp tools`, fully qualified `mcp call ... --help`,
+and `mcp call` connect directly to the configured HTTP endpoint. They do not go
+through the generated client bridge. They still use the same credential
+ownership: project and ordinary user declarations use the ordinary URL-keyed
+cache, while each profile has its own isolated cache. Valid cached credentials
+are reused and expired access tokens are refreshed when possible.
+
+Runtime commands do not open a browser or request fresh OAuth consent. If the
+cached grant cannot authorize the connection, the error prints the exact
+destination-specific `mcp reauth` command to run interactively. After that
+succeeds, rerun the discovery, help, or call command.
+
+For a stdio declaration, runtime discovery, live help, and calls start the
+configured process directly with its configured arguments and environment.
+Treat a configured stdio command as executable code you trust.
+
 ## Stdio Servers
 
 Stdio servers use the same `add` command and run directly rather than through
@@ -106,37 +134,23 @@ allagents mcp add gh-server npx \
   -e GH_TOKEN=ghp_xxx
 ```
 
-## How HTTP Routing Works
+## How AI Client Routing Works
 
 AI clients have different MCP transport support. AllAgents normalizes that
 difference: HTTP servers added with `mcp add` are synced as stdio commands that
 launch AllAgents' internal HTTP bridge. OAuth registration and tokens are
 therefore shared instead of being configured independently in every client.
 
-The generated client config may contain an internal invocation like:
+Generated AI-client configs invoke a version-pinned internal bridge. That bridge
+looks up the same destination declaration and credential cache, which lets
+clients in one destination share OAuth state instead of configuring credentials
+independently. A named profile's generated bridge remains bound to that
+profile-owned cache and cannot share credentials with another profile.
 
-```json
-{
-  "tradingview": {
-    "command": "npx",
-    "args": [
-      "-y",
-      "allagents@<version>",
-      "mcp",
-      "proxy",
-      "https://mcp.tradingview.com/mcp"
-    ]
-  }
-}
-```
-
-For a named profile, the generated arguments also include `--profile <name>`.
-That hidden selector makes every client inside one profile share the same
-profile-owned credentials without sharing them with another profile.
-
-This is generated plumbing, not a setup command. AllAgents pins the package
-version that created the config, and `npx` reuses npm's package cache on later
-launches.
+The bridge is generated plumbing, not a user-facing command. AllAgents pins the
+package version that created the config, and `npx` reuses npm's package cache on
+later launches. Use `mcp tools` or `mcp call` for direct CLI runtime access and
+`mcp reauth` when fresh consent is required.
 
 ### Plugin-Provided Servers
 

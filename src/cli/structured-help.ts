@@ -7,10 +7,12 @@ import {
 } from './json-output.js';
 import {
   mcpAddMeta,
+  mcpCallMeta,
   mcpGetMeta,
   mcpListMeta,
   mcpReauthMeta,
   mcpRemoveMeta,
+  mcpToolsMeta,
   mcpUpdateMeta,
 } from './metadata/mcp.js';
 import {
@@ -76,6 +78,8 @@ const registeredCommands: RegisteredCommand[] = [
   { command: 'workspace repo list', meta: repoListMeta },
   { command: 'mcp add', meta: mcpAddMeta },
   { command: 'mcp reauth', meta: mcpReauthMeta },
+  { command: 'mcp tools', meta: mcpToolsMeta },
+  { command: 'mcp call', meta: mcpCallMeta },
   { command: 'mcp remove', meta: mcpRemoveMeta },
   { command: 'mcp list', meta: mcpListMeta },
   { command: 'mcp get', meta: mcpGetMeta },

@@ -86,8 +86,13 @@ describe('native/types', () => {
             ].join('\n'),
           );
 
+          const nodePath = Bun.which('node');
+          if (!nodePath) {
+            throw new Error('Node.js is required for the Windows argv test');
+          }
+
           const runtimes = [
-            ['node', '--trace-deprecation'],
+            [nodePath, '--trace-deprecation'],
             [process.execPath],
           ];
           const env = { ...process.env };
@@ -123,7 +128,7 @@ describe('native/types', () => {
             });
           }
 
-          const nestedProc = Bun.spawnSync(['node', runnerPath], {
+          const nestedProc = Bun.spawnSync([nodePath, runnerPath], {
             cwd: tempDir,
             env: {
               ...env,

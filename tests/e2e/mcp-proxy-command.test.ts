@@ -24,6 +24,8 @@ describe('mcp public command help', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('- add - Add an MCP server');
     expect(result.stdout).toContain('- reauth - Reauthenticate a configured HTTP MCP server');
+    expect(result.stdout).toContain('- tools - List tools exposed by an MCP server');
+    expect(result.stdout).toContain('- call - Call a tool exposed by an MCP server');
     expect(result.stdout).not.toContain('- auth -');
     expect(result.stdout).not.toContain('- proxy -');
     expect(result.stdout).not.toContain('- proxy-stdio -');
@@ -34,6 +36,41 @@ describe('mcp public command help', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('Expose a remote HTTP MCP server locally over stdio');
+  });
+
+  test('exposes runtime commands in structured group help while proxy stays hidden', () => {
+    const result = runCli(['mcp', '--help', '--json']);
+
+    expect(result.exitCode).toBe(0);
+    const commands = JSON.parse(result.stdout).commands as Array<{
+      command: string;
+    }>;
+    expect(commands.map(({ command }) => command)).toContain('mcp tools');
+    expect(commands.map(({ command }) => command)).toContain('mcp call');
+    expect(commands.map(({ command }) => command)).not.toContain('mcp proxy');
+  });
+
+  test('keeps generic runtime help offline and structured', () => {
+    const bareCall = runCli(['mcp', 'call', '--help', '--json']);
+    const partialCall = runCli([
+      'mcp',
+      'call',
+      'not-configured',
+      '--help',
+      '--json',
+    ]);
+    const tools = runCli(['mcp', 'tools', '--help', '--json']);
+
+    for (const result of [bareCall, partialCall, tools]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+    }
+    expect(JSON.parse(bareCall.stdout)).toMatchObject({
+      command: 'mcp call',
+      description: 'Call a tool exposed by an MCP server',
+    });
+    expect(JSON.parse(partialCall.stdout).command).toBe('mcp call');
+    expect(JSON.parse(tools.stdout).command).toBe('mcp tools');
   });
 
   test('exposes complete leaf context for add and reauth', () => {

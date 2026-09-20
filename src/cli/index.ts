@@ -2,7 +2,11 @@
 
 import { run, setDefaultHelpFormatter } from 'cmd-ts';
 import packageJson from '../../package.json';
-import { mcpCmd } from './commands/mcp.js';
+import {
+  mcpCmd,
+  runMcpRuntimeCommand,
+  shouldHandleMcpRuntimeCommand,
+} from './commands/mcp.js';
 import { pluginCmd } from './commands/plugin.js';
 import { skillsCmd } from './commands/plugin-skills.js';
 import { profileCmd } from './commands/profile.js';
@@ -74,6 +78,9 @@ function hasHelpFlag(
 }
 
 const rawArgs = process.argv.slice(2);
+if (shouldHandleMcpRuntimeCommand(rawArgs)) {
+  await runMcpRuntimeCommand(rawArgs);
+} else {
 const { args: argsNoJson, json, jsonFields } = extractJsonFlag(rawArgs);
 const { args: argsNoJq, jqExpr } = extractJqFlag(argsNoJson);
 const finalArgs = normalizeSkillArgs(argsNoJq);
@@ -123,4 +130,5 @@ if (isWizard) {
   await runWizard();
 } else {
   run(app, finalArgs);
+}
 }

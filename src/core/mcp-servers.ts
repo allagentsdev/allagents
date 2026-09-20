@@ -51,6 +51,17 @@ export type McpDestination =
       configPath: string;
     };
 
+export function formatMcpDestination(destination: McpDestination): string {
+  switch (destination.kind) {
+    case 'project':
+      return 'workspace.yaml';
+    case 'user':
+      return 'the user workspace';
+    case 'profile':
+      return `profile '${destination.name}'`;
+  }
+}
+
 export interface ResolveMcpDestinationOptions {
   cwd?: string;
   scope?: string;

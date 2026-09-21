@@ -135,7 +135,7 @@ describe('Codex profile adapter', () => {
           command: 'npx',
           args: [
             '-y',
-            'allagents@1.15.0',
+            `allagents@${packageJson.version}`,
             'mcp',
             'proxy',
             'https://mcp.example.test',

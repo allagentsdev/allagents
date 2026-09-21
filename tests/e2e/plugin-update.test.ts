@@ -7,8 +7,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { watch } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 interface CliResult {
   exitCode: number;
@@ -21,10 +22,70 @@ interface CliOptions {
   json?: boolean;
   gitWrapperDir?: string;
   tracePath?: string;
+  extraEnv?: Record<string, string>;
 }
 
 const decoder = new TextDecoder();
 const cliEntry = join(import.meta.dir, '..', '..', 'dist', 'index.js');
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+async function withDeadline<T>(source: Promise<T>, message: string): Promise<T> {
+  const signal = AbortSignal.timeout(5_000);
+  const deadline = Promise.withResolvers<T>();
+  const rejectOnTimeout = () => deadline.reject(new Error(message));
+  signal.addEventListener('abort', rejectOnTimeout, { once: true });
+  source.then(
+    (value) => {
+      signal.removeEventListener('abort', rejectOnTimeout);
+      deadline.resolve(value);
+    },
+    (error) => {
+      signal.removeEventListener('abort', rejectOnTimeout);
+      deadline.reject(error);
+    },
+  );
+  return deadline.promise;
+}
+
+async function waitForFile(path: string): Promise<void> {
+  if (existsSync(path)) return;
+  const signal = AbortSignal.timeout(5_000);
+  const changes = watch(dirname(path), { signal });
+  if (existsSync(path)) return;
+  try {
+    for await (const _change of changes) {
+      if (existsSync(path)) return;
+    }
+  } catch (error) {
+    if (existsSync(path)) return;
+    throw error;
+  }
+}
+
+function cliEnv(
+  homeDir: string,
+  options: CliOptions = {},
+): Record<string, string> {
+  return {
+    ...process.env,
+    ALLAGENTS_TEST_HOME: homeDir,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    XDG_CONFIG_HOME: join(homeDir, '.config'),
+    GIT_TERMINAL_PROMPT: '0',
+    NO_COLOR: '1',
+    ...(options.gitConfig && { GIT_CONFIG_GLOBAL: options.gitConfig }),
+    ...(options.gitWrapperDir && {
+      ALLAGENTS_TEST_REAL_GIT: Bun.which('git') ?? 'git',
+      PATH: `${options.gitWrapperDir}:${process.env.PATH ?? ''}`,
+    }),
+    ...(options.tracePath && { GIT_TRACE2_EVENT: options.tracePath }),
+    ...options.extraEnv,
+  } as Record<string, string>;
+}
 
 beforeAll(() => {
   const build = Bun.spawnSync(['bun', 'run', 'build'], {
@@ -52,21 +113,7 @@ function runCli(
     [cliEntry, ...(options.json === false ? [] : ['--json']), ...args],
     {
       cwd: workdir,
-      env: {
-        ...process.env,
-        ALLAGENTS_TEST_HOME: homeDir,
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-        XDG_CONFIG_HOME: join(homeDir, '.config'),
-        GIT_TERMINAL_PROMPT: '0',
-        NO_COLOR: '1',
-        ...(options.gitConfig && { GIT_CONFIG_GLOBAL: options.gitConfig }),
-        ...(options.gitWrapperDir && {
-          ALLAGENTS_TEST_REAL_GIT: Bun.which('git') ?? 'git',
-          PATH: `${options.gitWrapperDir}:${process.env.PATH ?? ''}`,
-        }),
-        ...(options.tracePath && { GIT_TRACE2_EVENT: options.tracePath }),
-      },
+      env: cliEnv(homeDir, options),
       stderr: 'pipe',
       stdout: 'pipe',
     },
@@ -76,6 +123,90 @@ function runCli(
     exitCode: proc.exitCode,
     stdout: decoder.decode(proc.stdout),
     stderr: decoder.decode(proc.stderr),
+  };
+}
+
+async function runInteractiveCli(
+  workdir: string,
+  homeDir: string,
+  args: string[],
+  options: CliOptions = {},
+): Promise<CliResult> {
+  const command = `stty cols 160 rows 40; exec ${[cliEntry, ...args].map(shellQuote).join(' ')}`;
+  const proc = Bun.spawn(['script', '-qefc', command, '/dev/null'], {
+    cwd: workdir,
+    env: cliEnv(homeDir, options),
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  proc.stdin.end();
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+async function runBlockedInteractiveCli(
+  workdir: string,
+  homeDir: string,
+  args: string[],
+  sourceLine: string,
+  enteredPath: string,
+  releasePath: string,
+  options: CliOptions = {},
+): Promise<{ beforeRelease: string; result: CliResult }> {
+  const command = `stty cols 160 rows 40; exec ${[cliEntry, ...args].map(shellQuote).join(' ')}`;
+  const proc = Bun.spawn(['script', '-qefc', command, '/dev/null'], {
+    cwd: workdir,
+    env: cliEnv(homeDir, options),
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  proc.stdin.end();
+  const stdoutReader = proc.stdout.getReader();
+  const streamDecoder = new TextDecoder();
+  let stdout = '';
+  const sourceSeen = Promise.withResolvers<void>();
+  const readStdout = (async () => {
+    while (true) {
+      const { done, value } = await stdoutReader.read();
+      if (done) break;
+      stdout += streamDecoder.decode(value, { stream: true });
+      if (stdout.includes(sourceLine)) sourceSeen.resolve();
+    }
+    stdout += streamDecoder.decode();
+  })();
+
+  let beforeRelease = '';
+  let observationError: unknown;
+  try {
+    await Promise.all([
+      withDeadline(
+        sourceSeen.promise,
+        `Timed out waiting for streamed plugin output. Output: ${stdout}`,
+      ),
+      waitForFile(enteredPath),
+    ]);
+    beforeRelease = stdout;
+  } catch (error) {
+    observationError = error;
+  } finally {
+    writeFileSync(releasePath, '');
+  }
+
+  const [exitCode, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stderr).text(),
+    readStdout,
+  ]).then(([code, error]) => [code, error] as const);
+  if (observationError) throw observationError;
+  return {
+    beforeRelease,
+    result: { exitCode, stdout, stderr },
   };
 }
 
@@ -159,7 +290,7 @@ function createRemoteMarketplace(rootDir: string): {
   const gitWrapper = join(gitWrapperDir, 'git');
   writeFileSync(
     gitWrapper,
-    `#!/bin/sh\ncase " $* " in\n  *" ls-remote "*) exec "$ALLAGENTS_TEST_REAL_GIT" -c "url.file://${remote}.insteadOf=https://github.com/uat/plugin-marketplace.git" "$@" ;;\nesac\nexec "$ALLAGENTS_TEST_REAL_GIT" "$@"\n`,
+    `#!/bin/sh\ncase " $* " in\n  *" ls-remote "*)\n    if [ -n "$ALLAGENTS_TEST_GIT_BLOCK_ENTERED" ]; then\n      : > "$ALLAGENTS_TEST_GIT_BLOCK_ENTERED"\n      while [ ! -f "$ALLAGENTS_TEST_GIT_BLOCK_RELEASE" ]; do sleep 0.02; done\n    fi\n    exec "$ALLAGENTS_TEST_REAL_GIT" -c "url.file://${remote}.insteadOf=https://github.com/uat/plugin-marketplace.git" "$@"\n    ;;\nesac\nexec "$ALLAGENTS_TEST_REAL_GIT" "$@"\n`,
   );
   chmodSync(gitWrapper, 0o755);
   return {
@@ -167,6 +298,32 @@ function createRemoteMarketplace(rootDir: string): {
     gitWrapperDir,
     source: 'https://github.com/uat/plugin-marketplace',
   };
+}
+
+function createBlockingClaudeWrapper(rootDir: string): string {
+  const wrapperDir = join(rootDir, 'claude-bin');
+  mkdirSync(wrapperDir, { recursive: true });
+  const wrapper = join(wrapperDir, 'claude');
+  writeFileSync(
+    wrapper,
+    [
+      '#!/bin/sh',
+      'case " $* " in',
+      '  *" --version "*)',
+      '    : > "$ALLAGENTS_TEST_NATIVE_BLOCK_ENTERED"',
+      '    while [ ! -f "$ALLAGENTS_TEST_NATIVE_BLOCK_RELEASE" ]; do sleep 0.02; done',
+      '    printf "%s\\n" "claude 1.0.0"',
+      '    exit 0',
+      '    ;;',
+      '  *" plugin list --json "*) printf "%s\\n" \'{"installed":[{"id":"demo@project-marketplace","scope":"project","enabled":true}]}\'; exit 0 ;;',
+      '  *" plugin install demo@project-marketplace "*) mkdir -p .claude; exit 0 ;;',
+      'esac',
+      'exit 0',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(wrapper, 0o755);
+  return wrapperDir;
 }
 describe('plugin update e2e', () => {
   let rootDir: string;
@@ -248,6 +405,7 @@ describe('plugin update e2e', () => {
     ]);
 
     expect(updateResult.exitCode).toBe(0);
+    expect(updateResult.stdout).not.toContain('Updating plugin:');
     const payload = JSON.parse(updateResult.stdout);
     expect(payload.success).toBe(true);
     expect(payload.data.results).toEqual([
@@ -257,6 +415,22 @@ describe('plugin update e2e', () => {
         action: 'updated',
       },
     ]);
+
+    const redirectedResult = runCli(
+      workspaceDir,
+      homeDir,
+      ['plugin', 'update', '--scope', 'project'],
+      { json: false },
+    );
+    expect(redirectedResult.exitCode).toBe(0);
+    expect(redirectedResult.stderr).toBe('');
+    expect(redirectedResult.stdout).toStartWith('Updating plugins...\n\n');
+    expect(redirectedResult.stdout).not.toContain(
+      'Updating plugin: demo@project-marketplace...',
+    );
+    expect(redirectedResult.stdout.indexOf('✓ demo@project-marketplace')).toBeGreaterThan(
+      redirectedResult.stdout.indexOf('Updating workspace...'),
+    );
   }, 15_000);
 
 
@@ -496,6 +670,213 @@ describe('plugin update e2e', () => {
     },
     15_000,
   );
+
+  test(
+    'streams scoped ordinary declarations in start/result order before blocked Git completes',
+    async () => {
+      const remote = createRemoteMarketplace(rootDir);
+      const addResult = runCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'marketplace',
+          'add',
+          remote.source,
+          '--scope',
+          'user',
+        ],
+        { gitConfig: remote.gitConfig },
+      );
+      expect(addResult.exitCode).toBe(0);
+      for (const pluginScope of ['project', 'user']) {
+        const installResult = runCli(
+          workspaceDir,
+          homeDir,
+          [
+            'plugin',
+            'install',
+            'demo@remote-marketplace',
+            '--scope',
+            pluginScope,
+          ],
+          { gitConfig: remote.gitConfig },
+        );
+        expect(installResult.exitCode).toBe(0);
+      }
+
+      const registryPath = join(homeDir, '.allagents', 'marketplaces.json');
+      const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+      const entry = registry.marketplaces['remote-marketplace'];
+      entry.lastUpdated = '2000-01-01T00:00:00.000Z';
+      writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+      runGit(entry.path, [
+        'remote',
+        'set-url',
+        'origin',
+        'https://github.com/uat/plugin-marketplace.git',
+      ]);
+      const enteredPath = join(rootDir, 'plugin-update-entered');
+      const releasePath = join(rootDir, 'plugin-update-release');
+      const sourceLine =
+        'Updating plugin: demo@remote-marketplace (project)...';
+
+      const { beforeRelease, result } = await runBlockedInteractiveCli(
+        workspaceDir,
+        homeDir,
+        ['plugin', 'update', '--scope', 'all'],
+        sourceLine,
+        enteredPath,
+        releasePath,
+        {
+          gitConfig: remote.gitConfig,
+          gitWrapperDir: remote.gitWrapperDir,
+          extraEnv: {
+            ALLAGENTS_TEST_GIT_BLOCK_ENTERED: enteredPath,
+            ALLAGENTS_TEST_GIT_BLOCK_RELEASE: releasePath,
+          },
+        },
+      );
+
+      expect(beforeRelease).toContain(sourceLine);
+      expect(beforeRelease).not.toContain(
+        '✓ demo@remote-marketplace (updated)',
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const lifecycleLines = result.stdout
+        .replaceAll('\r', '')
+        .split('\n')
+        .filter(
+          (line) =>
+            line.startsWith('Updating plugin: demo@remote-marketplace') ||
+            line === '✓ demo@remote-marketplace (updated)',
+        );
+      expect(lifecycleLines).toEqual([
+        'Updating plugin: demo@remote-marketplace (project)...',
+        '✓ demo@remote-marketplace (updated)',
+        'Updating plugin: demo@remote-marketplace (user)...',
+        '✓ demo@remote-marketplace (updated)',
+      ]);
+      expect(result.stdout.lastIndexOf('Update complete:')).toBeGreaterThan(
+        result.stdout.lastIndexOf('✓ demo@remote-marketplace (updated)'),
+      );
+    },
+    20_000,
+  );
+
+  test(
+    'keeps a native-only result provisional until native reconciliation settles',
+    async () => {
+      const addResult = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'marketplace',
+        'add',
+        marketplaceDir,
+        '--scope',
+        'project',
+      ]);
+      expect(addResult.exitCode).toBe(0);
+      writeFileSync(
+        join(workspaceDir, '.allagents', 'workspace.yaml'),
+        [
+          'repositories: []',
+          'plugins:',
+          '  - source: demo@project-marketplace',
+          '    install: native',
+          'clients:',
+          '  - name: claude',
+          '    install: native',
+          'version: 2',
+          '',
+        ].join('\n'),
+      );
+      const wrapperDir = createBlockingClaudeWrapper(rootDir);
+      const enteredPath = join(rootDir, 'native-update-entered');
+      const releasePath = join(rootDir, 'native-update-release');
+      const sourceLine = 'Updating plugin: demo@project-marketplace...';
+
+      const { beforeRelease, result } = await runBlockedInteractiveCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'update',
+          'demo@project-marketplace',
+          '--scope',
+          'project',
+        ],
+        sourceLine,
+        enteredPath,
+        releasePath,
+        {
+          gitWrapperDir: wrapperDir,
+          extraEnv: {
+            ALLAGENTS_TEST_NATIVE_BLOCK_ENTERED: enteredPath,
+            ALLAGENTS_TEST_NATIVE_BLOCK_RELEASE: releasePath,
+          },
+        },
+      );
+
+      expect(beforeRelease).toContain(sourceLine);
+      expect(beforeRelease).not.toContain(
+        '✓ demo@project-marketplace (updated)',
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout.split(sourceLine)).toHaveLength(2);
+      const nativeEffect = 'phase=update changed=true';
+      expect(result.stdout).toContain(nativeEffect);
+      expect(
+        result.stdout.indexOf('✓ demo@project-marketplace (updated)'),
+      ).toBeGreaterThan(result.stdout.indexOf(nativeEffect));
+    },
+    15_000,
+  );
+
+  test('keeps an ordinary typed result settled when later scope sync fails', async () => {
+    const addResult = runCli(workspaceDir, homeDir, [
+      'plugin',
+      'marketplace',
+      'add',
+      marketplaceDir,
+      '--scope',
+      'project',
+    ]);
+    expect(addResult.exitCode).toBe(0);
+    const installResult = runCli(workspaceDir, homeDir, [
+      'plugin',
+      'install',
+      'demo@project-marketplace',
+      '--scope',
+      'project',
+    ]);
+    expect(installResult.exitCode).toBe(0);
+    rmSync(join(marketplaceDir, 'plugins', 'demo'), {
+      recursive: true,
+      force: true,
+    });
+
+    const result = await runInteractiveCli(
+      workspaceDir,
+      homeDir,
+      [
+        'plugin',
+        'update',
+        'demo@project-marketplace',
+        '--scope',
+        'project',
+      ],
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('Sync error:');
+    const typedResult = '✓ demo@project-marketplace (updated)';
+    expect(result.stdout.split(typedResult)).toHaveLength(2);
+    expect(result.stdout).toContain(
+      'Update complete: 1 updated, 0 skipped, 0 failed',
+    );
+  }, 15_000);
 
   test(
     'deduplicates no-op remote marketplace checks across registry consumers',

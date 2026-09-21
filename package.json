@@ -79,8 +79,7 @@
     "read-cmd-shim": "^7.0.0",
     "simple-git": "^3.36.0",
     "typescript": "^7.0.2",
-    "zod": "^4.6.5",
-    "zod-to-json-schema": "3.25.2"
+    "zod": "^4.6.5"
   },
   "engines": {
     "node": ">=22.0.0",

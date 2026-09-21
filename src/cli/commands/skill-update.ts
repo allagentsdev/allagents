@@ -7,15 +7,17 @@ import {
   restPositionals,
   string,
 } from 'cmd-ts';
+import type { SkillUpdateUnitExecution } from '../../core/skill-update.js';
 import { buildDescription } from '../help.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
 import { skillsUpdateMeta } from '../metadata/plugin-skills.js';
 import {
+  buildSkillUpdateInventory,
   executePreparedSkillUpdate,
   findUnmatchedSkillUpdateFilters,
   hasProjectSkillConfig,
   normalizeSkillUpdateScopes,
-  prepareSkillUpdate,
+  prepareSkillUpdateFromInventory,
   resolveNonInteractiveSkillUpdateDecisions,
   skillUpdateExitCode,
   skillUpdateSummary,
@@ -24,6 +26,39 @@ import {
 import { terminalSafe } from '../terminal-output.js';
 
 class SkillUpdateUsageError extends Error {}
+
+function renderSkillUpdateResult(
+  unitResult: SkillUpdateUnitExecution,
+  source: string,
+): void {
+  const label = terminalSafe(source);
+  switch (unitResult.status) {
+    case 'updated':
+      console.log(`${chalk.green('✓')} Updated ${label}`);
+      break;
+    case 'removed':
+      console.log(
+        `${chalk.green('✓')} Removed deleted skills and updated ${label}`,
+      );
+      break;
+    case 'retained':
+      console.log(
+        `${chalk.yellow('!')} Kept local copies and skipped updates for ${label}`,
+      );
+      break;
+    case 'skipped':
+      console.log(`${chalk.dim('–')} Skipped ${label}`);
+      break;
+    case 'cancelled':
+      console.log(`${chalk.yellow('!')} Update cancelled before changes`);
+      break;
+    case 'failed':
+      console.error(
+        `${chalk.red('✗')} Failed ${label}${unitResult.error ? `: ${terminalSafe(unitResult.error)}` : ''}`,
+      );
+      break;
+  }
+}
 
 export const skillUpdateCmd = command({
   name: 'update',
@@ -45,9 +80,11 @@ export const skillUpdateCmd = command({
   handler: async ({ skills, scope, yes }) => {
     try {
       const workspacePath = process.cwd();
+      const jsonMode = isJsonMode();
+      const progressiveOutput = Boolean(process.stdout.isTTY) && !jsonMode;
       const interactive =
         Boolean(process.stdout.isTTY && process.stdin.isTTY) &&
-        !isJsonMode() &&
+        !jsonMode &&
         !yes;
       let selectedScope = scope;
 
@@ -85,14 +122,10 @@ export const skillUpdateCmd = command({
         : 'user';
       const scopes = normalizeSkillUpdateScopes(selectedScope);
 
-      if (!isJsonMode()) console.log('Checking for skill updates…');
-      const prepared = await prepareSkillUpdate({
-        workspacePath,
-        scopes,
-        ...(skills.length > 0 && { filters: skills }),
-      });
+      if (!jsonMode) console.log('Checking for skill updates…');
+      const inventory = await buildSkillUpdateInventory(workspacePath, scopes);
       const unmatched = findUnmatchedSkillUpdateFilters(
-        prepared.inventory,
+        inventory,
         scopes,
         skills,
       );
@@ -101,6 +134,20 @@ export const skillUpdateCmd = command({
           `No enabled installed skill matched: ${unmatched.join(', ')}`,
         );
       }
+      const prepared = await prepareSkillUpdateFromInventory(
+        {
+          workspacePath,
+          scopes,
+          ...(skills.length > 0 && { filters: skills }),
+          ...(progressiveOutput && {
+            onUnitStart: (unit) =>
+              console.log(
+                `Checking skills from source: ${terminalSafe(unitDisplayName(unit))}`,
+              ),
+          }),
+        },
+        inventory,
+      );
 
       let decisions = resolveNonInteractiveSkillUpdateDecisions(prepared.plan);
       if (interactive) {
@@ -144,24 +191,44 @@ export const skillUpdateCmd = command({
         }
       }
 
+      if (progressiveOutput) {
+        for (const local of prepared.inventory.skippedLocalSources) {
+          console.log(
+            `${chalk.dim('–')} Skipped local source ${terminalSafe(local)}`,
+          );
+        }
+      }
+
+      const planById = new Map(
+        prepared.plan.units.map((unit) => [unit.id, unit]),
+      );
+      const sourceForResult = (unitResult: SkillUpdateUnitExecution): string => {
+        const planned = planById.get(unitResult.id);
+        return planned ? unitDisplayName(planned) : unitResult.id;
+      };
       const result = await executePreparedSkillUpdate(
         prepared,
         decisions,
         workspacePath,
+        progressiveOutput
+          ? {
+              onUnitResult: (unitResult) =>
+                renderSkillUpdateResult(
+                  unitResult,
+                  sourceForResult(unitResult),
+                ),
+            }
+          : {},
       );
       const summary = skillUpdateSummary(result);
-      const planById = new Map(
-        prepared.plan.units.map((unit) => [unit.id, unit]),
-      );
       const results = result.units.map((unitResult) => {
-        const planned = planById.get(unitResult.id);
         return {
           ...unitResult,
-          source: planned ? unitDisplayName(planned) : unitResult.id,
+          source: sourceForResult(unitResult),
         };
       });
 
-      if (isJsonMode()) {
+      if (jsonMode) {
         jsonOutput({
           success: result.success,
           command: 'skill update',
@@ -174,40 +241,16 @@ export const skillUpdateCmd = command({
           },
         });
       } else {
-        for (const local of prepared.inventory.skippedLocalSources) {
-          console.log(
-            `${chalk.dim('–')} Skipped local source ${terminalSafe(local)}`,
-          );
+        if (!progressiveOutput) {
+          for (const local of prepared.inventory.skippedLocalSources) {
+            console.log(
+              `${chalk.dim('–')} Skipped local source ${terminalSafe(local)}`,
+            );
+          }
         }
-        for (const unitResult of results) {
-          const label = terminalSafe(unitResult.source);
-          switch (unitResult.status) {
-            case 'updated':
-              console.log(`${chalk.green('✓')} Updated ${label}`);
-              break;
-            case 'removed':
-              console.log(
-                `${chalk.green('✓')} Removed deleted skills and updated ${label}`,
-              );
-              break;
-            case 'retained':
-              console.log(
-                `${chalk.yellow('!')} Kept local copies and skipped updates for ${label}`,
-              );
-              break;
-            case 'skipped':
-              console.log(`${chalk.dim('–')} Skipped ${label}`);
-              break;
-            case 'cancelled':
-              console.log(
-                `${chalk.yellow('!')} Update cancelled before changes`,
-              );
-              break;
-            case 'failed':
-              console.error(
-                `${chalk.red('✗')} Failed ${label}${unitResult.error ? `: ${terminalSafe(unitResult.error)}` : ''}`,
-              );
-              break;
+        if (!progressiveOutput) {
+          for (const unitResult of results) {
+            renderSkillUpdateResult(unitResult, unitResult.source);
           }
         }
         if (result.units.length === 0) console.log('No skill updates found.');

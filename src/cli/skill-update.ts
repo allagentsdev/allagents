@@ -26,6 +26,7 @@ import {
   type InstalledSkill,
   type SkillUpdateDecision,
   type SkillUpdateExecutionResult,
+  type SkillUpdateUnitExecution,
   type SkillUpdateInstallation,
   type SkillUpdateInventoryFailure,
   type SkillUpdatePreflight,
@@ -171,6 +172,7 @@ export interface PrepareSkillUpdateOptions {
   workspacePath: string;
   scopes: SkillUpdateScope[];
   filters?: string[];
+  onUnitStart?: (unit: SkillUpdateUnitInput) => void;
 }
 
 export interface PrepareSkillUpdateDependencies
@@ -185,6 +187,10 @@ export interface PrepareSkillUpdateDependencies
 export interface PreparedSkillUpdate {
   inventory: SkillUpdateInventory;
   plan: SkillUpdatePreflight;
+}
+
+export interface ExecutePreparedSkillUpdateOptions {
+  onUnitResult?: (result: SkillUpdateUnitExecution) => void;
 }
 
 /** Normalize the public scope flag after the caller has resolved its default. */
@@ -979,13 +985,11 @@ export function createSkillUpdateNodePrecheck(
 }
 
 
-export async function prepareSkillUpdate(
+export async function prepareSkillUpdateFromInventory(
   options: PrepareSkillUpdateOptions,
+  inventory: SkillUpdateInventory,
   dependencies: PrepareSkillUpdateDependencies = {},
 ): Promise<PreparedSkillUpdate> {
-  const inventory = await (
-    dependencies.buildInventory ?? buildSkillUpdateInventory
-  )(options.workspacePath, options.scopes);
   const context = new UpdateContext();
   try {
     const plan = await buildSkillUpdatePreflight(
@@ -998,12 +1002,23 @@ export async function prepareSkillUpdate(
       {
         inspectUnit: dependencies.inspectUnit ?? inspectSkillUpdateUnit,
         precheckNode: createSkillUpdateNodePrecheck(context, dependencies),
+        ...(options.onUnitStart && { onUnitStart: options.onUnitStart }),
       },
     );
     return { inventory, plan };
   } finally {
     context.dispose();
   }
+}
+
+export async function prepareSkillUpdate(
+  options: PrepareSkillUpdateOptions,
+  dependencies: PrepareSkillUpdateDependencies = {},
+): Promise<PreparedSkillUpdate> {
+  const inventory = await (
+    dependencies.buildInventory ?? buildSkillUpdateInventory
+  )(options.workspacePath, options.scopes);
+  return prepareSkillUpdateFromInventory(options, inventory, dependencies);
 }
 
 
@@ -1076,6 +1091,7 @@ export async function executePreparedSkillUpdate(
   prepared: PreparedSkillUpdate,
   decisions: Record<string, SkillUpdateDecision>,
   workspacePath: string,
+  options: ExecutePreparedSkillUpdateOptions = {},
 ): Promise<SkillUpdateExecutionResult> {
   const result = await executeSkillUpdatePlan(prepared.plan, decisions, {
     advanceNode: moveSkillUpdateCheckout,
@@ -1091,6 +1107,7 @@ export async function executePreparedSkillUpdate(
         ? { success: true }
         : { success: false, error: `Offline ${scope} sync failed` };
     },
+    ...(options.onUnitResult && { onUnitResult: options.onUnitResult }),
   });
   return result;
 }
@@ -1100,7 +1117,7 @@ export function hasProjectSkillConfig(workspacePath: string): boolean {
 }
 
 export function unitDisplayName(
-  unit: SkillUpdatePreflight['units'][number],
+  unit: SkillUpdateUnitInput,
 ): string {
   const labels = [
     ...new Set(

@@ -7,9 +7,16 @@ import {
   test,
 } from 'bun:test';
 import { chmodSync, existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  watch,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { dump, load } from 'js-yaml';
 import simpleGit from 'simple-git';
 import type { WorkspaceConfig } from '../../src/models/workspace-config.js';
@@ -45,6 +52,43 @@ interface RemoteSourceFixture {
 
 const decoder = new TextDecoder();
 const cliEntry = join(import.meta.dir, '..', '..', 'dist', 'index.js');
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+async function withDeadline<T>(source: Promise<T>, message: string): Promise<T> {
+  const signal = AbortSignal.timeout(5_000);
+  const deadline = Promise.withResolvers<T>();
+  const rejectOnTimeout = () => deadline.reject(new Error(message));
+  signal.addEventListener('abort', rejectOnTimeout, { once: true });
+  source.then(
+    (value) => {
+      signal.removeEventListener('abort', rejectOnTimeout);
+      deadline.resolve(value);
+    },
+    (error) => {
+      signal.removeEventListener('abort', rejectOnTimeout);
+      deadline.reject(error);
+    },
+  );
+  return deadline.promise;
+}
+
+async function waitForFile(path: string): Promise<void> {
+  if (existsSync(path)) return;
+  const signal = AbortSignal.timeout(5_000);
+  const changes = watch(dirname(path), { signal });
+  if (existsSync(path)) return;
+  try {
+    for await (const _change of changes) {
+      if (existsSync(path)) return;
+    }
+  } catch (error) {
+    if (existsSync(path)) return;
+    throw error;
+  }
+}
 
 beforeAll(() => {
   const build = Bun.spawnSync(['bun', 'run', 'build'], {
@@ -104,17 +148,17 @@ async function runInteractiveCli(
   fixture: SkillUpdateFixture,
   args: string[],
   input: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<CliResult> {
-  const shellQuote = (value: string): string =>
-    `'${value.replaceAll("'", `'\\''`)}'`;
   const command = `stty cols 160 rows 40; exec ${[cliEntry, ...args].map(shellQuote).join(' ')}`;
   const proc = Bun.spawn(['script', '-qefc', command, '/dev/null'], {
     cwd: fixture.workspace,
-    env: cliEnv(fixture),
+    env: cliEnv(fixture, extraEnv),
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
   });
+  if (input.length === 0) proc.stdin.end();
   const stdoutReader = proc.stdout.getReader();
   const streamDecoder = new TextDecoder();
   let stdout = '';
@@ -124,9 +168,8 @@ async function runInteractiveCli(
       const { done, value } = await stdoutReader.read();
       if (done) break;
       stdout += streamDecoder.decode(value, { stream: true });
-      if (!inputSent && stdout.includes('deleted upstream')) {
+      if (!inputSent && stdout.includes('update the surviving skills?')) {
         inputSent = true;
-        await new Promise((resolve) => setTimeout(resolve, 75));
         proc.stdin.write(input);
         proc.stdin.end();
       }
@@ -144,6 +187,68 @@ async function runInteractiveCli(
     stderr,
   };
   return result;
+}
+
+async function runBlockedInteractiveCli(
+  fixture: SkillUpdateFixture,
+  args: string[],
+  sourceLine: string,
+  enteredPath: string,
+  releasePath: string,
+): Promise<{ beforeRelease: string; result: CliResult }> {
+  const command = `stty cols 160 rows 40; exec ${[cliEntry, ...args].map(shellQuote).join(' ')}`;
+  const proc = Bun.spawn(['script', '-qefc', command, '/dev/null'], {
+    cwd: fixture.workspace,
+    env: cliEnv(fixture, {
+      ALLAGENTS_TEST_GIT_BLOCK_ENTERED: enteredPath,
+      ALLAGENTS_TEST_GIT_BLOCK_RELEASE: releasePath,
+    }),
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  proc.stdin.end();
+  const stdoutReader = proc.stdout.getReader();
+  const streamDecoder = new TextDecoder();
+  let stdout = '';
+  const sourceSeen = Promise.withResolvers<void>();
+  const readStdout = (async () => {
+    while (true) {
+      const { done, value } = await stdoutReader.read();
+      if (done) break;
+      stdout += streamDecoder.decode(value, { stream: true });
+      if (stdout.includes(sourceLine)) sourceSeen.resolve();
+    }
+    stdout += streamDecoder.decode();
+  })();
+
+  let beforeRelease = '';
+  let observationError: unknown;
+  try {
+    await Promise.all([
+      withDeadline(
+        sourceSeen.promise,
+        `Timed out waiting for streamed source output. Output: ${stdout}`,
+      ),
+      waitForFile(enteredPath),
+    ]);
+    beforeRelease = stdout;
+  } catch (error) {
+    observationError = error;
+  } finally {
+    await writeFile(releasePath, '');
+  }
+
+  const [exitCode, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stderr).text(),
+    readStdout,
+  ]).then(([code, error]) => [code, error] as const);
+  if (observationError) throw observationError;
+  return {
+    beforeRelease,
+    result: { exitCode, stdout, stderr },
+  };
 }
 
 async function writeSkill(
@@ -401,7 +506,7 @@ async function createFixture(): Promise<SkillUpdateFixture> {
   const gitWrapper = join(gitWrapperDir, 'git');
   await writeFile(
     gitWrapper,
-    '#!/bin/sh\ncase " $* " in\n  *" remote get-url "*) GIT_CONFIG_GLOBAL=/dev/null exec "$ALLAGENTS_TEST_REAL_GIT" "$@" ;;\n  *" ls-remote "*)\n    if [ -n "$ALLAGENTS_TEST_FAKE_REMOTE_SHA" ]; then\n      output=$("$ALLAGENTS_TEST_REAL_GIT" "$@") || exit $?\n      printf "%s\\n" "$output" | sed "s/[0-9a-f]\\{40\\}/$ALLAGENTS_TEST_FAKE_REMOTE_SHA/g"\n      exit 0\n    fi\n    ;;\nesac\nexec "$ALLAGENTS_TEST_REAL_GIT" "$@"\n',
+    '#!/bin/sh\ncase " $* " in\n  *" remote get-url "*) GIT_CONFIG_GLOBAL=/dev/null exec "$ALLAGENTS_TEST_REAL_GIT" "$@" ;;\n  *" ls-remote "*)\n    if [ -n "$ALLAGENTS_TEST_GIT_BLOCK_ENTERED" ]; then\n      : > "$ALLAGENTS_TEST_GIT_BLOCK_ENTERED"\n      while [ ! -f "$ALLAGENTS_TEST_GIT_BLOCK_RELEASE" ]; do sleep 0.02; done\n    fi\n    if [ -n "$ALLAGENTS_TEST_FAKE_REMOTE_SHA" ]; then\n      output=$("$ALLAGENTS_TEST_REAL_GIT" "$@") || exit $?\n      printf "%s\\n" "$output" | sed "s/[0-9a-f]\\{40\\}/$ALLAGENTS_TEST_FAKE_REMOTE_SHA/g"\n      exit 0\n    fi\n    ;;\nesac\nexec "$ALLAGENTS_TEST_REAL_GIT" "$@"\n',
   );
   chmodSync(gitWrapper, 0o755);
 
@@ -722,6 +827,87 @@ describe('skill update CLI e2e', () => {
     15_000,
   );
 
+  test(
+    'streams the active source before delayed Git work completes',
+    async () => {
+      const fixture = await createFixture();
+      fixtures.push(fixture);
+      await writeProjectConfig(fixture, [
+        { source: 'uat/skill-update-e2e', skills: ['keep'] },
+      ]);
+      const enteredPath = join(fixture.root, 'git-entered');
+      const releasePath = join(fixture.root, 'git-release');
+      const sourceLine =
+        'Checking skills from source: uat/skill-update-e2e';
+
+      const { beforeRelease, result } = await runBlockedInteractiveCli(
+        fixture,
+        ['skill', 'update', '--scope', 'project', '--yes'],
+        sourceLine,
+        enteredPath,
+        releasePath,
+      );
+
+      expect(beforeRelease).toContain(sourceLine);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout.match(new RegExp(sourceLine, 'g'))).toHaveLength(1);
+      expect(
+        result.stdout.match(/✓ Updated uat\/skill-update-e2e/g),
+      ).toHaveLength(1);
+      expect(result.stdout).toContain(
+        'Done: 1 updated, 0 removed, 0 retained, 0 skipped.',
+      );
+    },
+    15_000,
+  );
+
+  test('rejects unmatched filters before remote preflight or source output', async () => {
+    const fixture = await createFixture();
+    fixtures.push(fixture);
+    const enteredPath = join(fixture.root, 'unmatched-git-entered');
+    const releasePath = join(fixture.root, 'unmatched-git-release');
+    await writeFile(releasePath, '');
+
+    const result = await runInteractiveCli(
+      fixture,
+      ['skill', 'update', 'missing', '--scope', 'project', '--yes'],
+      '',
+      {
+        ALLAGENTS_TEST_GIT_BLOCK_ENTERED: enteredPath,
+        ALLAGENTS_TEST_GIT_BLOCK_RELEASE: releasePath,
+      },
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).toContain(
+      'No enabled installed skill matched: missing',
+    );
+    expect(existsSync(enteredPath)).toBe(false);
+  });
+
+  test('keeps redirected alias output batched without lifecycle lines', async () => {
+    const fixture = await createFixture();
+    fixtures.push(fixture);
+
+    const result = runCli(fixture, [
+      'plugin',
+      'skills',
+      'update',
+      '--scope',
+      'project',
+      '--yes',
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).toContain(
+      'Kept local copies and skipped updates for uat/skill-update-e2e',
+    );
+  });
+
   test('non-interactive mode retains deleted skills and preserves the shared cache', async () => {
     const fixture = await createFixture();
     fixtures.push(fixture);
@@ -738,6 +924,7 @@ describe('skill update CLI e2e', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     const payload = JSON.parse(result.stdout);
+    expect(result.stdout).not.toContain('Checking skills from source:');
     expect(payload.success).toBe(true);
     expect(payload.data.summary).toMatchObject({
       updated: 0,

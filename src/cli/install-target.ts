@@ -244,7 +244,7 @@ async function findExistingDeclaration(
 export async function resolveInstallTarget(
   options: ResolveInstallTargetOptions,
 ): Promise<ResolvedInstallTarget | null> {
-  const interactive = isInteractive(options.environment);
+  const interactive = isInteractive(options.environment) && !options.yes;
   const prompts = interactive ? options.prompts : undefined;
   if (interactive && !prompts) {
     throw new InstallTargetValidationError(

@@ -28,6 +28,8 @@
   terminal output instead of the error channel. Callback URLs are entered
   through an abortable masked prompt, and failed reauthentication restores the
   previous working credentials.
+- `plugin install --yes` and source-backed `skill add --yes` now use configured
+  or default scope and clients without opening interactive prompts.
 
 ### Added
 

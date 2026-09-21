@@ -96,7 +96,7 @@ describe('resolveInstallTarget', () => {
     );
     expect(calls.scopes).toHaveLength(0);
     expect(calls.clients).toHaveLength(0);
-    expect(calls.summaries).toHaveLength(1);
+    expect(calls.summaries).toHaveLength(0);
     expect(calls.confirmations).toHaveLength(0);
   });
 
@@ -187,7 +187,6 @@ describe('resolveInstallTarget', () => {
     const calls = makeCalls();
     const result = await resolveInstallTarget(
       options({
-        yes: true,
         prompts: promptPort(calls, { scope: 'user', clients: [['cursor']] }),
       }),
     );
@@ -202,7 +201,6 @@ describe('resolveInstallTarget', () => {
     await resolveInstallTarget(
       options({
         scopeStates: { project: null, user: null },
-        yes: true,
         prompts: promptPort(calls, { scope: 'user', clients: [['vscode']] }),
       }),
     );
@@ -221,7 +219,6 @@ describe('resolveInstallTarget', () => {
     const calls = makeCalls();
     const result = await resolveInstallTarget(
       options({
-        yes: true,
         prompts: promptPort(calls, {
           scope: 'project',
           clients: [[], ['claude']],
@@ -326,7 +323,6 @@ describe('resolveInstallTarget', () => {
         workspacePath: home,
         scopeStates: { project: null, user: { clients: ['codex'] } },
         clients: ['codex'],
-        yes: true,
         prompts: promptPort(calls, { scope: 'user' }),
       }),
     );
@@ -341,14 +337,14 @@ describe('resolveInstallTarget', () => {
     ).rejects.toBeInstanceOf(InstallTargetValidationError);
   });
 
-  test('yes skips only confirmation', async () => {
+  test('yes uses configured defaults without calling prompt ports', async () => {
     const calls = makeCalls();
-    await resolveInstallTarget(options({ yes: true, prompts: promptPort(calls) }));
-    expect(calls.scopes).toHaveLength(1);
-    expect(calls.clients).toHaveLength(1);
-    expect(calls.summaries).toHaveLength(1);
-    expect(calls.confirmations).toHaveLength(0);
-
+    const result = await resolveInstallTarget(
+      options({ yes: true, prompts: promptPort(calls) }),
+    );
+    expect(result?.scope).toBe('project');
+    expect(result?.clients).toEqual(['claude', 'universal']);
+    expect(calls).toEqual(makeCalls());
     const confirmationCalls = makeCalls();
     await resolveInstallTarget(options({ prompts: promptPort(confirmationCalls) }));
     expect(confirmationCalls.confirmations[0]?.initialValue).toBe(true);

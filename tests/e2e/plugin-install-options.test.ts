@@ -40,7 +40,16 @@ async function runInstall(args: string[]): Promise<{
   return { exitCode, stdout, stderr };
 }
 
-async function runInteractiveInstall(input: string): Promise<{
+async function runInteractiveInstall(
+  input: string,
+  args: string[] = [
+    '--scope',
+    'project',
+    '--client',
+    'codex',
+  ],
+  waitFor = 'Install with this target?',
+): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -48,7 +57,7 @@ async function runInteractiveInstall(input: string): Promise<{
   const shellQuote = (value: string): string =>
     `'${value.replaceAll("'", `'\\''`)}'`;
   const bun = Bun.which('bun') ?? 'bun';
-  const command = `stty cols 160 rows 40; exec ${[bun, 'run', cliEntry, 'plugin', 'install', plugin, '--scope', 'project', '--client', 'codex'].map(shellQuote).join(' ')}`;
+  const command = `stty cols 160 rows 40; exec ${[bun, 'run', cliEntry, 'plugin', 'install', plugin, ...args].map(shellQuote).join(' ')}`;
   const child = Bun.spawn(['script', '-qefc', command, '/dev/null'], {
     cwd: workspace,
     env: {
@@ -72,7 +81,7 @@ async function runInteractiveInstall(input: string): Promise<{
       const { done, value } = await reader.read();
       if (done) break;
       stdout += decoder.decode(value, { stream: true });
-      if (!sent && stdout.includes('Install with this target?')) {
+      if (!sent && stdout.includes(waitFor)) {
         sent = true;
         child.stdin.write(input);
         child.stdin.end();
@@ -215,7 +224,29 @@ describe('plugin install target options', () => {
     expect(config.plugins).toEqual([plugin]);
   });
 
-  test('--yes skips only confirmation and preserves object fields on reinstall', async () => {
+  test(
+    '--yes uses project defaults without opening prompts',
+    async () => {
+      const result = await runInteractiveInstall(
+        '\x03',
+        ['--scope', 'project', '--yes'],
+        'Clients for project scope',
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain('Clients for project scope');
+      expect(result.stdout).not.toContain('Install with this target?');
+      const config = load(
+        await readFile(join(workspace, '.allagents', 'workspace.yaml'), 'utf8'),
+      ) as { clients: string[]; plugins: string[] };
+      expect(config.clients).toEqual(['universal']);
+      expect(config.plugins).toEqual([plugin]);
+    },
+    15_000,
+  );
+
+  test('--yes uses configured clients and preserves object fields on reinstall', async () => {
     await mkdir(join(workspace, '.allagents'), { recursive: true });
     await writeFile(
       join(workspace, '.allagents', 'workspace.yaml'),

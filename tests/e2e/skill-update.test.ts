@@ -119,6 +119,7 @@ function cliEnv(
     GIT_CONFIG_GLOBAL: fixture.gitConfig,
     GIT_TERMINAL_PROMPT: '0',
     NO_COLOR: '1',
+    FORCE_COLOR: '0',
     ALLAGENTS_TEST_REAL_GIT: Bun.which('git') ?? 'git',
     PATH: `${fixture.gitWrapperDir}:${process.env.PATH ?? ''}`,
     ...extra,

@@ -14,6 +14,7 @@ type PublishScenario = {
     unpackedPackage: number;
     compressedTarball: number;
   };
+  npmViewJsonArray?: boolean;
 };
 
 async function runPublish(scenario: PublishScenario) {
@@ -56,12 +57,19 @@ if (args[0] === 'view' && args[1]?.includes('@')) {
     console.error('E404');
     process.exit(1);
   }
-  console.log(JSON.stringify(publishedVersion));
+  const result = process.env.FAKE_NPM_VIEW_ARRAY === 'true'
+    ? [publishedVersion]
+    : publishedVersion;
+  console.log(JSON.stringify(result));
   process.exit(0);
 }
 
 if (args[0] === 'view' && args[2] === 'dist-tags') {
-  console.log(process.env.FAKE_DIST_TAGS || '{}');
+  const distTags = JSON.parse(process.env.FAKE_DIST_TAGS || '{}');
+  const result = process.env.FAKE_NPM_VIEW_ARRAY === 'true'
+    ? [distTags]
+    : distTags;
+  console.log(JSON.stringify(result));
   process.exit(0);
 }
 
@@ -108,6 +116,7 @@ process.exit(92);
           NPM_CALLS: callsPath,
           FAKE_PUBLISHED_VERSION: scenario.publishedVersion ?? '',
           FAKE_DIST_TAGS: JSON.stringify(scenario.distTags),
+          FAKE_NPM_VIEW_ARRAY: String(scenario.npmViewJsonArray ?? false),
           FAKE_UNPACKED_SIZE: String(
             scenario.packageSizes?.unpackedPackage ?? 1,
           ),
@@ -190,6 +199,20 @@ describe('npm publishing', () => {
     );
     expect(result.calls.some(([command]) => command === 'dist-tag')).toBe(false);
     expect(result.calls.some(([command]) => command === 'pack')).toBe(false);
+  });
+
+  test('recognizes npm 12 view JSON when a publish is retried', async () => {
+    const result = await runPublish({
+      npmTag: 'next',
+      version: '1.14.0-next.1',
+      publishedVersion: '1.14.0-next.1',
+      distTags: { next: '1.14.0-next.1', latest: '1.13.9' },
+      npmViewJsonArray: true,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.some(([command]) => command === 'pack')).toBe(false);
+    expect(result.calls.some(([command]) => command === 'publish')).toBe(false);
   });
 
   test('blocks publishing when the packed artifact exceeds its size budget', async () => {

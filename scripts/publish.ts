@@ -53,14 +53,16 @@ async function npmJson(args: string[], options: { allowNotFound?: boolean } = {}
 }
 
 async function getPublishedVersion(name: string, version: string): Promise<string | undefined> {
-  const publishedVersion = await npmJson(["view", `${name}@${version}`, "version", "--json"], {
+  const result = await npmJson(["view", `${name}@${version}`, "version", "--json"], {
     allowNotFound: true,
   });
+  const publishedVersion = Array.isArray(result) ? result[0] : result;
   return typeof publishedVersion === "string" ? publishedVersion : undefined;
 }
 
 async function getDistTags(name: string): Promise<DistTags> {
-  const tags = await npmJson(["view", name, "dist-tags", "--json"], { allowNotFound: true });
+  const result = await npmJson(["view", name, "dist-tags", "--json"], { allowNotFound: true });
+  const tags = Array.isArray(result) ? result[0] : result;
   return tags && typeof tags === "object" ? (tags as DistTags) : {};
 }
 

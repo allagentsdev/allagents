@@ -62,9 +62,14 @@ export function assertPackageSizeBudgets(
 }
 
 export function parsePackument(stdout: string): Packument {
-  // npm 10 can prepend prepare-script output even with --ignore-scripts.
-  const jsonStart = stdout.lastIndexOf('\n[') + 1;
-  const [artifact] = JSON.parse(stdout.slice(jsonStart)) as Packument[];
+  // npm can prepend lifecycle output; npm 12 also changed the result from an
+  // array to an object keyed by package name.
+  const jsonStart =
+    Math.max(stdout.lastIndexOf('\n['), stdout.lastIndexOf('\n{')) + 1;
+  const parsed = JSON.parse(stdout.slice(jsonStart)) as
+    | Packument[]
+    | Record<string, Packument>;
+  const artifact = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
   if (!artifact) throw new Error('npm pack did not report a package artifact');
   return artifact;
 }

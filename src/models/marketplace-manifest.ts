@@ -54,7 +54,7 @@ export type Contact = z.infer<typeof ContactSchema>;
 export const LspServerSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
-  extensionToLanguage: z.record(z.string()).optional(),
+  extensionToLanguage: z.record(z.string(), z.string()).optional(),
   startupTimeout: z.number().optional(),
 });
 
@@ -76,9 +76,11 @@ export const MarketplacePluginEntrySchema = z.object({
   skills: ComponentPathSchema.optional(),
   commands: ComponentPathSchema.optional(),
   agents: ComponentPathSchema.optional(),
-  hooks: z.union([z.string(), z.record(z.unknown())]).optional(),
-  mcpServers: z.union([z.string(), z.record(z.unknown())]).optional(),
-  lspServers: z.record(LspServerSchema).optional(),
+  hooks: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+  mcpServers: z
+    .union([z.string(), z.record(z.string(), z.unknown())])
+    .optional(),
+  lspServers: z.record(z.string(), LspServerSchema).optional(),
 });
 
 export type MarketplacePluginEntry = z.infer<typeof MarketplacePluginEntrySchema>;

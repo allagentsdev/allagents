@@ -6,6 +6,7 @@ import {
   SkillMetadataSchema,
   type SkillMetadata,
 } from '../models/skill-metadata.js';
+import { flattenZodIssues } from '../utils/zod-issues.js';
 
 /**
  * Result of skill validation
@@ -54,7 +55,7 @@ export async function validateSkill(
     const result = SkillMetadataSchema.safeParse(frontmatter);
 
     if (!result.success) {
-      const errors = result.error.errors.map(
+      const errors = flattenZodIssues(result.error).map(
         (err) => `${err.path.join('.')}: ${err.message}`,
       );
       return {

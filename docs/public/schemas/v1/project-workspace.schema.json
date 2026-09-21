@@ -22,9 +22,10 @@
                 "type": "object",
                 "properties": {
                   "run": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/setup/items/anyOf/0"
+                    "type": "string"
                   },
                   "platforms": {
+                    "minItems": 1,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -41,10 +42,10 @@
                         "cygwin",
                         "netbsd"
                       ]
-                    },
-                    "minItems": 1
+                    }
                   },
                   "architectures": {
+                    "minItems": 1,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -62,8 +63,7 @@
                         "s390x",
                         "x64"
                       ]
-                    },
-                    "minItems": 1
+                    }
                   }
                 },
                 "required": [
@@ -96,8 +96,7 @@
                       "dest": {
                         "type": "string"
                       }
-                    },
-                    "additionalProperties": true
+                    }
                   }
                 ]
               }
@@ -105,8 +104,7 @@
           },
           "required": [
             "files"
-          ],
-          "additionalProperties": true
+          ]
         },
         "repositories": {
           "type": "array",
@@ -161,8 +159,7 @@
             },
             "required": [
               "path"
-            ],
-            "additionalProperties": true
+            ]
           }
         },
         "plugins": {
@@ -176,7 +173,7 @@
                 "type": "object",
                 "properties": {
                   "source": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/plugins/items/anyOf/0"
+                    "type": "string"
                   },
                   "clients": {
                     "type": "array",
@@ -301,8 +298,7 @@
                         },
                         "required": [
                           "exclude"
-                        ],
-                        "additionalProperties": true
+                        ]
                       }
                     ]
                   },
@@ -323,7 +319,91 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/plugins/items/anyOf/1/properties/clients/items"
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "copilot",
+                  "codex",
+                  "pi",
+                  "omp",
+                  "cursor",
+                  "opencode",
+                  "gemini",
+                  "factory",
+                  "ampcode",
+                  "vscode",
+                  "openclaw",
+                  "windsurf",
+                  "cline",
+                  "continue",
+                  "roo",
+                  "kilo",
+                  "trae",
+                  "augment",
+                  "zencoder",
+                  "junie",
+                  "openhands",
+                  "kiro",
+                  "replit",
+                  "kimi",
+                  "universal",
+                  "aider-desk",
+                  "antigravity",
+                  "antigravity-cli",
+                  "autohand-code",
+                  "bob",
+                  "codearts-agent",
+                  "codebuddy",
+                  "codemaker",
+                  "codestudio",
+                  "command-code",
+                  "cortex",
+                  "crush",
+                  "deepagents",
+                  "devin",
+                  "dexto",
+                  "eve",
+                  "firebender",
+                  "forgecode",
+                  "fx",
+                  "goose",
+                  "grok",
+                  "hermes-agent",
+                  "iflow-cli",
+                  "jazz",
+                  "kimchi",
+                  "kode",
+                  "lingma",
+                  "minimax-code",
+                  "mistral-vibe",
+                  "moxby",
+                  "mux",
+                  "neovate",
+                  "ona",
+                  "posit-assistant",
+                  "qoder",
+                  "qoder-cn",
+                  "qwen-code",
+                  "reasonix",
+                  "rovodev",
+                  "sarvam-code",
+                  "tabnine-cli",
+                  "terramind",
+                  "trae-cn",
+                  "warp",
+                  "zed",
+                  "zcode",
+                  "zenflow",
+                  "pochi",
+                  "adal",
+                  "claude-code",
+                  "github-copilot",
+                  "gemini-cli",
+                  "droid",
+                  "amp",
+                  "kiro-cli",
+                  "kimi-code-cli"
+                ]
               },
               {
                 "type": "string",
@@ -420,18 +500,101 @@
                 "type": "object",
                 "properties": {
                   "name": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/plugins/items/anyOf/1/properties/clients/items"
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "copilot",
+                      "codex",
+                      "pi",
+                      "omp",
+                      "cursor",
+                      "opencode",
+                      "gemini",
+                      "factory",
+                      "ampcode",
+                      "vscode",
+                      "openclaw",
+                      "windsurf",
+                      "cline",
+                      "continue",
+                      "roo",
+                      "kilo",
+                      "trae",
+                      "augment",
+                      "zencoder",
+                      "junie",
+                      "openhands",
+                      "kiro",
+                      "replit",
+                      "kimi",
+                      "universal",
+                      "aider-desk",
+                      "antigravity",
+                      "antigravity-cli",
+                      "autohand-code",
+                      "bob",
+                      "codearts-agent",
+                      "codebuddy",
+                      "codemaker",
+                      "codestudio",
+                      "command-code",
+                      "cortex",
+                      "crush",
+                      "deepagents",
+                      "devin",
+                      "dexto",
+                      "eve",
+                      "firebender",
+                      "forgecode",
+                      "fx",
+                      "goose",
+                      "grok",
+                      "hermes-agent",
+                      "iflow-cli",
+                      "jazz",
+                      "kimchi",
+                      "kode",
+                      "lingma",
+                      "minimax-code",
+                      "mistral-vibe",
+                      "moxby",
+                      "mux",
+                      "neovate",
+                      "ona",
+                      "posit-assistant",
+                      "qoder",
+                      "qoder-cn",
+                      "qwen-code",
+                      "reasonix",
+                      "rovodev",
+                      "sarvam-code",
+                      "tabnine-cli",
+                      "terramind",
+                      "trae-cn",
+                      "warp",
+                      "zed",
+                      "zcode",
+                      "zenflow",
+                      "pochi",
+                      "adal",
+                      "claude-code",
+                      "github-copilot",
+                      "gemini-cli",
+                      "droid",
+                      "amp",
+                      "kiro-cli",
+                      "kimi-code-cli"
+                    ]
                   },
                   "install": {
+                    "default": "file",
                     "type": "string",
-                    "const": "file",
-                    "default": "file"
+                    "const": "file"
                   }
                 },
                 "required": [
                   "name"
-                ],
-                "additionalProperties": true
+                ]
               },
               {
                 "type": "object",
@@ -453,8 +616,7 @@
                 "required": [
                   "name",
                   "install"
-                ],
-                "additionalProperties": true
+                ]
               }
             ]
           }
@@ -465,8 +627,7 @@
             "output": {
               "type": "string"
             }
-          },
-          "additionalProperties": true
+          }
         },
         "syncMode": {
           "type": "string",
@@ -482,29 +643,35 @@
               "type": "array",
               "items": {
                 "type": "string"
-              },
-              "default": []
+              }
             },
             "servers": {
               "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
               "additionalProperties": {
                 "type": "object",
                 "properties": {
                   "proxy": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/mcpProxy/properties/clients"
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "required": [
                   "proxy"
-                ],
-                "additionalProperties": true
+                ]
               }
             }
-          },
-          "additionalProperties": true
+          }
         },
         "mcpServers": {
           "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
           "additionalProperties": {
             "anyOf": [
               {
@@ -521,12 +688,102 @@
                   },
                   "headers": {
                     "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
                     "additionalProperties": {
                       "type": "string"
                     }
                   },
                   "clients": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/plugins/items/anyOf/1/properties/clients"
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "claude",
+                        "copilot",
+                        "codex",
+                        "pi",
+                        "omp",
+                        "cursor",
+                        "opencode",
+                        "gemini",
+                        "factory",
+                        "ampcode",
+                        "vscode",
+                        "openclaw",
+                        "windsurf",
+                        "cline",
+                        "continue",
+                        "roo",
+                        "kilo",
+                        "trae",
+                        "augment",
+                        "zencoder",
+                        "junie",
+                        "openhands",
+                        "kiro",
+                        "replit",
+                        "kimi",
+                        "universal",
+                        "aider-desk",
+                        "antigravity",
+                        "antigravity-cli",
+                        "autohand-code",
+                        "bob",
+                        "codearts-agent",
+                        "codebuddy",
+                        "codemaker",
+                        "codestudio",
+                        "command-code",
+                        "cortex",
+                        "crush",
+                        "deepagents",
+                        "devin",
+                        "dexto",
+                        "eve",
+                        "firebender",
+                        "forgecode",
+                        "fx",
+                        "goose",
+                        "grok",
+                        "hermes-agent",
+                        "iflow-cli",
+                        "jazz",
+                        "kimchi",
+                        "kode",
+                        "lingma",
+                        "minimax-code",
+                        "mistral-vibe",
+                        "moxby",
+                        "mux",
+                        "neovate",
+                        "ona",
+                        "posit-assistant",
+                        "qoder",
+                        "qoder-cn",
+                        "qwen-code",
+                        "reasonix",
+                        "rovodev",
+                        "sarvam-code",
+                        "tabnine-cli",
+                        "terramind",
+                        "trae-cn",
+                        "warp",
+                        "zed",
+                        "zcode",
+                        "zenflow",
+                        "pochi",
+                        "adal",
+                        "claude-code",
+                        "github-copilot",
+                        "gemini-cli",
+                        "droid",
+                        "amp",
+                        "kiro-cli",
+                        "kimi-code-cli"
+                      ]
+                    }
                   }
                 },
                 "required": [
@@ -554,12 +811,102 @@
                   },
                   "env": {
                     "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
                     "additionalProperties": {
                       "type": "string"
                     }
                   },
                   "clients": {
-                    "$ref": "#/definitions/AllAgentsProjectWorkspace/properties/plugins/items/anyOf/1/properties/clients"
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "claude",
+                        "copilot",
+                        "codex",
+                        "pi",
+                        "omp",
+                        "cursor",
+                        "opencode",
+                        "gemini",
+                        "factory",
+                        "ampcode",
+                        "vscode",
+                        "openclaw",
+                        "windsurf",
+                        "cline",
+                        "continue",
+                        "roo",
+                        "kilo",
+                        "trae",
+                        "augment",
+                        "zencoder",
+                        "junie",
+                        "openhands",
+                        "kiro",
+                        "replit",
+                        "kimi",
+                        "universal",
+                        "aider-desk",
+                        "antigravity",
+                        "antigravity-cli",
+                        "autohand-code",
+                        "bob",
+                        "codearts-agent",
+                        "codebuddy",
+                        "codemaker",
+                        "codestudio",
+                        "command-code",
+                        "cortex",
+                        "crush",
+                        "deepagents",
+                        "devin",
+                        "dexto",
+                        "eve",
+                        "firebender",
+                        "forgecode",
+                        "fx",
+                        "goose",
+                        "grok",
+                        "hermes-agent",
+                        "iflow-cli",
+                        "jazz",
+                        "kimchi",
+                        "kode",
+                        "lingma",
+                        "minimax-code",
+                        "mistral-vibe",
+                        "moxby",
+                        "mux",
+                        "neovate",
+                        "ona",
+                        "posit-assistant",
+                        "qoder",
+                        "qoder-cn",
+                        "qwen-code",
+                        "reasonix",
+                        "rovodev",
+                        "sarvam-code",
+                        "tabnine-cli",
+                        "terramind",
+                        "trae-cn",
+                        "warp",
+                        "zed",
+                        "zcode",
+                        "zenflow",
+                        "pochi",
+                        "adal",
+                        "claude-code",
+                        "github-copilot",
+                        "gemini-cli",
+                        "droid",
+                        "amp",
+                        "kiro-cli",
+                        "kimi-code-cli"
+                      ]
+                    }
                   }
                 },
                 "required": [
@@ -590,8 +937,7 @@
         "repositories",
         "plugins",
         "clients"
-      ],
-      "additionalProperties": true
+      ]
     }
   }
 }

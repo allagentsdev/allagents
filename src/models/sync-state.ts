@@ -32,7 +32,7 @@ export const NativeStateResourceSchema = z.object({
   context: z.string().min(1),
   /** Display/materialization root, separate from the durable native identity. */
   root: z.string().min(1).optional(),
-  provenance: z.record(z.string()),
+  provenance: z.record(z.string(), z.string()),
   transition: z.enum([
     'managed',
     'referenced',
@@ -63,7 +63,7 @@ export const SyncStateSchema = z
   .object({
     version: z.literal(1),
     lastSync: z.string().default('1970-01-01T00:00:00.000Z'),
-    files: z.record(ClientTypeSchema, z.array(z.string())).default({}),
+    files: z.partialRecord(ClientTypeSchema, z.array(z.string())).default({}),
     // Project-scoped Codex hooks managed inside .codex/hooks.json. This stores
     // only the allagents-owned portion so sync can preserve user hooks.
     codexHooks: z
@@ -75,7 +75,9 @@ export const SyncStateSchema = z
     mcpServers: z.record(z.string(), z.array(z.string())).optional(),
     // Legacy native plugin tracking. Loaded for conservative migration only;
     // string identities never authorize cleanup on their own.
-    nativePlugins: z.record(ClientTypeSchema, z.array(z.string())).optional(),
+    nativePlugins: z
+      .partialRecord(ClientTypeSchema, z.array(z.string()))
+      .optional(),
     nativeResources: NativeResourceStateSchema.optional(),
     // Hash of last-written .code-workspace file content (for change detection)
     vscodeWorkspaceHash: z.string().optional(),

@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import {
   ProjectWorkspaceConfigSchema,
   UserWorkspaceConfigSchema,
@@ -16,6 +16,7 @@ const SCHEMA_ROOT = resolve(
   SCHEMA_VERSION,
 );
 const PUBLIC_ROOT = `https://allagents.dev/schemas/${SCHEMA_VERSION}`;
+const JSON_SCHEMA_DIALECT = 'http://json-schema.org/draft-07/schema#';
 
 const WORKSPACE_SCHEMAS = [
   {
@@ -45,19 +46,19 @@ export interface GeneratedWorkspaceSchema {
 
 export function generateWorkspaceSchemas(): readonly GeneratedWorkspaceSchema[] {
   return WORKSPACE_SCHEMAS.map((entry) => {
-    const generated = zodToJsonSchema(entry.schema, {
-      name: entry.definitionName,
-      target: 'jsonSchema7',
-      effectStrategy: 'input',
-      removeAdditionalStrategy: 'strict',
-    });
-    const { $schema, ...body } = generated;
+    const generated = z.toJSONSchema(entry.schema, {
+      target: 'draft-7',
+      io: 'input',
+      unrepresentable: 'any',
+    }) as Record<string, unknown>;
+    const { $schema: _dialect, ...definition } = generated;
     const document = {
-      $schema,
+      $schema: JSON_SCHEMA_DIALECT,
       $id: `${PUBLIC_ROOT}/${entry.fileName}`,
       title: entry.title,
       description: entry.description,
-      ...body,
+      $ref: `#/definitions/${entry.definitionName}`,
+      definitions: { [entry.definitionName]: definition },
     };
     return {
       fileName: entry.fileName,

@@ -4,6 +4,7 @@ import {
   ProfileDeclarationSchema,
 } from '../models/workspace-config.js';
 import { parseUserWorkspaceConfig } from '../utils/workspace-parser.js';
+import { flattenZodIssues } from '../utils/zod-issues.js';
 import {
   connectHttpMcpServer,
   type OAuthCallbackUrlReader,
@@ -74,7 +75,7 @@ async function validateProfileAddCandidate(
     },
   });
   if (!validation.success) {
-    const issues = validation.error.issues.map(
+    const issues = flattenZodIssues(validation.error).map(
       (issue) => `  - ${issue.path.join('.')}: ${issue.message}`,
     );
     throw new Error(`Invalid MCP server config:\n${issues.join('\n')}`);

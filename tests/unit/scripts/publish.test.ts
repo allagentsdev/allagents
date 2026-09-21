@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { PACKAGE_SIZE_BUDGETS } from '../../../scripts/check-package-size.js';
 
 const publishScript = join(import.meta.dir, '..', '..', '..', 'scripts', 'publish.ts');
 
@@ -216,20 +217,21 @@ describe('npm publishing', () => {
   });
 
   test('blocks publishing when the packed artifact exceeds its size budget', async () => {
+    const budget = PACKAGE_SIZE_BUDGETS.compressedTarball;
     const result = await runPublish({
       npmTag: 'latest',
       version: '1.14.0',
       distTags: { latest: '1.13.9' },
       packageSizes: {
         unpackedPackage: 1,
-        compressedTarball: 525_001,
+        compressedTarball: budget + 1,
       },
     });
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Package size budget exceeded');
     expect(result.stderr).toContain(
-      'compressed tarball: 525001 bytes (budget: 525000 bytes, over by 1 byte)',
+      `compressed tarball: ${budget + 1} bytes (budget: ${budget} bytes, over by 1 byte)`,
     );
     expect(result.calls.some(([command]) => command === 'view')).toBe(true);
     expect(result.calls.some(([command]) => command === 'pack')).toBe(true);

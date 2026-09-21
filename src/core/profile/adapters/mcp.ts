@@ -4,6 +4,7 @@ import {
   ProfileMcpServerConfigSchema,
   ProfileMcpServerNameSchema,
 } from '../../../models/workspace-config.js';
+import { flattenZodIssues } from '../../../utils/zod-issues.js';
 import type { ProfileSerializationInput } from '../types.js';
 
 const SENSITIVE_QUERY_KEY =
@@ -26,7 +27,7 @@ export function serializeProfileMcpServers(
       input.mcpServers[name],
     );
     if (!parsed.success) {
-      const issue = parsed.error.issues[0];
+      const issue = flattenZodIssues(parsed.error)[0];
       throw new Error(
         `Invalid profile MCP server '${name}': ${issue?.message ?? 'unsupported configuration'}`,
       );

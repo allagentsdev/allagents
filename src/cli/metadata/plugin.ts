@@ -176,7 +176,7 @@ export const pluginInstallMeta: AgentCommandMeta = {
   options: [
     { flag: '--scope', short: '-s', type: 'string', description: 'Installation scope: "project" (default) or "user"' },
     { flag: '--client', short: '-c', type: 'string', description: 'Comma-separated clients for this plugin' },
-    { flag: '--yes', short: '-y', type: 'boolean', description: 'Skip final install confirmation' },
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Run without prompts using configured or default scope and clients' },
     { flag: '--skill', type: 'string', description: 'Only enable a specific skill (repeatable)' },
   ],
   outputSchema: {

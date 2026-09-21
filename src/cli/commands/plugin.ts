@@ -1160,7 +1160,7 @@ const pluginInstallCmd = command({
     plugin: positional({ type: string, displayName: 'plugin' }),
     scope: option({ type: optional(string), long: 'scope', short: 's', description: 'Installation scope: "project" (default) or "user"' }),
     client: option({ type: optional(string), long: 'client', short: 'c', description: 'Comma-separated clients for this plugin' }),
-    yes: flag({ long: 'yes', short: 'y', description: 'Skip final install confirmation' }),
+    yes: flag({ long: 'yes', short: 'y', description: 'Run without prompts using configured or default scope and clients' }),
     skills: multioption({
       type: array(string),
       long: 'skill',

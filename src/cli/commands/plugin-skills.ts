@@ -1716,10 +1716,10 @@ async function discoverSkillsFromSource(
 /**
  * Skill-first interactive install for `skill add owner/repo` (source-auto).
  *
- * When connected to a TTY, discovers skills from the source and shows an
- * interactive picker with all skills pre-selected — the user can deselect any
- * they don't want before confirming. Falls back to install-all in non-TTY or
- * JSON mode.
+ * When connected to a TTY without `--yes`, discovers skills from the source
+ * and shows an interactive picker with all skills pre-selected — the user can
+ * deselect any they don't want before confirming. Falls back to install-all in
+ * non-TTY, JSON, or `--yes` mode.
  *
  * Direct repos (non-marketplace): autocompleteMultiselect — flat list.
  * Marketplace repos: groupMultiselect — skills grouped by plugin.
@@ -1744,7 +1744,7 @@ async function selectAndInstallSkillsFromSource(opts: {
   const isTTY = process.stdout.isTTY && process.stdin.isTTY;
 
   // Non-interactive path: install everything silently
-  if (!isTTY || isJsonMode()) {
+  if (!isTTY || isJsonMode() || targetContext?.options.yes) {
     return installAllSkillsFromSource(opts);
   }
 
@@ -2405,7 +2405,7 @@ const addCmd = command({
     yes: flag({
       long: 'yes',
       short: 'y',
-      description: 'Skip final install confirmation',
+      description: 'Run without prompts using configured or default scope and clients',
     }),
     plugin: option({
       type: optional(string),

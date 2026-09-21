@@ -241,7 +241,7 @@ export const skillsAddMeta: AgentCommandMeta = {
       flag: '--yes',
       short: '-y',
       type: 'boolean',
-      description: 'Skip final install confirmation',
+      description: 'Run without prompts using configured or default scope and clients',
     },
     {
       flag: '--plugin',

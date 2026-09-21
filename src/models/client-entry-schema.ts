@@ -71,20 +71,14 @@ const USER_NATIVE_CLIENT_INPUT_TYPES = [
 
 export const UserClientTypeSchema = z
   .enum(USER_CLIENT_INPUT_TYPES, {
-    errorMap: (issue, context) => {
-      if (
-        issue.code !== z.ZodIssueCode.invalid_enum_value ||
-        typeof issue.received !== 'string'
-      ) {
-        return { message: context.defaultError };
+    error: (issue) => {
+      if (issue.code !== 'invalid_value' || typeof issue.input !== 'string') {
+        return undefined;
       }
-      const canonical = canonicalizeClientId(issue.received);
-      return {
-        message:
-          canonical && !USER_CLIENT_TYPES.includes(canonical)
-            ? `Client '${issue.received}' does not support user scope`
-            : `Unknown client '${issue.received}'`,
-      };
+      const canonical = canonicalizeClientId(issue.input);
+      return canonical && !USER_CLIENT_TYPES.includes(canonical)
+        ? `Client '${issue.input}' does not support user scope`
+        : `Unknown client '${issue.input}'`;
     },
   })
   .transform(requireCanonicalClientId);

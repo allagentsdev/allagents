@@ -9,6 +9,7 @@ import {
 } from '../models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import { loadYaml } from './yaml.js';
+import { flattenZodIssues } from './zod-issues.js';
 
 const configName = `${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`;
 
@@ -30,7 +31,7 @@ function formatValidationError(
   const result = schema.safeParse(input);
   if (result.success) return result.data;
 
-  const errors = result.error.issues.map(
+  const errors = flattenZodIssues(result.error).map(
     (error) => `  - ${error.path.join('.')}: ${error.message}`,
   );
   throw new Error(`${path} validation failed:\n${errors.join('\n')}`);

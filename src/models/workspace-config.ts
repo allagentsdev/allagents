@@ -276,7 +276,7 @@ export const McpProxyServerSchema = z.object({
  */
 export const McpProxyConfigSchema = z.object({
   clients: ClientSelectorListSchema.default([]),
-  servers: z.record(McpProxyServerSchema).optional(),
+  servers: z.record(z.string(), McpProxyServerSchema).optional(),
 });
 
 export type McpProxyConfig = z.infer<typeof McpProxyConfigSchema>;
@@ -294,7 +294,7 @@ const McpHttpServerConfigSchema = z
   .object({
     type: z.enum(['http']).optional(),
     url: z.string(),
-    headers: z.record(z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
     clients: ClientTypeListSchema.optional(),
   })
   .strict();
@@ -304,7 +304,7 @@ const McpStdioServerConfigSchema = z
     type: z.enum(['stdio']).optional(),
     command: z.string(),
     args: z.array(z.string()).optional(),
-    env: z.record(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
     clients: ClientTypeListSchema.optional(),
   })
   .strict();
@@ -647,7 +647,7 @@ export const ProfileMcpServerConfigSchema = z.union([
     .object({
       type: z.enum(['http']).optional(),
       url: z.string(),
-      headers: z.record(ProfileSecretReferenceSchema).optional(),
+      headers: z.record(z.string(), ProfileSecretReferenceSchema).optional(),
       clients: z.array(UserClientTypeSchema).optional(),
     })
     .strict(),
@@ -656,7 +656,7 @@ export const ProfileMcpServerConfigSchema = z.union([
       type: z.enum(['stdio']).optional(),
       command: z.string(),
       args: ProfileMcpArgumentsSchema.optional(),
-      env: z.record(ProfileSecretReferenceSchema).optional(),
+      env: z.record(z.string(), ProfileSecretReferenceSchema).optional(),
       clients: z.array(UserClientTypeSchema).optional(),
     })
     .strict(),
@@ -846,7 +846,7 @@ const WorkspaceConfigBaseSchema = z.object({
    * servers during sync. Workspace-defined servers take precedence over
    * plugin-defined servers on name conflicts.
    */
-  mcpServers: z.record(McpServerConfigSchema).optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   /** @deprecated Use inline skills field on plugin entry instead. Will be removed in v3. */
   disabledSkills: z.array(z.string()).optional(),
   /** @deprecated Use inline skills field on plugin entry instead. Will be removed in v3. */
@@ -870,7 +870,7 @@ export const UserWorkspaceConfigSchema = WorkspaceConfigBaseSchema.extend({
   repositories: z.array(RepositorySchema).default([]),
   plugins: z.array(UserPluginEntrySchema).default([]),
   clients: UserClientEntryListSchema.default([]),
-  mcpServers: z.record(UserMcpServerConfigSchema).optional(),
+  mcpServers: z.record(z.string(), UserMcpServerConfigSchema).optional(),
   profiles: ProfilesSchema.optional(),
 });
 

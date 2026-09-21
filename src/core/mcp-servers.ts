@@ -28,6 +28,7 @@ import {
   validateProjectWorkspaceConfig,
   validateUserWorkspaceConfig,
 } from '../utils/workspace-parser.js';
+import { flattenZodIssues } from '../utils/zod-issues.js';
 import {
   ensureUserWorkspace,
   getUserWorkspaceConfigPath,
@@ -370,7 +371,7 @@ function validateServerConfig(
       ? ProfileMcpServerConfigSchema.safeParse(config)
       : McpServerConfigSchema.safeParse(config);
   if (!result.success) {
-    const issues = result.error.issues.map(
+    const issues = flattenZodIssues(result.error).map(
       (issue) => `  - ${issue.path.join('.')}: ${issue.message}`,
     );
     return {

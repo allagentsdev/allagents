@@ -118,7 +118,7 @@ const SanitizedErrorSchema = z
   );
 
 const SanitizedProvenanceSchema = z
-  .record(SanitizedStringSchema)
+  .record(z.string(), SanitizedStringSchema)
   .superRefine((record, context) => {
     for (const key of Object.keys(record)) {
       if (SENSITIVE_KEY.test(key)) {

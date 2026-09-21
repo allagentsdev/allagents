@@ -444,7 +444,9 @@ describe('plugin update e2e', () => {
     ]);
 
     expect(updateResult.exitCode).toBe(0);
-    expect(updateResult.stdout).not.toContain('Updating plugin:');
+    expect(updateResult.stdout).not.toContain(
+      'Updating demo@project-marketplace...',
+    );
     const payload = JSON.parse(updateResult.stdout);
     expect(payload.success).toBe(true);
     expect(payload.data.results).toEqual([
@@ -465,10 +467,25 @@ describe('plugin update e2e', () => {
     expect(redirectedResult.stderr).toBe('');
     expect(redirectedResult.stdout).toStartWith('Updating plugins...\n\n');
     expect(redirectedResult.stdout).not.toContain(
-      'Updating plugin: demo@project-marketplace...',
+      'Updating demo@project-marketplace...',
     );
     expect(redirectedResult.stdout.indexOf('✓ demo@project-marketplace')).toBeGreaterThan(
       redirectedResult.stdout.indexOf('Updating workspace...'),
+    );
+    const redirectedSpecificResult = runCli(
+      workspaceDir,
+      homeDir,
+      [
+        'plugin',
+        'update',
+        'demo@project-marketplace',
+        '--scope',
+        'project',
+      ],
+      { json: false },
+    );
+    expect(redirectedSpecificResult.stdout).toStartWith(
+      'Updating plugin: demo@project-marketplace...\n\n',
     );
   }, 15_000);
 
@@ -532,10 +549,10 @@ describe('plugin update e2e', () => {
       result.stdout
         .replaceAll('\r', '')
         .split('\n')
-        .filter((line) => line.startsWith('Updating plugin:')),
+        .filter((line) => line.startsWith('Updating uat/plugin-marketplace')),
     ).toEqual([
-      'Updating plugin: uat/plugin-marketplace (project)...',
-      'Updating plugin: uat/plugin-marketplace (user)...',
+      'Updating uat/plugin-marketplace (project)...',
+      'Updating uat/plugin-marketplace (user)...',
     ]);
   });
 
@@ -823,8 +840,7 @@ describe('plugin update e2e', () => {
       ]);
       const enteredPath = join(rootDir, 'plugin-update-entered');
       const releasePath = join(rootDir, 'plugin-update-release');
-      const sourceLine =
-        'Updating plugin: demo@remote-marketplace (project)...';
+      const sourceLine = 'Updating demo@remote-marketplace (project)...';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         workspaceDir,
@@ -849,18 +865,22 @@ describe('plugin update e2e', () => {
       );
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain('Updating workspace...');
+      expect(result.stdout).not.toContain(
+        'Plugin: demo@remote-marketplace',
+      );
       const lifecycleLines = result.stdout
         .replaceAll('\r', '')
         .split('\n')
         .filter(
           (line) =>
-            line.startsWith('Updating plugin: demo@remote-marketplace') ||
+            line.startsWith('Updating demo@remote-marketplace') ||
             line === '✓ demo@remote-marketplace (updated)',
         );
       expect(lifecycleLines).toEqual([
-        'Updating plugin: demo@remote-marketplace (project)...',
+        'Updating demo@remote-marketplace (project)...',
         '✓ demo@remote-marketplace (updated)',
-        'Updating plugin: demo@remote-marketplace (user)...',
+        'Updating demo@remote-marketplace (user)...',
         '✓ demo@remote-marketplace (updated)',
       ]);
       expect(result.stdout.lastIndexOf('Update complete:')).toBeGreaterThan(
@@ -871,7 +891,7 @@ describe('plugin update e2e', () => {
   );
 
   test(
-    're-announces a mixed declaration at its native and ordinary update boundaries',
+    'keeps one source status across mixed native and ordinary boundaries',
     async () => {
       const remote = createRemoteMarketplace(rootDir);
       const addResult = runCli(
@@ -936,7 +956,7 @@ describe('plugin update e2e', () => {
       const nativeRelease = join(rootDir, 'mixed-native-release');
       const gitEntered = join(rootDir, 'mixed-git-entered');
       const gitRelease = join(rootDir, 'mixed-git-release');
-      const sourceLine = 'Updating plugin: demo@remote-marketplace...';
+      const sourceLine = 'Updating demo@remote-marketplace...';
       const { beforeRelease, beforeNextRelease, result } =
         await runBlockedInteractiveCli(
           workspaceDir,
@@ -965,12 +985,12 @@ describe('plugin update e2e', () => {
           {
             enteredPath: gitEntered,
             releasePath: gitRelease,
-            sourceOccurrences: 2,
+            sourceOccurrences: 1,
           },
         );
 
       expect(beforeRelease.split(sourceLine)).toHaveLength(2);
-      expect(beforeNextRelease?.split(sourceLine)).toHaveLength(3);
+      expect(beforeNextRelease?.split(sourceLine)).toHaveLength(2);
       expect(beforeNextRelease).not.toContain(
         '✓ demo@remote-marketplace (updated)',
       );
@@ -986,7 +1006,6 @@ describe('plugin update e2e', () => {
               line === '✓ demo@remote-marketplace (updated)',
           ),
       ).toEqual([
-        sourceLine,
         sourceLine,
         '✓ demo@remote-marketplace (updated)',
       ]);
@@ -1023,7 +1042,7 @@ describe('plugin update e2e', () => {
       const wrapperDir = createBlockingClaudeWrapper(rootDir);
       const enteredPath = join(rootDir, 'native-update-entered');
       const releasePath = join(rootDir, 'native-update-release');
-      const sourceLine = 'Updating plugin: demo@project-marketplace...';
+      const sourceLine = 'Updating demo@project-marketplace...';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         workspaceDir,
@@ -1054,11 +1073,10 @@ describe('plugin update e2e', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout.split(sourceLine)).toHaveLength(2);
-      const nativeEffect = 'phase=update changed=true';
-      expect(result.stdout).toContain(nativeEffect);
-      expect(
-        result.stdout.indexOf('✓ demo@project-marketplace (updated)'),
-      ).toBeGreaterThan(result.stdout.indexOf(nativeEffect));
+      expect(result.stdout).not.toContain('phase=update');
+      expect(result.stdout).toContain(
+        '✓ demo@project-marketplace (updated)',
+      );
     },
     15_000,
   );

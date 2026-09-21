@@ -306,7 +306,6 @@ async function runUpdatePlugin(
 
     // Preserve the action-driven sync contract, including no-op updates and
     // later-invocation retries after a sync failure.
-    s.message('Updating...');
     if (scope === 'project' && context.workspacePath) {
       await syncWorkspace(context.workspacePath);
     } else {
@@ -545,7 +544,6 @@ async function runUpdateAllPluginsWithContext(
     (needsProjectSync && !standaloneSyncedScopes.has('project')) ||
     (needsUserSync && !standaloneSyncedScopes.has('user'))
   ) {
-    s.message('Updating...');
     if (
       needsProjectSync &&
       !standaloneSyncedScopes.has('project') &&

@@ -838,8 +838,7 @@ describe('skill update CLI e2e', () => {
       ]);
       const enteredPath = join(fixture.root, 'git-entered');
       const releasePath = join(fixture.root, 'git-release');
-      const sourceLine =
-        'Checking skills from source: uat/skill-update-e2e';
+      const sourceLine = 'Updating uat/skill-update-e2e...';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         fixture,
@@ -875,7 +874,7 @@ describe('skill update CLI e2e', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
     expect(result.stdout).not.toContain('Done:');
     const payload = JSON.parse(result.stdout);
     expect(payload.success).toBe(true);
@@ -906,7 +905,7 @@ describe('skill update CLI e2e', () => {
     );
 
     expect(result.exitCode).toBe(2);
-    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
     expect(result.stdout).toContain(
       'No enabled installed skill matched: missing',
     );
@@ -928,7 +927,8 @@ describe('skill update CLI e2e', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).toStartWith('Checking for skill updates…\n');
+    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
     expect(result.stdout).toContain(
       'Kept local copies and skipped updates for uat/skill-update-e2e',
     );
@@ -950,7 +950,7 @@ describe('skill update CLI e2e', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     const payload = JSON.parse(result.stdout);
-    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
     expect(payload.success).toBe(true);
     expect(payload.data.summary).toMatchObject({
       updated: 0,

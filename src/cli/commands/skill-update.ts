@@ -122,7 +122,9 @@ export const skillUpdateCmd = command({
         : 'user';
       const scopes = normalizeSkillUpdateScopes(selectedScope);
 
-      if (!jsonMode) console.log('Checking for skill updates…');
+      if (!jsonMode && !progressiveOutput) {
+        console.log('Checking for skill updates…');
+      }
       const inventory = await buildSkillUpdateInventory(workspacePath, scopes);
       const unmatched = findUnmatchedSkillUpdateFilters(
         inventory,
@@ -141,9 +143,7 @@ export const skillUpdateCmd = command({
           ...(skills.length > 0 && { filters: skills }),
           ...(progressiveOutput && {
             onUnitStart: (unit) =>
-              console.log(
-                `Checking skills from source: ${terminalSafe(unitDisplayName(unit))}`,
-              ),
+              console.log(`Updating ${terminalSafe(unitDisplayName(unit))}...`),
           }),
         },
         inventory,

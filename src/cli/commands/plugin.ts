@@ -101,11 +101,22 @@ import {
 } from '../tui/install-target-prompts.js';
 
 
+interface SyncDisplayOptions {
+  announceWorkspace?: boolean;
+  compactSuccess?: boolean;
+}
+
 /**
  * Run sync and print results. Returns true if sync succeeded.
  */
-async function runSyncAndPrint(options: SyncOptions = {}) {
-  if (!isJsonMode()) {
+async function runSyncAndPrint(
+  options: SyncOptions = {},
+  {
+    announceWorkspace = true,
+    compactSuccess = false,
+  }: SyncDisplayOptions = {},
+) {
+  if (!isJsonMode() && announceWorkspace) {
     console.log('\nUpdating workspace...\n');
   }
   const result = await syncWorkspace(process.cwd(), options);
@@ -115,8 +126,12 @@ async function runSyncAndPrint(options: SyncOptions = {}) {
   }
 
   const syncData = buildSyncData(result);
+  const ok = result.success && result.totalFailed === 0;
 
-  if (!isJsonMode()) {
+  if (
+    !isJsonMode() &&
+    (!compactSuccess || !ok || (result.warnings?.length ?? 0) > 0)
+  ) {
     for (const pluginResult of result.pluginResults) {
       console.log(formatPluginHeader(pluginResult));
 
@@ -181,13 +196,16 @@ async function runSyncAndPrint(options: SyncOptions = {}) {
     }
   }
 
-  return { ok: result.success && result.totalFailed === 0, syncData };
+  return { ok, syncData };
 }
 
 /**
  * Run user-scope sync and print results. Returns true if sync succeeded.
  */
-async function runUserSyncAndPrint(options: SyncOptions = {}) {
+async function runUserSyncAndPrint(
+  options: SyncOptions = {},
+  { compactSuccess = false }: SyncDisplayOptions = {},
+) {
   const result = await syncUserWorkspace(options);
 
   if (!result.success && result.error && !isJsonMode()) {
@@ -195,8 +213,12 @@ async function runUserSyncAndPrint(options: SyncOptions = {}) {
   }
 
   const syncData = buildSyncData(result);
+  const ok = result.success && result.totalFailed === 0;
 
-  if (!isJsonMode()) {
+  if (
+    !isJsonMode() &&
+    (!compactSuccess || !ok || (result.warnings?.length ?? 0) > 0)
+  ) {
     for (const pluginResult of result.pluginResults) {
       console.log(formatPluginHeader(pluginResult));
 
@@ -261,7 +283,7 @@ async function runUserSyncAndPrint(options: SyncOptions = {}) {
     }
   }
 
-  return { ok: result.success && result.totalFailed === 0, syncData };
+  return { ok, syncData };
 }
 
 
@@ -1690,35 +1712,31 @@ const pluginUpdateCmd = command({
             progressiveOutput && soleHeaderEntry
               ? declarationLabel(soleHeaderEntry)
               : plugin;
-          console.log(`Updating plugin: ${label}...`);
+          console.log(
+            `${progressiveOutput ? 'Updating' : 'Updating plugin:'} ${label}...`,
+          );
         } else {
           console.log('Updating plugins...');
         }
         console.log();
       };
       const announcedDeclarations = new Set<string>();
-      if (progressiveOutput) {
+      if (progressiveOutput && soleHeaderEntry) {
         printUpdateHeader();
-        if (soleHeaderEntry) {
-          announcedDeclarations.add(declarationKey(soleHeaderEntry));
-        }
+        announcedDeclarations.add(declarationKey(soleHeaderEntry));
       }
-      const announceDeclaration = (
-        entry: PluginUpdateEntry,
-        repeat = false,
-      ) => {
+      const announceDeclaration = (entry: PluginUpdateEntry) => {
         if (!progressiveOutput) return;
         const key = declarationKey(entry);
-        if (!repeat && announcedDeclarations.has(key)) return;
+        if (announcedDeclarations.has(key)) return;
         announcedDeclarations.add(key);
-        console.log(`Updating plugin: ${declarationLabel(entry)}...`);
+        console.log(`Updating ${declarationLabel(entry)}...`);
       };
 
       const nativeTargets = {
         project: [] as string[],
         user: [] as string[],
       };
-      const nativeDeclarations = new Set<string>();
       const nativeOnly = new Set<string>();
       for (const entry of toUpdate) {
         const config = configs[entry.scope];
@@ -1733,7 +1751,6 @@ const pluginUpdateCmd = command({
           entry.scope,
         ).plans[0];
         if ((plan?.nativeClients.length ?? 0) > 0) {
-          nativeDeclarations.add(declarationKey(entry));
           announceDeclaration(entry);
         }
         const preflightErrors = await preflightNativePluginDeclaration(
@@ -1797,10 +1814,7 @@ const pluginUpdateCmd = command({
             action: 'skipped',
           };
         } else {
-          announceDeclaration(
-            entry,
-            nativeDeclarations.has(declarationKey(entry)),
-          );
+          announceDeclaration(entry);
           result = await updatePlugin(
             pluginSpec,
             depsByScope[pluginScope],
@@ -1831,13 +1845,19 @@ const pluginUpdateCmd = command({
         targetsByScope.project.length > 0 &&
         (updatedScopes.has('project') || nativeTargets.project.length > 0)
       ) {
-        const { ok, syncData } = await runSyncAndPrint({
-          skipAgentFiles: true,
-          nativeSelection: {
-            mode: 'update',
-            targets: targetsByScope.project,
+        const { ok, syncData } = await runSyncAndPrint(
+          {
+            skipAgentFiles: true,
+            nativeSelection: {
+              mode: 'update',
+              targets: targetsByScope.project,
+            },
           },
-        });
+          {
+            announceWorkspace: !progressiveOutput,
+            compactSuccess: progressiveOutput,
+          },
+        );
         syncResults.project = syncData;
         if (!ok) syncOk = false;
         nativeEffects.project = syncData.nativeResources?.effects ?? [];
@@ -1846,13 +1866,16 @@ const pluginUpdateCmd = command({
         targetsByScope.user.length > 0 &&
         (updatedScopes.has('user') || nativeTargets.user.length > 0)
       ) {
-        const { ok, syncData } = await runUserSyncAndPrint({
-          skipAgentFiles: true,
-          nativeSelection: {
-            mode: 'update',
-            targets: targetsByScope.user,
+        const { ok, syncData } = await runUserSyncAndPrint(
+          {
+            skipAgentFiles: true,
+            nativeSelection: {
+              mode: 'update',
+              targets: targetsByScope.user,
+            },
           },
-        });
+          { compactSuccess: progressiveOutput },
+        );
         syncResults.user = syncData;
         if (!ok) syncOk = false;
         nativeEffects.user = syncData.nativeResources?.effects ?? [];

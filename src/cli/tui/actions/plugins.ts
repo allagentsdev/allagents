@@ -486,10 +486,30 @@ async function runUpdateAllPluginsWithContext(
   const standaloneSyncedScopes = new Set<SkillUpdateScope>();
   if (standalonePlan) {
     const prepared = { inventory, plan: standalonePlan };
+    const executionUnits = standalonePlan.units;
+    let currentExecutionUnitIndex = 0;
+    const firstExecutionUnit = executionUnits[currentExecutionUnitIndex];
+    if (firstExecutionUnit) {
+      s.message(
+        `Updating ${terminalSafe(unitDisplayName(firstExecutionUnit))}...`,
+      );
+    }
     const execution = await executePreparedSkillUpdate(
       prepared,
       resolveNonInteractiveSkillUpdateDecisions(standalonePlan),
       workspacePath,
+      {
+        onUnitResult: (result) => {
+          // Scope-sync failures are synthetic results, not standalone units.
+          const currentUnit = executionUnits[currentExecutionUnitIndex];
+          if (!currentUnit || result.id !== currentUnit.id) return;
+          currentExecutionUnitIndex++;
+          const nextUnit = executionUnits[currentExecutionUnitIndex];
+          if (nextUnit) {
+            s.message(`Updating ${terminalSafe(unitDisplayName(nextUnit))}...`);
+          }
+        },
+      },
     );
     const planById = new Map(
       standalonePlan.units.map((unit) => [unit.id, unit]),

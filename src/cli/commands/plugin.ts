@@ -1658,26 +1658,27 @@ const pluginUpdateCmd = command({
         console.log('No plugins to update.');
         return;
       }
-      const duplicateCrossScopeIdentities = new Set<string>();
+      const duplicateCrossScopeLabels = new Set<string>();
       if (progressiveOutput) {
-        const scopesByIdentity = new Map<
+        const scopesByLabel = new Map<
           string,
           Set<PluginUpdateEntry['scope']>
         >();
         for (const entry of toUpdate) {
-          const scopes = scopesByIdentity.get(entry.spec) ?? new Set();
+          const label = terminalSafe(formatPluginSource(entry.spec));
+          const scopes = scopesByLabel.get(label) ?? new Set();
           scopes.add(entry.scope);
-          scopesByIdentity.set(entry.spec, scopes);
+          scopesByLabel.set(label, scopes);
         }
-        for (const [identity, scopes] of scopesByIdentity) {
-          if (scopes.size > 1) duplicateCrossScopeIdentities.add(identity);
+        for (const [label, scopes] of scopesByLabel) {
+          if (scopes.size > 1) duplicateCrossScopeLabels.add(label);
         }
       }
       const declarationKey = (entry: PluginUpdateEntry) =>
         `${entry.scope}:${entry.spec}`;
       const declarationLabel = (entry: PluginUpdateEntry) => {
         const label = terminalSafe(formatPluginSource(entry.spec));
-        return duplicateCrossScopeIdentities.has(entry.spec)
+        return duplicateCrossScopeLabels.has(label)
           ? `${label} (${entry.scope})`
           : label;
       };
@@ -1702,19 +1703,22 @@ const pluginUpdateCmd = command({
           announcedDeclarations.add(declarationKey(soleHeaderEntry));
         }
       }
-      const announceDeclaration = (entry: PluginUpdateEntry) => {
+      const announceDeclaration = (
+        entry: PluginUpdateEntry,
+        repeat = false,
+      ) => {
         if (!progressiveOutput) return;
         const key = declarationKey(entry);
-        if (announcedDeclarations.has(key)) return;
+        if (!repeat && announcedDeclarations.has(key)) return;
         announcedDeclarations.add(key);
         console.log(`Updating plugin: ${declarationLabel(entry)}...`);
       };
-
 
       const nativeTargets = {
         project: [] as string[],
         user: [] as string[],
       };
+      const nativeDeclarations = new Set<string>();
       const nativeOnly = new Set<string>();
       for (const entry of toUpdate) {
         const config = configs[entry.scope];
@@ -1729,6 +1733,7 @@ const pluginUpdateCmd = command({
           entry.scope,
         ).plans[0];
         if ((plan?.nativeClients.length ?? 0) > 0) {
+          nativeDeclarations.add(declarationKey(entry));
           announceDeclaration(entry);
         }
         const preflightErrors = await preflightNativePluginDeclaration(
@@ -1792,7 +1797,10 @@ const pluginUpdateCmd = command({
             action: 'skipped',
           };
         } else {
-          announceDeclaration(entry);
+          announceDeclaration(
+            entry,
+            nativeDeclarations.has(declarationKey(entry)),
+          );
           result = await updatePlugin(
             pluginSpec,
             depsByScope[pluginScope],
@@ -1803,7 +1811,6 @@ const pluginUpdateCmd = command({
         if (result.action === 'updated') updatedScopes.add(pluginScope);
         results.push(result);
       }
-
 
       // Sync each affected scope independently. Native mutation is constrained
       // to the declarations named by this invocation.

@@ -28,6 +28,8 @@ const { runBrowseMarketplaces, runPlugins, runUpdateAllPlugins } = await import(
 
 const SOURCE =
   'https://github.com/mattpocock/skills/tree/main/skills/engineering/setup-matt-pocock-skills';
+const SECOND_SOURCE =
+  'https://github.com/acme/skills/tree/main/skills/second-skill';
 const EMPTY_SOURCE =
   'https://github.com/mattpocock/skills/tree/main/skills/empty';
 const GENERIC_SOURCE = 'https://github.com/example/plugins';
@@ -35,6 +37,7 @@ const SKILL_ROOT = 'skills/engineering/setup-matt-pocock-skills';
 const SKILL_PATH = `${SKILL_ROOT}/SKILL.md`;
 const SKILL_AGENT_PATH = `${SKILL_ROOT}/agents/openai.yaml`;
 const EMPTY_SKILL_PATH = 'skills/empty/SKILL.md';
+const SECOND_SKILL_PATH = 'skills/second-skill/SKILL.md';
 const GENERIC_SKILL_PATH = 'skills/generic/SKILL.md';
 const originalEnvironment = {
   ALLAGENTS_TEST_HOME: process.env.ALLAGENTS_TEST_HOME,
@@ -113,9 +116,17 @@ async function removeRemotePath(
 }
 
 async function createUpdateFixture(
-  options: { includeGeneric?: boolean; includeEmptyConsumer?: boolean } = {},
+  options: {
+    includeGeneric?: boolean;
+    includeEmptyConsumer?: boolean;
+    includeSecondStandalone?: boolean;
+  } = {},
 ) {
-  const { includeGeneric = true, includeEmptyConsumer = false } = options;
+  const {
+    includeGeneric = true,
+    includeEmptyConsumer = false,
+    includeSecondStandalone = false,
+  } = options;
   const root = await mkdtemp(join(tmpdir(), 'allagents-tui-skill-update-'));
   const home = join(root, 'home');
   const workspace = join(root, 'workspace');
@@ -135,10 +146,20 @@ async function createUpdateFixture(
     [GENERIC_SKILL_PATH]:
       '---\nname: generic\ndescription: generic skill\n---\n# generic v1\n',
   });
+  const secondSkillRepository = includeSecondStandalone
+    ? await createRemote(root, 'second-skills', {
+        [SECOND_SKILL_PATH]:
+          '---\nname: second-skill\ndescription: second test skill\n---\n# second standalone v1\n',
+      })
+    : undefined;
 
   await writeFile(
     gitConfig,
-    `[url "file://${skillRepository.remote}"]\n\tinsteadOf = https://github.com/mattpocock/skills.git\n[url "file://${genericRepository.remote}"]\n\tinsteadOf = https://github.com/example/plugins.git\n`,
+    `[url "file://${skillRepository.remote}"]\n\tinsteadOf = https://github.com/mattpocock/skills.git\n[url "file://${genericRepository.remote}"]\n\tinsteadOf = https://github.com/example/plugins.git\n${
+      secondSkillRepository
+        ? `[url "file://${secondSkillRepository.remote}"]\n\tinsteadOf = https://github.com/acme/skills.git\n`
+        : ''
+    }`,
   );
   process.env.ALLAGENTS_TEST_HOME = home;
   process.env.HOME = home;
@@ -162,11 +183,23 @@ async function createUpdateFixture(
     'https://github.com/example/plugins.git',
     genericCache,
   ]);
+  if (secondSkillRepository) {
+    const secondCache = getPluginCachePath('acme', 'skills', 'main');
+    await mkdir(dirname(secondCache), { recursive: true });
+    runGit(root, [
+      'clone',
+      '--branch',
+      'main',
+      'https://github.com/acme/skills.git',
+      secondCache,
+    ]);
+  }
 
   const plugins: Array<string | { source: string; skills: string[] }> = [
     SOURCE,
   ];
   if (includeGeneric) plugins.push(GENERIC_SOURCE);
+  if (includeSecondStandalone) plugins.push(SECOND_SOURCE);
   if (includeEmptyConsumer) {
     plugins.push({ source: EMPTY_SOURCE, skills: [] });
   }
@@ -188,6 +221,7 @@ async function createUpdateFixture(
     genericCache,
     skillRepository,
     gitConfig,
+    secondSkillRepository,
     genericRepository,
     context: {
       hasWorkspace: true,
@@ -273,6 +307,7 @@ describe('interactive plugin updates', () => {
           ['Updating 2 plugin(s)...'],
           ['Updating setup-matt-pocock-skills...'],
           ['Updating example/plugins...'],
+          ['Updating setup-matt-pocock-skills...'],
         ]);
         expect(spinnerStopMock).toHaveBeenCalledTimes(1);
         expect(spinnerStopMock).toHaveBeenCalledWith('Update complete');
@@ -309,6 +344,62 @@ describe('interactive plugin updates', () => {
             'utf-8',
           ),
         ).toContain('# generic v2');
+      } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  test(
+    'advances past a retained standalone unit after refreshing a generic source',
+    async () => {
+      const fixture = await createUpdateFixture({
+        includeSecondStandalone: true,
+      });
+      try {
+        await removeRemotePath(
+          fixture.skillRepository.upstream,
+          SKILL_PATH,
+          'v2',
+        );
+        const secondSkillRepository = fixture.secondSkillRepository;
+        if (!secondSkillRepository) {
+          throw new Error('Second standalone fixture was not created');
+        }
+        await advanceRemote(
+          secondSkillRepository.upstream,
+          SECOND_SKILL_PATH,
+          '---\nname: second-skill\ndescription: second test skill\n---\n# second standalone v2\n',
+          'v2',
+        );
+        await advanceRemote(
+          fixture.genericRepository.upstream,
+          GENERIC_SKILL_PATH,
+          '---\nname: generic\ndescription: generic skill\n---\n# generic v2\n',
+          'v2',
+        );
+
+        await runUpdateAllPlugins(fixture.context);
+
+        expect(spinnerStartMock).toHaveBeenCalledTimes(1);
+        expect(spinnerStartMock).toHaveBeenCalledWith('Gathering plugins...');
+        expect(spinnerMessageMock.mock.calls).toEqual([
+          ['Updating 3 plugin(s)...'],
+          ['Updating setup-matt-pocock-skills...'],
+          ['Updating second-skill...'],
+          ['Updating example/plugins...'],
+          ['Updating setup-matt-pocock-skills...'],
+          ['Updating second-skill...'],
+        ]);
+        expect(spinnerStopMock).toHaveBeenCalledTimes(1);
+        expect(spinnerStopMock).toHaveBeenCalledWith('Update complete');
+        expect(spinnerErrorMock).not.toHaveBeenCalled();
+        expect(noteMock).toHaveBeenCalledTimes(1);
+        expect(noteMock).toHaveBeenCalledWith(
+          `✓ ${GENERIC_SOURCE} (updated)\n- setup-matt-pocock-skills (skipped)\n✓ second-skill (updated)\n\nUpdated: 2  Skipped: 1  Failed: 0`,
+          'Update Results',
+        );
       } finally {
         await rm(fixture.root, { recursive: true, force: true });
       }

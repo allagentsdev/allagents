@@ -474,6 +474,16 @@ function impact(
     source: installation.rawSource,
   };
 }
+function notifyObserver<T>(
+  observer: ((value: T) => void) | undefined,
+  value: T,
+): void {
+  try {
+    observer?.(value);
+  } catch {
+    // Progress observers cannot affect the domain outcome they observe.
+  }
+}
 
 /**
  * Inspect every selected physical unit without mutating persistent state.
@@ -498,7 +508,7 @@ export async function buildSkillUpdatePreflight(
 
   const units: SkillUpdateUnit[] = [];
   for (const unit of physicalUnits) {
-    deps.onUnitStart?.(unit);
+    notifyObserver(deps.onUnitStart, unit);
     const nodeIds = new Set(unit.nodes.map((node) => node.id));
     const sharedFailures = (input.failures ?? []).filter((failure) =>
       failure.nodeIds.some((nodeId) => nodeIds.has(nodeId)),
@@ -674,7 +684,7 @@ export async function executeSkillUpdatePlan(
 ): Promise<SkillUpdateExecutionResult> {
   if (Object.values(decisions).includes('cancel')) {
     const units = plan.units.map((unit) => execution(unit, 'cancelled'));
-    for (const unit of units) deps.onUnitResult?.(unit);
+    for (const unit of units) notifyObserver(deps.onUnitResult, unit);
     return {
       success: false,
       cancelled: true,
@@ -687,7 +697,7 @@ export async function executeSkillUpdatePlan(
   const scopesToSync = new Set<SkillUpdateScope>();
   const record = (result: SkillUpdateUnitExecution): void => {
     results.push(result);
-    deps.onUnitResult?.(result);
+    notifyObserver(deps.onUnitResult, result);
   };
 
   for (const unit of plan.units) {

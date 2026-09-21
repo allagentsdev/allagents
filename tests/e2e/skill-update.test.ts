@@ -862,6 +862,31 @@ describe('skill update CLI e2e', () => {
     15_000,
   );
 
+  test('keeps pseudo-TTY JSON output to one document without lifecycle text', async () => {
+    const fixture = await createFixture();
+    fixtures.push(fixture);
+
+    const result = await runInteractiveCli(
+      fixture,
+      ['--json', 'skill', 'update', '--scope', 'project', '--yes'],
+      '',
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Done:');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.success).toBe(true);
+    expect(payload.data.summary).toMatchObject({
+      updated: 0,
+      removed: 0,
+      retained: 1,
+      skipped: 1,
+      failed: 0,
+    });
+  });
+
   test('rejects unmatched filters before remote preflight or source output', async () => {
     const fixture = await createFixture();
     fixtures.push(fixture);

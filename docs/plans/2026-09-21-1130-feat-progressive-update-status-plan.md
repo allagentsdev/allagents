@@ -86,7 +86,7 @@ The RED behavior is confirmed by the reported transcript and current orchestrati
 - KTD2. **Keep progress local.** The plugin command already owns its source loop. Skill core receives only narrow optional callbacks for the two boundaries the command cannot otherwise observe: source preflight start and typed result availability.
 - KTD3. **Keep current results authoritative.** Progress does not create outcomes. It renders the same result objects the command already uses for counts, JSON, summaries, and exit status.
 - KTD4. **Validate skill filters before remote progress.** Build inventory first, reject unmatched filters, then begin preflight so usage errors do not leave dangling source lines.
-- KTD5. **Reuse the TUI's existing spinner.** The TUI is a separate caller and will not inherit CLI console lines. Update its current spinner message at the same source boundaries; do not print append-only rows while the spinner is active or change the final note.
+- KTD5. **Reuse the TUI's existing spinner.** The TUI is a separate caller and will not inherit CLI console lines. Update its current spinner message at the same source boundaries; do not print, open another prompt, or render the final note while the spinner is active.
 
 ### High-Level Flow
 
@@ -179,13 +179,15 @@ The interactive TUI's Plugins → Update all action already owns one Clack spinn
   1. Before each generic plugin update, change the existing spinner message to identify that plugin.
   2. Supply U1's narrow skill-source start callback during standalone-skill preflight and use it to change the same spinner message.
   3. Keep the spinner active through current work, stop it once, and preserve the existing `Update Results` note and cache invalidation.
-  4. Document that direct CLI commands use append-only lines while the TUI updates its existing spinner message. JSON and redirected output remain one-shot.
-  5. Add an Unreleased changelog entry.
-  6. After automated coverage is green, use `agent-tui` with delayed local sources to navigate Plugins → Update all and verify message changes, keyboard flow, one spinner stop, and the final results note.
+  4. On an unexpected throw, end the spinner with its error state before the existing outer handler renders the error note.
+  5. Document that direct CLI commands use append-only lines while the TUI updates its existing spinner message. JSON and redirected output remain one-shot.
+  6. Add an Unreleased changelog entry.
+  7. After automated coverage is green, use `agent-tui` with delayed local sources to navigate Plugins → Update all and verify message changes, keyboard flow after completion, one spinner stop, and the final results note.
 - **Test scenarios:**
   - Generic plugin updates change the spinner message in existing update order.
   - Standalone skill preflight changes the spinner message through the shared narrow callback.
   - Mixed generic and standalone updates retain the existing final result note, counts, cache effects, and sync behavior.
+  - An unexpected thrown update ends the spinner before the error note renders.
 - **Verification:** `agent-tui` observes the current source before the delayed operation is released and the unchanged final note after completion.
 
 ---

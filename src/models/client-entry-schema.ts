@@ -2,7 +2,9 @@ import { z } from 'zod';
 import {
   CLIENT_ALIASES,
   CLIENT_TYPES,
+  PROJECT_NATIVE_CLIENT_TYPES,
   USER_CLIENT_TYPES,
+  USER_NATIVE_CLIENT_TYPES,
   canonicalizeClientId,
   type CanonicalClientId,
 } from './client-mapping.js';
@@ -34,13 +36,37 @@ export const ClientTypeSchema = z
   .enum(CLIENT_INPUT_TYPES)
   .transform(requireCanonicalClientId);
 
-const USER_CLIENT_ALIAS_TYPES = CLIENT_ALIAS_TYPES.filter((alias) =>
-  USER_CLIENT_TYPES.includes(CLIENT_ALIASES[alias]),
-) as [keyof typeof CLIENT_ALIASES, ...(keyof typeof CLIENT_ALIASES)[]];
+function aliasesForClients(
+  clients: readonly CanonicalClientId[],
+): (keyof typeof CLIENT_ALIASES)[] {
+  return CLIENT_ALIAS_TYPES.filter((alias) =>
+    clients.includes(CLIENT_ALIASES[alias]),
+  );
+}
+
+const USER_CLIENT_ALIAS_TYPES = aliasesForClients(USER_CLIENT_TYPES) as [
+  keyof typeof CLIENT_ALIASES,
+  ...(keyof typeof CLIENT_ALIASES)[],
+];
 
 const USER_CLIENT_INPUT_TYPES = [
   ...USER_CLIENT_TYPES,
   ...USER_CLIENT_ALIAS_TYPES,
+] as const;
+
+const PROJECT_NATIVE_CLIENT_ALIAS_TYPES = aliasesForClients(
+  PROJECT_NATIVE_CLIENT_TYPES,
+);
+const PROJECT_NATIVE_CLIENT_INPUT_TYPES = [
+  ...PROJECT_NATIVE_CLIENT_TYPES,
+  ...PROJECT_NATIVE_CLIENT_ALIAS_TYPES,
+] as const;
+const USER_NATIVE_CLIENT_ALIAS_TYPES = aliasesForClients(
+  USER_NATIVE_CLIENT_TYPES,
+);
+const USER_NATIVE_CLIENT_INPUT_TYPES = [
+  ...USER_NATIVE_CLIENT_TYPES,
+  ...USER_NATIVE_CLIENT_ALIAS_TYPES,
 ] as const;
 
 export const UserClientTypeSchema = z
@@ -87,14 +113,25 @@ export const UserClientTypeListSchema = z
 export const InstallModeSchema = z.enum(['file', 'native']);
 export type InstallMode = z.infer<typeof InstallModeSchema>;
 
-const CLIENT_INSTALL_SHORTHANDS = CLIENT_INPUT_TYPES.flatMap((client) =>
-  InstallModeSchema.options.map((install) => `${client}:${install}` as const),
-) as [string, ...string[]];
+function installShorthandsFor(
+  clients: readonly string[],
+  nativeClients: readonly string[],
+): [string, ...string[]] {
+  return [
+    ...clients.map((client) => `${client}:file` as const),
+    ...nativeClients.map((client) => `${client}:native` as const),
+  ] as [string, ...string[]];
+}
 
-const USER_CLIENT_INSTALL_SHORTHANDS = USER_CLIENT_INPUT_TYPES.flatMap(
-  (client) =>
-    InstallModeSchema.options.map((install) => `${client}:${install}` as const),
-) as [string, ...string[]];
+const CLIENT_INSTALL_SHORTHANDS = installShorthandsFor(
+  CLIENT_INPUT_TYPES,
+  PROJECT_NATIVE_CLIENT_INPUT_TYPES,
+);
+
+const USER_CLIENT_INSTALL_SHORTHANDS = installShorthandsFor(
+  USER_CLIENT_INPUT_TYPES,
+  USER_NATIVE_CLIENT_INPUT_TYPES,
+);
 
 function parseInstallShorthand(value: string): {
   name: ClientType;
@@ -115,12 +152,23 @@ const UserClientInstallShorthandSchema = z
   .enum(USER_CLIENT_INSTALL_SHORTHANDS)
   .transform(parseInstallShorthand);
 
+const ProjectNativeClientTypeSchema = z
+  .enum(PROJECT_NATIVE_CLIENT_INPUT_TYPES)
+  .transform(requireCanonicalClientId);
+const UserNativeClientTypeSchema = z
+  .enum(USER_NATIVE_CLIENT_INPUT_TYPES)
+  .transform(requireCanonicalClientId);
+
 export const ClientEntrySchema = z.union([
   ClientTypeSchema,
   ClientInstallShorthandSchema,
   z.object({
     name: ClientTypeSchema,
-    install: InstallModeSchema.default('file'),
+    install: z.literal('file').default('file'),
+  }),
+  z.object({
+    name: ProjectNativeClientTypeSchema,
+    install: z.literal('native'),
   }),
 ]);
 
@@ -129,7 +177,11 @@ const UserClientEntrySchema = z.union([
   UserClientInstallShorthandSchema,
   z.object({
     name: UserClientTypeSchema,
-    install: InstallModeSchema.default('file'),
+    install: z.literal('file').default('file'),
+  }),
+  z.object({
+    name: UserNativeClientTypeSchema,
+    install: z.literal('native'),
   }),
 ]);
 

@@ -196,6 +196,73 @@ describe('ClientEntrySchema', () => {
     it('rejects uppercase (case-sensitive)', () => {
       expect(() => ClientEntrySchema.parse('CLAUDE:NATIVE')).toThrow();
     });
+
+    it('accepts the complete project native client and alias set', () => {
+      for (const { input, canonical } of [
+        { input: 'claude', canonical: 'claude' },
+        { input: 'pi', canonical: 'pi' },
+        { input: 'omp', canonical: 'omp' },
+        { input: 'claude-code', canonical: 'claude' },
+      ] as const) {
+        const expected = { name: canonical, install: 'native' };
+        expect(ClientEntrySchema.parse(`${input}:native`)).toEqual(expected);
+        expect(
+          ClientEntrySchema.parse({ name: input, install: 'native' }),
+        ).toEqual(expected);
+      }
+    });
+
+    it('accepts the complete user native client and alias set', () => {
+      for (const { input, canonical } of [
+        { input: 'claude', canonical: 'claude' },
+        { input: 'copilot', canonical: 'copilot' },
+        { input: 'codex', canonical: 'codex' },
+        { input: 'pi', canonical: 'pi' },
+        { input: 'omp', canonical: 'omp' },
+        { input: 'claude-code', canonical: 'claude' },
+        { input: 'github-copilot', canonical: 'copilot' },
+      ] as const) {
+        for (const entry of [
+          `${input}:native`,
+          { name: input, install: 'native' },
+        ]) {
+          expect(
+            UserWorkspaceConfigSchema.parse({
+              repositories: [],
+              plugins: [],
+              clients: [entry],
+            }).clients,
+          ).toEqual([{ name: canonical, install: 'native' }]);
+        }
+      }
+    });
+
+    it('rejects native mode outside each scope capability set', () => {
+      for (const input of [
+        'copilot',
+        'codex',
+        'github-copilot',
+        'cursor',
+      ]) {
+        expect(() => ClientEntrySchema.parse(`${input}:native`)).toThrow();
+        expect(() =>
+          ClientEntrySchema.parse({ name: input, install: 'native' }),
+        ).toThrow();
+      }
+
+      for (const entry of [
+        'cursor:native',
+        { name: 'cursor', install: 'native' },
+      ]) {
+        expect(() =>
+          UserWorkspaceConfigSchema.parse({
+            repositories: [],
+            plugins: [],
+            clients: [entry],
+          }),
+        ).toThrow();
+      }
+    });
   });
 
   describe('full WorkspaceConfigSchema with mixed client formats', () => {

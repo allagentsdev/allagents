@@ -1,28 +1,24 @@
 import { describe, expect, test } from 'bun:test';
-import { PiNativeClient } from '../../../../src/core/native/pi.js';
-import { OmpNativeClient } from '../../../../src/core/native/omp.js';
+import { CodexNativeClient } from '../../../../src/core/native/codex.js';
 import { getNativeClient } from '../../../../src/core/native/registry.js';
+import { AGENT_HOSTS } from '../../../../src/models/client-mapping.js';
 
 describe('native registry', () => {
-  test('registers Pi through the shared native client interface', () => {
-    const client = getNativeClient('pi');
+  test('matches every declared native scope capability', () => {
+    for (const host of AGENT_HOSTS) {
+      const client = getNativeClient(host.id);
+      expect(client !== null).toBe(host.native !== undefined);
+      if (!client) continue;
 
-    expect(client).toBeInstanceOf(PiNativeClient);
-    expect(client?.client).toBe('pi');
-    expect(client?.supportsScope('user')).toBe(true);
-    expect(client?.supportsScope('project')).toBe(true);
+      expect(client.client).toBe(host.id);
+      expect(client.supportsScope('project')).toBe(
+        host.native?.project === true,
+      );
+      expect(client.supportsScope('user')).toBe(host.native?.user === true);
+    }
   });
 
-  test('registers OMP through the shared native client interface', () => {
-    const client = getNativeClient('omp');
-
-    expect(client).toBeInstanceOf(OmpNativeClient);
-    expect(client?.client).toBe('omp');
-    expect(client?.supportsScope('user')).toBe(true);
-    expect(client?.supportsScope('project')).toBe(true);
-  });
-
-  test('does not register clients without native lifecycle support', () => {
-    expect(getNativeClient('cursor')).toBeNull();
+  test('registers Codex through its native implementation', () => {
+    expect(getNativeClient('codex')).toBeInstanceOf(CodexNativeClient);
   });
 });

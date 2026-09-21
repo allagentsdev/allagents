@@ -57,6 +57,12 @@ profiles:
         env:
           REVIEW_TOKEN: \${REVIEW_TOKEN}
 `);
+    const userWithNativeClients = parsedYaml(`
+clients:
+  - codex:native
+  - name: github-copilot
+    install: native
+`);
     const projectWorkspace = parsedYaml(`
 repositories: []
 plugins:
@@ -65,6 +71,12 @@ plugins:
 clients:
   - name: claude
     install: native
+`);
+    const projectWithNativeAlias = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - claude-code:native
 `);
     const projectWithProfiles = parsedYaml(`
 repositories: []
@@ -86,6 +98,23 @@ profiles:
     const userWithInvalidClientShorthand = parsedYaml(`
 clients:
   - claude:bogus
+`);
+    const projectWithUnsupportedNativeClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - cursor:native
+`);
+    const projectWithUserOnlyNativeClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - codex:native
+`);
+    const userWithUnsupportedNativeClient = parsedYaml(`
+clients:
+  - name: cursor
+    install: native
 `);
     const userWithInvalidProfileName = parsedYaml(`
 profiles:
@@ -123,9 +152,17 @@ mcpServers:
     expect(UserWorkspaceConfigSchema.safeParse(userWorkspace).success).toBe(
       true,
     );
+    expect(validateUser(userWithNativeClients)).toBe(true);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithNativeClients).success,
+    ).toBe(true);
     expect(validateProject(projectWorkspace)).toBe(true);
     expect(
       ProjectWorkspaceConfigSchema.safeParse(projectWorkspace).success,
+    ).toBe(true);
+    expect(validateProject(projectWithNativeAlias)).toBe(true);
+    expect(
+      ProjectWorkspaceConfigSchema.safeParse(projectWithNativeAlias).success,
     ).toBe(true);
     expect(validateProject(projectWithProfiles)).toBe(false);
     expect(
@@ -138,6 +175,20 @@ mcpServers:
     expect(validateUser(userWithInvalidClientShorthand)).toBe(false);
     expect(
       UserWorkspaceConfigSchema.safeParse(userWithInvalidClientShorthand)
+        .success,
+    ).toBe(false);
+    for (const invalid of [
+      projectWithUnsupportedNativeClient,
+      projectWithUserOnlyNativeClient,
+    ]) {
+      expect(validateProject(invalid)).toBe(false);
+      expect(ProjectWorkspaceConfigSchema.safeParse(invalid).success).toBe(
+        false,
+      );
+    }
+    expect(validateUser(userWithUnsupportedNativeClient)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithUnsupportedNativeClient)
         .success,
     ).toBe(false);
     expect(validateUser(userWithInvalidProfileName)).toBe(false);

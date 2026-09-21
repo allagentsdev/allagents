@@ -4,10 +4,12 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  buildPluginSyncPlans,
   nativeContextIdentity,
   nativeIdentityMatches,
   syncWorkspace,
 } from '../../../src/core/sync.js';
+import { UserWorkspaceConfigSchema } from '../../../src/models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 
 async function createPlugin(baseDir: string, name: string, skillName: string): Promise<string> {
@@ -104,6 +106,26 @@ describe('syncWorkspace — install mode', () => {
     expect(result.success).toBe(false);
     expect(existsSync(join(testDir, '.claude', 'skills', 'test-skill'))).toBe(false);
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill'))).toBe(false);
+  });
+
+  it('plans Codex native installation through the ordinary user sync path', () => {
+    const config = UserWorkspaceConfigSchema.parse({
+      repositories: [],
+      plugins: [],
+      clients: ['codex:native'],
+    });
+    const result = buildPluginSyncPlans(
+      [{ source: 'demo@tools' }],
+      config.clients,
+      'user',
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]).toMatchObject({
+      clients: [],
+      nativeClients: ['codex'],
+    });
   });
 });
 

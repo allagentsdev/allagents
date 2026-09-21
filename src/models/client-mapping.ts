@@ -27,6 +27,7 @@ export interface AgentHost {
   project: ClientMapping;
   user?: ClientMapping;
   mcp?: ScopeCapability;
+  native?: ScopeCapability;
 }
 
 function skillsOnlyHost<const Id extends string>(
@@ -73,6 +74,7 @@ const AGENT_HOST_DEFINITIONS = [
       hooksPath: '.claude/hooks/',
     },
     mcp: { project: true, user: true },
+    native: { project: true, user: true },
   },
   {
     id: 'copilot',
@@ -92,6 +94,7 @@ const AGENT_HOST_DEFINITIONS = [
       githubPath: '.copilot/',
     },
     mcp: { project: true, user: true },
+    native: { user: true },
   },
   {
     id: 'codex',
@@ -99,6 +102,7 @@ const AGENT_HOST_DEFINITIONS = [
     project: { skillsPath: '.codex/skills/', agentFile: 'AGENTS.md' },
     user: { skillsPath: '.codex/skills/', agentFile: 'AGENTS.md' },
     mcp: { project: true, user: true },
+    native: { user: true },
   },
   {
     id: 'pi',
@@ -108,6 +112,7 @@ const AGENT_HOST_DEFINITIONS = [
       skillsPath: '.pi/agent/skills/',
       agentFile: '.pi/agent/AGENTS.md',
     },
+    native: { project: true, user: true },
   },
   {
     id: 'omp',
@@ -122,6 +127,7 @@ const AGENT_HOST_DEFINITIONS = [
       hooksPath: '.omp/agent/hooks/',
       agentFile: '.omp/agent/AGENTS.md',
     },
+    native: { project: true, user: true },
   },
   {
     id: 'cursor',
@@ -370,6 +376,14 @@ export const CLIENT_TYPES = AGENT_HOSTS.map(
 
 export const USER_CLIENT_TYPES = AGENT_HOSTS
   .filter((host) => host.user !== undefined)
+  .map((host) => host.id) as [CanonicalClientId, ...CanonicalClientId[]];
+
+export const PROJECT_NATIVE_CLIENT_TYPES = AGENT_HOSTS
+  .filter((host) => host.native?.project)
+  .map((host) => host.id) as [CanonicalClientId, ...CanonicalClientId[]];
+
+export const USER_NATIVE_CLIENT_TYPES = AGENT_HOSTS
+  .filter((host) => host.native?.user)
   .map((host) => host.id) as [CanonicalClientId, ...CanonicalClientId[]];
 
 /** Skills-compatible names that map to an existing AllAgents product identity. */

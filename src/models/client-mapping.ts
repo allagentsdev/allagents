@@ -46,10 +46,11 @@ function skillsOnlyHost<const Id extends string>(
 /**
  * Canonical client capability registry.
  *
- * Skill destinations match the declared registry in `skills@1.7.0`. Existing
- * AllAgents clients retain their richer artifact destinations and runtime
- * capabilities. `omp` is an AllAgents-only product identity and `vscode` is an
- * explicit target with Copilot-aware routing; neither is a Skills alias.
+ * Skill-only destinations are curated from the registry in `skills@1.7.0` to
+ * coding clients that directly consume skills. Existing AllAgents clients
+ * retain their richer artifact destinations and runtime capabilities. `omp` is
+ * an AllAgents-only product identity and `vscode` is an explicit target with
+ * Copilot-aware routing; neither is a Skills alias.
  */
 const AGENT_HOST_DEFINITIONS = [
   {
@@ -281,8 +282,8 @@ const AGENT_HOST_DEFINITIONS = [
     mcp: { project: true, user: true },
   },
 
-  // Skill-destination parity with skills@1.7.0. These entries intentionally do
-  // not claim instruction or non-skill artifact support.
+  // Coding-client skill destinations curated from skills@1.7.0. These entries
+  // intentionally do not claim instruction or non-skill artifact support.
   skillsOnlyHost('aider-desk', 'AiderDesk', '.aider-desk/skills/', '.aider-desk/skills/'),
   skillsOnlyHost('antigravity', 'Antigravity', '.agents/skills/', '.gemini/antigravity/skills/'),
   skillsOnlyHost(
@@ -291,7 +292,6 @@ const AGENT_HOST_DEFINITIONS = [
     '.agents/skills/',
     '.gemini/antigravity-cli/skills/',
   ),
-  skillsOnlyHost('astrbot', 'AstrBot', 'data/skills/', '.astrbot/data/skills/'),
   skillsOnlyHost('autohand-code', 'Autohand Code CLI', '.autohand/skills/', '.autohand/skills/'),
   skillsOnlyHost('bob', 'IBM Bob', '.bob/skills/', '.bob/skills/'),
   skillsOnlyHost(
@@ -316,14 +316,11 @@ const AGENT_HOST_DEFINITIONS = [
   skillsOnlyHost('goose', 'Goose', '.agents/skills/', '.agents/skills/'),
   skillsOnlyHost('grok', 'Grok Build', '.grok/skills/', '.grok/skills/'),
   skillsOnlyHost('hermes-agent', 'Hermes Agent', '.hermes/skills/', '.hermes/skills/'),
-  skillsOnlyHost('inference-sh', 'inference.sh', '.inferencesh/skills/', '.inferencesh/skills/'),
   skillsOnlyHost('iflow-cli', 'iFlow CLI', '.iflow/skills/', '.iflow/skills/'),
   skillsOnlyHost('jazz', 'Jazz', '.jazz/skills/', '.jazz/skills/'),
   skillsOnlyHost('kimchi', 'Kimchi', '.kimchi/skills/', '.config/kimchi/harness/skills/'),
   skillsOnlyHost('kode', 'Kode', '.kode/skills/', '.kode/skills/'),
   skillsOnlyHost('lingma', 'Lingma', '.lingma/skills/', '.lingma/skills/'),
-  skillsOnlyHost('loaf', 'Loaf', '.agents/skills/', '.agents/skills/'),
-  skillsOnlyHost('mcpjam', 'MCPJam', '.mcpjam/skills/', '.mcpjam/skills/'),
   skillsOnlyHost('minimax-code', 'MiniMax Code', '.minimax/skills/', '.minimax/skills/'),
   skillsOnlyHost('mistral-vibe', 'Mistral Vibe', '.vibe/skills/', '.vibe/skills/'),
   skillsOnlyHost('moxby', 'Moxby', '.moxby/skills/', '.moxby/skills/'),
@@ -349,14 +346,12 @@ const AGENT_HOST_DEFINITIONS = [
     '.tabnine/agent/skills/',
   ),
   skillsOnlyHost('terramind', 'Terramind', '.terramind/skills/', '.terramind/skills/'),
-  skillsOnlyHost('tinycloud', 'Tinycloud', '.tinycloud/skills/', '.tinycloud/skills/'),
   skillsOnlyHost('trae-cn', 'Trae CN', '.trae/skills/', '.trae-cn/skills/'),
   skillsOnlyHost('warp', 'Warp', '.agents/skills/', '.agents/skills/'),
   skillsOnlyHost('zed', 'Zed', '.agents/skills/', '.agents/skills/'),
   skillsOnlyHost('zcode', 'ZCode', '.zcode/skills/', '.zcode/skills/'),
   skillsOnlyHost('zenflow', 'Zenflow', '.zencoder/skills/', '.zencoder/skills/'),
   skillsOnlyHost('pochi', 'Pochi', '.pochi/skills/', '.pochi/skills/'),
-  skillsOnlyHost('promptscript', 'PromptScript', '.agents/skills/'),
   skillsOnlyHost('adal', 'AdaL', '.adal/skills/', '.adal/skills/'),
 ] as const satisfies readonly AgentHost[];
 

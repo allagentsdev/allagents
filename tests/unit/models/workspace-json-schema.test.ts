@@ -116,7 +116,7 @@ plugins:
 mcpServers:
   example:
     command: example-mcp
-    clients: [promptscript]
+    clients: [eve]
 `);
 
     expect(validateUser(userWorkspace)).toBe(true);

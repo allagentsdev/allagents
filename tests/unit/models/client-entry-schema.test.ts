@@ -114,15 +114,13 @@ describe('ClientEntrySchema', () => {
   });
 
   it('distinguishes project-only clients from unknown user-scope inputs', () => {
-    for (const client of ['eve', 'promptscript']) {
-      expect(() =>
-        UserWorkspaceConfigSchema.parse({
-          repositories: [],
-          plugins: [],
-          clients: [client],
-        }),
-      ).toThrow(`Client '${client}' does not support user scope`);
-    }
+    expect(() =>
+      UserWorkspaceConfigSchema.parse({
+        repositories: [],
+        plugins: [],
+        clients: ['eve'],
+      }),
+    ).toThrow("Client 'eve' does not support user scope");
     expect(() => UserClientTypeSchema.parse('missing-client')).toThrow(
       "Unknown client 'missing-client'",
     );
@@ -137,7 +135,7 @@ describe('ClientEntrySchema', () => {
     expect(
       UserWorkspaceConfigSchema.safeParse({
         mcpServers: {
-          example: { command: 'example-mcp', clients: ['promptscript'] },
+          example: { command: 'example-mcp', clients: ['eve'] },
         },
       }).success,
     ).toBe(false);

@@ -32,11 +32,10 @@ describe('buildClientOptions', () => {
     );
   });
 
-  test('omits project-only destinations from user-scope choices', () => {
+  test('omits the project-only destination from user-scope choices', () => {
     const values = buildClientOptions('user').map((option) => option.value);
 
     expect(values).not.toContain('eve');
-    expect(values).not.toContain('promptscript');
   });
 
   test('describes configured native clients without claiming a file destination', () => {

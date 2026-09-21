@@ -98,12 +98,21 @@ const SKILLS_1_7_DESTINATION_IDS = [
   'universal',
 ] as const;
 
+const SKILLS_1_7_EXCLUSIONS = {
+  astrbot: 'messaging chatbot platform',
+  'inference-sh': 'general agent application platform',
+  loaf: 'coding-agent workflow harness',
+  mcpjam: 'MCP testing and evaluation platform',
+  promptscript: 'agent configuration compiler',
+  tinycloud: 'video and image agent',
+} as const;
+
 describe('canonical client registry', () => {
   it('defines every canonical identity exactly once and derives the input schema', () => {
     const hostIds = AGENT_HOSTS.map((host) => host.id);
     expect(new Set(hostIds).size).toBe(AGENT_HOSTS.length);
     expect(hostIds).toEqual(CLIENT_TYPES);
-    expect(CLIENT_TYPES).toHaveLength(81);
+    expect(CLIENT_TYPES).toHaveLength(75);
 
     for (const client of CLIENT_TYPES) {
       expect(ClientTypeSchema.parse(client)).toBe(client);
@@ -111,7 +120,7 @@ describe('canonical client registry', () => {
     }
   });
 
-  it('accepts all 79 skills@1.7.0 IDs directly or through one of seven aliases', () => {
+  it('accounts for every skills@1.7.0 ID as supported or intentionally excluded', () => {
     expect(SKILLS_1_7_DESTINATION_IDS).toHaveLength(79);
     expect(CLIENT_ALIASES).toEqual({
       'claude-code': 'claude',
@@ -123,11 +132,23 @@ describe('canonical client registry', () => {
       'kimi-code-cli': 'kimi',
     });
 
-    for (const id of SKILLS_1_7_DESTINATION_IDS) {
+    const excludedIds = Object.keys(SKILLS_1_7_EXCLUSIONS);
+    const supportedIds = SKILLS_1_7_DESTINATION_IDS.filter(
+      (id) => !Object.hasOwn(SKILLS_1_7_EXCLUSIONS, id),
+    );
+    expect(supportedIds).toHaveLength(73);
+
+    for (const id of supportedIds) {
       const canonical = canonicalizeClientId(id);
       expect(canonical).toBeDefined();
       expect(CLIENT_TYPES).toContain(canonical);
       expect(ClientTypeSchema.parse(id)).toBe(canonical);
+    }
+
+    for (const id of excludedIds) {
+      expect(SKILLS_1_7_DESTINATION_IDS).toContain(id);
+      expect(canonicalizeClientId(id)).toBeUndefined();
+      expect(ClientTypeSchema.safeParse(id).success).toBe(false);
     }
   });
 
@@ -240,17 +261,12 @@ describe('capability-aware mappings', () => {
 
   it('rejects user scope for project-only clients', () => {
     expect(clientIdsForScope('project')).toContain('eve');
-    expect(clientIdsForScope('project')).toContain('promptscript');
     expect(clientIdsForScope('user')).not.toContain('eve');
-    expect(clientIdsForScope('user')).not.toContain('promptscript');
-
-    for (const client of ['eve', 'promptscript'] as const) {
-      expect(findHostById(client)?.user).toBeUndefined();
-      expect(USER_CLIENT_MAPPINGS[client]).toBeUndefined();
-      expect(() => getMapping(client, 'user')).toThrow(
-        `Client '${client}' does not support user scope`,
-      );
-    }
+    expect(findHostById('eve')?.user).toBeUndefined();
+    expect(USER_CLIENT_MAPPINGS.eve).toBeUndefined();
+    expect(() => getMapping('eve', 'user')).toThrow(
+      "Client 'eve' does not support user scope",
+    );
   });
 
   it('keeps every mapping relative to its selected root', () => {

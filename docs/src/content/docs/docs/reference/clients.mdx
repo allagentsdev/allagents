@@ -22,9 +22,11 @@ aliases without creating duplicate destinations:
   ))}
 </ul>
 
-Destination-ID parity does not rewrite established AllAgents paths. Aliases use
-their canonical AllAgents product's existing destinations; only newly added
-canonical clients use the pinned `skills@1.7.0` paths.
+AllAgents curates the pinned `skills@1.7.0` registry to coding clients that
+directly consume skills; non-coding platforms are intentionally excluded. This
+compatibility does not rewrite established AllAgents paths. Aliases use their
+canonical AllAgents product's existing destinations, while newly added
+canonical clients use the pinned Skills paths.
 
 The registry separates skill destinations from each richer file or MCP
 capability it owns. A path or capability shown as “No” is intentionally

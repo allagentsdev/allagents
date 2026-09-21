@@ -55,14 +55,14 @@ npx allagents plugin install allagents@allagentsdev/allagents --scope user
 
 ## Why AllAgents?
 
-`npx skills` installs skills across many client destinations, while `npx plugins` installs richer plugin artifacts into its supported clients. AllAgents manages skills, agents, hooks, commands, and MCP servers across multiple repositories and clients from one declarative workspace.
+`npx skills` installs skills across a broad ecosystem of destinations, while `npx plugins` installs richer plugin artifacts into its supported clients. AllAgents manages skills, agents, hooks, commands, and MCP servers across curated AI coding clients from one declarative workspace.
 
 | | `npx skills` | `npx plugins` | `npx allagents` |
 |---|---|---|---|
 | **Config** | Imperative | Imperative | Declarative (`workspace.yaml`) |
 | **Scope** | Single project | Single project | Multi-repo workspace |
 | **Artifacts** | Skills | Skills, agents, hooks, commands, MCP | Skills, agents, hooks, commands, MCP |
-| **Clients** | 79 destination IDs (`skills@1.7.0`) | 2 (Claude, Cursor) | Canonical registry plus compatibility aliases |
+| **Clients** | 79 destination IDs (`skills@1.7.0`) | 2 (Claude, Cursor) | Curated coding-client registry plus compatibility aliases |
 | **Team sharing** | Each dev runs install | Each dev runs install | Git-versioned — clone and go |
 | **Ongoing sync** | One-shot install | One-shot install | `allagents update` keeps everything current |
 | **Workspace awareness** | None | None | WORKSPACE-RULES injected so AI knows all repos and skills |

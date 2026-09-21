@@ -185,9 +185,6 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Upgrade npm
-        run: npm install -g npm@latest
-
       - name: Validate publish checkout
         run: |
           set -euo pipefail
@@ -226,8 +223,8 @@ jobs:
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           VERSION_ERROR=$(mktemp)
-          TAGS_ERROR=$(mktemp)
-          trap 'rm -f "$VERSION_ERROR" "$TAGS_ERROR"' EXIT
+          TAG_ERROR=$(mktemp)
+          trap 'rm -f "$VERSION_ERROR" "$TAG_ERROR"' EXIT
 
           if ! PUBLISHED_VERSION=$(npm view "${NAME}@${VERSION}" version 2>"$VERSION_ERROR"); then
             if grep -q "E404" "$VERSION_ERROR"; then
@@ -238,16 +235,14 @@ jobs:
             fi
           fi
 
-          if ! DIST_TAGS=$(npm view "$NAME" dist-tags --json 2>"$TAGS_ERROR"); then
-            if grep -q "E404" "$TAGS_ERROR"; then
-              DIST_TAGS='{}'
+          if ! CURRENT_TAG=$(npm view "$NAME" "dist-tags.${NPM_TAG}" 2>"$TAG_ERROR"); then
+            if grep -q "E404" "$TAG_ERROR"; then
+              CURRENT_TAG=""
             else
-              cat "$TAGS_ERROR" >&2
+              cat "$TAG_ERROR" >&2
               exit 1
             fi
           fi
-
-          CURRENT_TAG=$(node -e 'const fs = require("fs"); const tags = JSON.parse(fs.readFileSync(0, "utf8") || "{}"); console.log(tags[process.env.NPM_TAG] || "");' <<< "$DIST_TAGS")
 
           if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
             if [ "$CURRENT_TAG" != "$VERSION" ]; then

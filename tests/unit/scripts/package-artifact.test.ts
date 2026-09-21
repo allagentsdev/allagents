@@ -149,6 +149,21 @@ describe('packed artifact contracts', () => {
     ).toEqual(artifact);
   });
 
+  test('parses npm 12 pack JSON keyed by package name', () => {
+    const artifact = {
+      filename: 'allagents-1.16.0.tgz',
+      size: 123,
+      unpackedSize: 456,
+      files: [{ path: 'dist/index.js' }],
+    };
+
+    expect(
+      parsePackument(
+        `Built self-contained production bundle.\n${JSON.stringify({ allagents: artifact })}`,
+      ),
+    ).toEqual(artifact);
+  });
+
   test('reports every exceeded package-size budget with actual and limit bytes', () => {
     expect(() =>
       assertPackageSizeBudgets(

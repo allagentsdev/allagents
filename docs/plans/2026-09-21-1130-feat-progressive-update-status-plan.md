@@ -43,6 +43,7 @@ The RED behavior is confirmed by the reported transcript and current orchestrati
 - R4. Emit no progressive lifecycle text in JSON mode or redirected human output.
 - R5. Sanitize terminal labels and add project/user scope only when duplicate plugin identities would otherwise be ambiguous.
 - R6. Prove real streaming with a blocked local Git operation; final-output ordering alone is insufficient.
+- R7. In the interactive TUI's Plugins → Update all flow, keep the existing spinner and update its message with the current plugin or standalone skill source; keep the final results note unchanged.
 
 ### Acceptance Examples
 
@@ -50,6 +51,7 @@ The RED behavior is confirmed by the reported transcript and current orchestrati
 - AE2. With two ordinary plugins and the first update blocked, the first plugin line is readable before release. Its existing result prints before the next ordinary plugin starts.
 - AE3. Native-only plugins print a source line before native preflight, retain the current one-sync-per-scope behavior, and print results only after existing native-effect reconciliation.
 - AE4. The same fixtures under `--json` or redirected stdout produce the current one-shot JSON or batched human output with no progressive lines.
+- AE5. In Plugins → Update all, a delayed source changes the spinner message to identify that source before work completes, then the spinner stops once and the existing results note appears.
 
 ### Scope Boundaries
 
@@ -58,11 +60,12 @@ The RED behavior is confirmed by the reported transcript and current orchestrati
 - Direct `plugin update`.
 - Canonical and alias entry points that share `skill update`.
 - TTY-only append-only source lines and earlier rendering of existing result rows.
+- Interactive TUI Plugins → Update all source visibility.
 
 **Excluded**
 
-- Workspace sync, marketplace update, and TUI update actions.
-- Concurrency, background work, spinners, cursor rewriting, retries, or persistent progress state.
+- Workspace sync, marketplace update, and unrelated TUI actions.
+- Concurrency, background work, new spinners, cursor rewriting outside the existing TUI spinner, retries, or persistent progress state.
 - New public statuses such as `up-to-date` or any JSON schema change.
 - Per-skill changed-content attribution.
 
@@ -83,6 +86,7 @@ The RED behavior is confirmed by the reported transcript and current orchestrati
 - KTD2. **Keep progress local.** The plugin command already owns its source loop. Skill core receives only narrow optional callbacks for the two boundaries the command cannot otherwise observe: source preflight start and typed result availability.
 - KTD3. **Keep current results authoritative.** Progress does not create outcomes. It renders the same result objects the command already uses for counts, JSON, summaries, and exit status.
 - KTD4. **Validate skill filters before remote progress.** Build inventory first, reject unmatched filters, then begin preflight so usage errors do not leave dangling source lines.
+- KTD5. **Reuse the TUI's existing spinner.** The TUI is a separate caller and will not inherit CLI console lines. Update its current spinner message at the same source boundaries; do not print append-only rows while the spinner is active or change the final note.
 
 ### High-Level Flow
 
@@ -103,6 +107,8 @@ sequenceDiagram
 
 Skill update keeps its current two phases: every selected physical source is announced during sequential preflight, then typed results stream from the existing execution loop. Plugin update keeps its current declaration loop and one shared native sync per affected scope.
 
+The interactive TUI's Plugins → Update all action already owns one Clack spinner. It reuses the same narrow skill start callback and its existing generic-plugin loop to change only `spinner.message(...)`; it does not reuse CLI rendering.
+
 ### Risks and Mitigations
 
 - **Filtering currently happens after skill preparation.** Separate inventory from remote preflight only enough to validate filters before source lines or network work.
@@ -110,6 +116,7 @@ Skill update keeps its current two phases: every selected physical source is ann
 - **A source result can precede a later sync failure.** Keep the current sync error, overall failure, and exit path; a source row is not command-final.
 - **Duplicate plugin declarations can look identical.** Add a scope suffix only for the ambiguous project/user case.
 - **A timing test can pass without proving streaming.** Block a Git operation with entry/release sentinels and assert the line arrives before release.
+- **CLI lines would clash with the TUI spinner.** Keep rendering policy at each caller: append-only lines in direct CLI commands, message replacement in the existing TUI spinner.
 
 ---
 
@@ -157,22 +164,29 @@ Skill update keeps its current two phases: every selected physical source is ann
   - JSON and redirected human output remain unchanged.
 - **Verification:** The built command identifies the active plugin before delayed source work completes and retains current native sync and result behavior.
 
-### U3. Document and verify the UX
+### U3. Keep TUI progress smooth and document the UX
 
-- **Goal:** Describe the new terminal behavior and prove it on the actual CLI surface.
+- **Goal:** Give Plugins → Update all the same source visibility without replacing its existing spinner or result note, then document both surfaces.
 - **Dependencies:** U1, U2.
 - **Files:**
+  - Modify `src/cli/tui/actions/plugins.ts`.
+  - Modify `tests/unit/cli/tui-plugin-update.test.ts`.
   - Modify `src/cli/metadata/plugin.ts`.
   - Modify `src/cli/metadata/plugin-skills.ts`.
   - Modify `docs/src/content/docs/docs/reference/cli.mdx`.
   - Modify `CHANGELOG.md`.
 - **Approach:**
-  1. State that direct plugin and skill updates show source progress only on a terminal.
-  2. State that JSON and redirected output remain one-shot and source work remains sequential.
-  3. Add an Unreleased changelog entry.
-  4. Run one focused `agent-tui` smoke test with delayed local sources to confirm pre-completion visibility, prompt usability, result order, and final summary.
-- **Test scenarios:** Test expectation: none — U1 and U2 own automated behavior coverage.
-- **Verification:** The built CLI matches the documented append-only behavior without spinner or cursor state.
+  1. Before each generic plugin update, change the existing spinner message to identify that plugin.
+  2. Supply U1's narrow skill-source start callback during standalone-skill preflight and use it to change the same spinner message.
+  3. Keep the spinner active through current work, stop it once, and preserve the existing `Update Results` note and cache invalidation.
+  4. Document that direct CLI commands use append-only lines while the TUI updates its existing spinner message. JSON and redirected output remain one-shot.
+  5. Add an Unreleased changelog entry.
+  6. After automated coverage is green, use `agent-tui` with delayed local sources to navigate Plugins → Update all and verify message changes, keyboard flow, one spinner stop, and the final results note.
+- **Test scenarios:**
+  - Generic plugin updates change the spinner message in existing update order.
+  - Standalone skill preflight changes the spinner message through the shared narrow callback.
+  - Mixed generic and standalone updates retain the existing final result note, counts, cache effects, and sync behavior.
+- **Verification:** `agent-tui` observes the current source before the delayed operation is released and the unchanged final note after completion.
 
 ---
 
@@ -180,11 +194,12 @@ Skill update keeps its current two phases: every selected physical source is ann
 
 - `bun test tests/unit/core/skill-update.test.ts tests/unit/cli/skill-update-command.test.ts tests/unit/cli/skill-update-reconciliation.test.ts`
 - `bun test tests/e2e/skill-update.test.ts tests/e2e/plugin-update.test.ts`
+- `bun test tests/unit/cli/tui-plugin-update.test.ts`
 - `bun test`
 - `bun run build`
 - `bun run typecheck`
 - `bun run lint`
-- Focused `agent-tui` run against the built CLI and delayed local remotes.
+- Focused `agent-tui` run against the built direct CLI commands and Plugins → Update all with delayed local remotes.
 
 The GREEN timing proof must observe a source line after a wrapper records entry into Git but before the test releases that operation. Release and cleanup belong in `finally` with bounded timeouts.
 
@@ -197,5 +212,6 @@ The GREEN timing proof must observe a source line after a wrapper records entry 
 - JSON and redirected human output remain unchanged.
 - Skill filtering, prompts, deletion safety, rollback, and offline sync retain current behavior.
 - Plugin ordering, deduplication, native reconciliation, and scope sync retain current behavior.
+- Plugins → Update all identifies the current source through its existing spinner, stops the spinner once, and retains the existing final results note.
 - Targeted tests, full tests, build, typecheck, lint, and the focused terminal smoke pass.
 - Help, CLI reference, changelog, and PR reproduction steps match the shipped behavior.

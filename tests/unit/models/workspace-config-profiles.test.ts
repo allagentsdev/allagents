@@ -111,6 +111,33 @@ describe('profile workspace declarations', () => {
     );
   });
 
+  it('canonicalizes profile client aliases before applying adapter settings', () => {
+    const result = UserWorkspaceConfigSchema.parse(
+      userConfigWithProfile({
+        clients: [
+          { name: 'claude-code', settings: { model: 'sonnet' } },
+          {
+            name: 'github-copilot',
+            settings: { model: 'claude-sonnet-4.5' },
+          },
+        ],
+      }),
+    );
+
+    expect(result.profiles?.research?.clients).toEqual([
+      {
+        name: 'claude',
+        install: 'file',
+        settings: { model: 'sonnet' },
+      },
+      {
+        name: 'copilot',
+        install: 'file',
+        settings: { model: 'claude-sonnet-4.5' },
+      },
+    ]);
+  });
+
   it('keeps ordinary user and project configs backward compatible', () => {
     expect(UserWorkspaceConfigSchema.safeParse(ordinaryConfig).success).toBe(
       true,

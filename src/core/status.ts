@@ -193,11 +193,12 @@ async function getNativeStatusesForScope(
     scope,
   );
   const nativePlans = plans.filter((plan) => plan.nativeClients.length > 0);
+  // Only inspect native clients that have tracked state. Declarations describe
+  // desired sync work; status must not require an installed CLI before sync.
   const clients = [
-    ...new Set<ClientType>([
-      ...nativePlans.flatMap((plan) => plan.nativeClients),
-      ...stateResources.map((resource) => resource.client),
-    ]),
+    ...new Set<ClientType>(
+      stateResources.map((resource) => resource.client),
+    ),
   ];
   const contexts = resolveClientContexts(clients, scope, {
     cwd: workspacePath,

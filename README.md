@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docs](https://img.shields.io/badge/docs-allagents.dev-blue)](https://allagents.dev)
 
-Write AI agent skills once. Sync across 25+ clients. Manage across multiple repos.
+Write AI agent skills once. Sync across every configured client. Manage across multiple repos.
 
-AllAgents keeps your AI tooling (skills, agents, hooks, MCP servers) in one workspace and syncs it everywhere your team works — including Claude Code, GitHub Copilot, Cursor, Codex, OpenCode, and 20+ more.
+AllAgents keeps your AI tooling (skills, agents, hooks, MCP servers) in one workspace and syncs it everywhere your team works — including Claude Code, GitHub Copilot, Cursor, Codex, OpenCode, and dozens more.
 
 ## Quick Start
 
@@ -55,14 +55,14 @@ npx allagents plugin install allagents@allagentsdev/allagents --scope user
 
 ## Why AllAgents?
 
-Tools like `npx skills` and `npx plugins` install skills to one project for one or two clients. AllAgents manages your entire AI tooling stack — skills, agents, hooks, commands, and MCP servers — across multiple repos and all your clients, from a single declarative config.
+`npx skills` installs skills across a broad ecosystem of destinations, while `npx plugins` installs richer plugin artifacts into its supported clients. AllAgents manages skills, agents, hooks, commands, and MCP servers across curated AI coding clients from one declarative workspace.
 
 | | `npx skills` | `npx plugins` | `npx allagents` |
 |---|---|---|---|
 | **Config** | Imperative | Imperative | Declarative (`workspace.yaml`) |
 | **Scope** | Single project | Single project | Multi-repo workspace |
 | **Artifacts** | Skills | Skills, agents, hooks, commands, MCP | Skills, agents, hooks, commands, MCP |
-| **Clients** | 43 agents | 2 (Claude, Cursor) | 25+ clients simultaneously |
+| **Clients** | 79 destination IDs (`skills@1.7.0`) | 2 (Claude, Cursor) | Curated coding-client registry plus compatibility aliases |
 | **Team sharing** | Each dev runs install | Each dev runs install | Git-versioned — clone and go |
 | **Ongoing sync** | One-shot install | One-shot install | `allagents update` keeps everything current |
 | **Workspace awareness** | None | None | WORKSPACE-RULES injected so AI knows all repos and skills |
@@ -120,11 +120,11 @@ See the [full CLI reference](https://allagents.dev/docs/reference/cli/) for all 
 
 ## Supported Clients
 
-Supports **Claude Code**, **GitHub Copilot**, **Cursor**, **Codex**, **OpenCode**, and 20+ more across two tiers:
-
-**Universal** (share `.agents/skills/`): Copilot, Codex, OpenCode, Gemini, Amp Code, VSCode, Replit, Kimi
-
-**Provider-specific**: Claude, Pi, OMP, Cursor, Factory, OpenClaw, Windsurf, Cline, Continue, Roo, Kilo, Trae, Augment, Zencoder, Junie, OpenHands, Kiro
+AllAgents has one canonical, capability-aware client registry. It covers shared
+`.agents/skills/` destinations, provider-specific skill roots, and project-only
+clients, while separately recording instruction, command, agent, hook, GitHub
+overlay, MCP, native, and profile support. Compatibility aliases such as
+`claude-code` and `github-copilot` normalize to their canonical AllAgents IDs.
 
 See the [client support matrix](https://allagents.dev/docs/reference/clients/) for paths, hooks, commands, and MCP support per client.
 

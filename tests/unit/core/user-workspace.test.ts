@@ -111,6 +111,37 @@ describe('user-workspace', () => {
       expect(config!.clients).toBeInstanceOf(Array);
     });
 
+    test('returns canonical deduplicated clients from alias declarations', async () => {
+      const configPath = getUserWorkspaceConfigPath();
+      await mkdir(join(tempHome, '.allagents'), { recursive: true });
+      await writeFile(
+        configPath,
+        'clients:\n  - claude-code\n  - claude\n  - droid\n',
+        'utf-8',
+      );
+
+      const config = await getUserWorkspaceConfig();
+
+      expect(config?.clients).toEqual(['claude', 'factory']);
+    });
+
+    test('canonicalizes aliases in install shorthands and object entries', async () => {
+      const configPath = getUserWorkspaceConfigPath();
+      await mkdir(join(tempHome, '.allagents'), { recursive: true });
+      await writeFile(
+        configPath,
+        'clients:\n  - claude-code:native\n  - name: droid\n',
+        'utf-8',
+      );
+
+      const config = await getUserWorkspaceConfig();
+
+      expect(config?.clients).toEqual([
+        { name: 'claude', install: 'native' },
+        { name: 'factory', install: 'file' },
+      ]);
+    });
+
     test('accepts profiles-only config and defaults ordinary arrays', async () => {
       const configPath = getUserWorkspaceConfigPath();
       await mkdir(join(tempHome, '.allagents'), { recursive: true });

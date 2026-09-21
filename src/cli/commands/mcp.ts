@@ -45,6 +45,7 @@ import {
   runManagedMcpOperation as runManagedMcpRuntimeOperation,
 } from '../../core/mcp-runtime.js';
 import {
+  CLIENT_INPUT_TYPES,
   type ClientType,
   ClientTypeSchema,
   type McpServerConfig,
@@ -149,7 +150,7 @@ function parseClientFilter(inputs: string[]): ClientType[] | undefined {
       const parsed = ClientTypeSchema.safeParse(item);
       if (!parsed.success) {
         throw new Error(
-          `Invalid client '${item}'. Valid clients: ${ClientTypeSchema.options.join(', ')}`,
+          `Invalid client '${item}'. Valid clients: ${CLIENT_INPUT_TYPES.join(', ')}`,
         );
       }
       if (!seen.has(parsed.data)) {

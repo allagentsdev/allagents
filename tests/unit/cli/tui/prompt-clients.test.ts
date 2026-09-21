@@ -9,6 +9,9 @@ describe('buildClientOptions', () => {
     expect(options.find((option) => option.value === 'universal')?.hint).toBe(
       '.agents/skills/',
     );
+    expect(options.map((option) => option.value)).toEqual(
+      expect.arrayContaining(['warp', 'aider-desk', 'eve']),
+    );
     expect(options.find((option) => option.value === 'claude')?.hint).toBe(
       '.claude/skills/',
     );
@@ -24,6 +27,15 @@ describe('buildClientOptions', () => {
     expect(options.find((option) => option.value === 'pi')?.hint).toBe(
       '.pi/agent/skills/',
     );
+    expect(options.map((option) => option.value)).toEqual(
+      expect.arrayContaining(['warp', 'aider-desk']),
+    );
+  });
+
+  test('omits the project-only destination from user-scope choices', () => {
+    const values = buildClientOptions('user').map((option) => option.value);
+
+    expect(values).not.toContain('eve');
   });
 
   test('describes configured native clients without claiming a file destination', () => {

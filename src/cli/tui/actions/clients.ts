@@ -1,5 +1,5 @@
 import * as p from '@clack/prompts';
-import { ClientTypeSchema, getClientTypes, type ClientType } from '../../../models/workspace-config.js';
+import { getClientTypes, type ClientType } from '../../../models/workspace-config.js';
 import { setClients } from '../../../core/workspace-modify.js';
 import { setUserClients, getUserWorkspaceConfig } from '../../../core/user-workspace.js';
 import { syncWorkspace, syncUserWorkspace } from '../../../core/sync.js';
@@ -48,8 +48,8 @@ export async function runManageClients(context: TuiContext, cache?: TuiCache): P
       currentClients = userConfig?.clients ? getClientTypes(userConfig.clients) : [];
     }
 
-    const allClients = ClientTypeSchema.options;
-    const options = buildClientOptions();
+    const options = buildClientOptions(scope);
+    const allClients = options.map((option) => option.value);
 
     const selected = await autocompleteMultiselect<string>({
       message: `Select AI clients [${scope}]`,

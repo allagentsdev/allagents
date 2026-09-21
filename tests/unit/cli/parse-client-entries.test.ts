@@ -33,4 +33,16 @@ describe('parseClientEntries', () => {
       "Invalid install mode 'invalid' for client 'claude'",
     );
   });
+
+  it('canonicalizes aliases and removes duplicate canonical destinations', () => {
+    expect(
+      parseClientEntries(
+        'claude-code,claude,github-copilot:file,copilot,droid',
+      ),
+    ).toEqual([
+      'claude',
+      { name: 'copilot', install: 'file' },
+      'factory',
+    ]);
+  });
 });

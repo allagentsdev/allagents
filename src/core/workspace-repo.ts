@@ -8,7 +8,12 @@ import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import { ensureWorkspace, type ModifyResult } from './workspace-modify.js';
 import { ensureWorkspaceRules } from './transform.js';
 import { CLIENT_MAPPINGS } from '../models/client-mapping.js';
-import type { WorkspaceConfig, Repository, ClientType } from '../models/workspace-config.js';
+import {
+  ClientEntryListSchema,
+  getClientTypes,
+  normalizeClientEntry,
+  type Repository,
+} from '../models/workspace-config.js';
 import { discoverWorkspaceSkills, writeSkillsIndex, cleanupSkillsIndex, groupSkillsByRepo } from './repo-skills.js';
 import { parseWorkspaceConfigForEdit } from '../utils/workspace-parser.js';
 
@@ -159,12 +164,6 @@ export async function listRepositories(
   }
 }
 
-/**
- * Resolve client names from the config's clients array (handles string and object forms).
- */
-function resolveClientNames(clients: WorkspaceConfig['clients']): string[] {
-  return (clients ?? []).map((c) => (typeof c === 'string' ? c : (c as { name: string }).name));
-}
 
 /**
  * Ensure WORKSPACE-RULES are injected into agent files for all configured clients.
@@ -182,7 +181,8 @@ export async function updateAgentFiles(
 
   if (config.repositories.length === 0) return;
 
-  const clientNames = resolveClientNames(config.clients);
+  const clients = ClientEntryListSchema.parse(config.clients ?? []);
+  const clientNames = getClientTypes(clients);
 
   // Discover skills from all repositories
   const allSkills = await discoverWorkspaceSkills(workspacePath, config.repositories, clientNames);
@@ -192,15 +192,16 @@ export async function updateAgentFiles(
   const { writtenFiles, refs: skillsIndexRefs } = writeSkillsIndex(workspacePath, grouped);
   cleanupSkillsIndex(workspacePath, writtenFiles);
 
-  // Collect unique agent files from configured clients
+  // Only clients with evidenced instruction destinations receive rules.
   const agentFiles = new Set<string>();
-  for (const client of config.clients ?? []) {
-    const clientName = typeof client === 'string' ? client : (client as { name: string }).name;
-    const mapping = CLIENT_MAPPINGS[clientName as ClientType];
+  for (const client of clients) {
+    const clientName = normalizeClientEntry(client).name;
+    const mapping = CLIENT_MAPPINGS[clientName];
     if (mapping?.agentFile) agentFiles.add(mapping.agentFile);
+    if (mapping?.agentFileFallback) {
+      agentFiles.add(mapping.agentFileFallback);
+    }
   }
-  // Always include AGENTS.md as it's the universal fallback
-  agentFiles.add('AGENTS.md');
 
   for (const agentFile of agentFiles) {
     await ensureWorkspaceRules(join(workspacePath, agentFile), config.repositories, skillsIndexRefs);

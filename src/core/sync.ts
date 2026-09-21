@@ -14,13 +14,14 @@ import {
   getHomeDir,
   WORKSPACE_CONFIG_FILE,
 } from '../constants.js';
-import type { ClientMapping } from '../models/client-mapping.js';
 import {
   CANONICAL_SKILLS_PATH,
   CLIENT_MAPPINGS,
   isUniversalClient,
   resolveClientMappings,
   USER_CLIENT_MAPPINGS,
+  type ClientMapping,
+  type ClientMappings,
 } from '../models/client-mapping.js';
 import type { MarketplaceFileArtifacts } from '../models/marketplace-manifest.js';
 import type {
@@ -166,27 +167,31 @@ interface DeduplicatedClients {
  */
 export function deduplicateClientsByPath(
   clients: ClientType[],
-  clientMappings: Record<string, ClientMapping> = CLIENT_MAPPINGS,
+  clientMappings: ClientMappings = CLIENT_MAPPINGS,
 ): DeduplicatedClients {
   // Group clients by their skillsPath
   const pathToClients = new Map<string, ClientType[]>();
 
   for (const client of clients) {
     const mapping = clientMappings[client];
-    // Use skillsPath as the grouping key, or a unique key for clients without skillsPath
-    const pathKey = mapping?.skillsPath || `__no_skills_${client}__`;
+    // Keep a missing scope mapping isolated instead of deduplicating it.
+    const pathKey = mapping?.skillsPath ?? `__no_mapping_${client}__`;
 
     const existing = pathToClients.get(pathKey) || [];
     existing.push(client);
     pathToClients.set(pathKey, existing);
   }
 
-  // Build result: use first client in each group as representative
+  // Universal must own its canonical path even when declared after an aliasing
+  // client; otherwise the symlink phase can mistake the destination for its
+  // own source and skip materialization.
   const representativeClients: ClientType[] = [];
   const clientGroups = new Map<ClientType, ClientType[]>();
 
   for (const clientsInGroup of pathToClients.values()) {
-    const representative = clientsInGroup[0];
+    const representative = clientsInGroup.includes('universal')
+      ? 'universal'
+      : clientsInGroup[0];
     if (representative) {
       representativeClients.push(representative);
       clientGroups.set(representative, clientsInGroup);
@@ -757,11 +762,13 @@ export async function purgeWorkspace(
       purgedPaths.push(mapping.agentsPath);
     }
 
-    // Purge agent file
-    const agentPath = join(workspacePath, mapping.agentFile);
-    if (existsSync(agentPath)) {
-      await rm(agentPath);
-      purgedPaths.push(mapping.agentFile);
+    // Purge the instruction file when this client declares one.
+    if (mapping.agentFile) {
+      const agentPath = join(workspacePath, mapping.agentFile);
+      if (existsSync(agentPath)) {
+        await rm(agentPath);
+        purgedPaths.push(mapping.agentFile);
+      }
     }
 
     result.push({ client, paths: purgedPaths });
@@ -818,8 +825,11 @@ export function getPurgePaths(
       paths.push(mapping.agentsPath);
     }
 
-    // Check agent file
-    if (existsSync(join(workspacePath, mapping.agentFile))) {
+    // Check instruction file
+    if (
+      mapping.agentFile &&
+      existsSync(join(workspacePath, mapping.agentFile))
+    ) {
       paths.push(mapping.agentFile);
     }
 
@@ -885,7 +895,7 @@ export async function selectivePurgeWorkspace(
   workspacePath: string,
   state: SyncState | null,
   clients: ClientType[],
-  clientMappings: Record<string, ClientMapping> = CLIENT_MAPPINGS,
+  clientMappings: ClientMappings = CLIENT_MAPPINGS,
   clientContexts?: ReadonlyMap<ClientType, ResolvedClientContext>,
 ): Promise<PurgePaths[]> {
   // First sync - no state, skip purge entirely (safe overlay)
@@ -1229,7 +1239,7 @@ export function collectSyncedPaths(
   copyResults: CopyResult[],
   workspacePath: string,
   clients: ClientType[],
-  clientMappings?: Record<string, ClientMapping>,
+  clientMappings?: ClientMappings,
   agentDedupeRecords?: AgentDedupeRecord[],
   clientContexts?: ReadonlyMap<ClientType, ResolvedClientContext>,
 ): Partial<Record<ClientType, string[]>> {
@@ -1302,13 +1312,13 @@ export function collectSyncedPaths(
   // tracked by its own CopyResult; never synthesize ownership here.
   if (agentDedupeRecords && agentDedupeRecords.length > 0) {
     for (const client of clients) {
-      const mapping = mappings[client];
-      if (!mapping.agentsPath) continue;
+      const agentsPath = mappings[client]?.agentsPath;
+      if (!agentsPath) continue;
       const tracked = result[client];
       if (!tracked) continue;
 
       for (const record of agentDedupeRecords) {
-        if (!record.removedPath.startsWith(mapping.agentsPath)) continue;
+        if (!record.removedPath.startsWith(agentsPath)) continue;
         const removedIndex = tracked.indexOf(record.removedPath);
         if (removedIndex !== -1) tracked.splice(removedIndex, 1);
       }
@@ -1381,7 +1391,7 @@ export function computeDeletedArtifacts(
   previousState: SyncState | null,
   newStatePaths: Partial<Record<ClientType, string[]>>,
   clients: ClientType[],
-  clientMappings: Record<string, ClientMapping>,
+  clientMappings: ClientMappings,
   availableSkillNames?: Set<string>,
   agentDedupeRecords: AgentDedupeRecord[] = [],
 ): DeletedArtifact[] {
@@ -1736,7 +1746,7 @@ async function copyValidatedPlugin(
   clients: ClientType[],
   dryRun: boolean,
   skillNameMap?: Map<string, string>,
-  clientMappings?: Record<string, ClientMapping>,
+  clientMappings?: ClientMappings,
   syncMode: SyncMode = 'symlink',
   agentOutputs: readonly AgentOutput[] = [],
   agentConflicts: readonly AgentOutputConflict[] = [],
@@ -2747,7 +2757,7 @@ async function syncVscodeWorkspaceFile(
 async function planValidatedPluginAgentOutputs(
   validPlugins: ValidatedPlugin[],
   basePath: string,
-  mappings: Record<string, ClientMapping>,
+  mappings: ClientMappings,
 ): Promise<AgentOutputPlan> {
   return planAgentOutputs(
     validPlugins.map((plugin, validIndex) => ({
@@ -3205,18 +3215,22 @@ export async function syncWorkspace(
   // In non-destructive mode, only show files from state (or nothing on first sync)
   const purgedPaths = previousState
     ? syncClients
-        .map((client) => ({
-          client,
-          paths: getPreviouslySyncedFiles(previousState, client).filter(
-            (path) =>
-              trackedPathIsAllowed(
-                workspacePath,
-                path,
-                resolvedMappings[client],
-                clientContexts.get(client),
-              ),
-          ),
-        }))
+        .map((client) => {
+          const mapping = resolvedMappings[client];
+          if (!mapping) return { client, paths: [] };
+          return {
+            client,
+            paths: getPreviouslySyncedFiles(previousState, client).filter(
+              (path) =>
+                trackedPathIsAllowed(
+                  workspacePath,
+                  path,
+                  mapping,
+                  clientContexts.get(client),
+                ),
+            ),
+          };
+        })
         .filter((entry) => entry.paths.length > 0)
     : [];
 

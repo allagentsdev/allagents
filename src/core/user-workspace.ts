@@ -108,10 +108,7 @@ export async function getUserWorkspaceConfig(): Promise<UserWorkspaceConfig | nu
   const configPath = getUserWorkspaceConfigPath();
   if (!existsSync(configPath)) return null;
   const editable = await parseUserWorkspaceConfigForEdit(configPath);
-  return {
-    ...UserWorkspaceConfigSchema.parse(editable),
-    clients: editable.clients,
-  };
+  return UserWorkspaceConfigSchema.parse(editable);
 }
 
 /**

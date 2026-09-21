@@ -141,12 +141,12 @@ describe('WorkspaceConfigSchema with install mode', () => {
     const config = {
       repositories: [],
       plugins: [],
-      clients: ['claude', { name: 'copilot', install: 'native' }],
+      clients: ['claude', { name: 'pi', install: 'native' }],
     };
     const result = WorkspaceConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.clients).toEqual(['claude', { name: 'copilot', install: 'native' }]);
+      expect(result.data.clients).toEqual(['claude', { name: 'pi', install: 'native' }]);
     }
   });
 

@@ -1,11 +1,13 @@
 import * as p from '@clack/prompts';
 import {
-  ClientTypeSchema,
   getClientInstallMode,
   type ClientEntry,
   type ClientType,
 } from '../../models/workspace-config.js';
-import { getMapping } from '../../models/client-mapping.js';
+import {
+  clientIdsForScope,
+  getMapping,
+} from '../../models/client-mapping.js';
 import type { InstallScope } from '../install-target.js';
 
 const { autocompleteMultiselect } = p;
@@ -22,11 +24,11 @@ export function buildClientOptions(
   label: string;
   hint: string;
 }[] {
-  return ClientTypeSchema.options.map((client) => ({
+  return clientIdsForScope(scope).map((client) => ({
     value: client,
     label: client,
     hint:
-      getClientInstallMode([...clientEntries], client) === 'native'
+      getClientInstallMode(clientEntries, client) === 'native'
         ? 'Native install'
         : getMapping(client, scope).skillsPath,
   }));

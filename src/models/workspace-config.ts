@@ -1,4 +1,37 @@
 import { z } from 'zod';
+import {
+  ClientEntryListSchema,
+  ClientSelectorListSchema,
+  ClientTypeListSchema,
+  InstallModeSchema,
+  UserClientEntryListSchema,
+  UserClientTypeListSchema,
+  UserClientTypeSchema,
+  type ClientType,
+  type InstallMode,
+} from './client-entry-schema.js';
+
+export {
+  CanonicalClientTypeSchema,
+  CLIENT_TYPES,
+  CLIENT_INPUT_TYPES,
+  ClientEntryListSchema,
+  ClientEntrySchema,
+  ClientSelectorListSchema,
+  ClientTypeListSchema,
+  ClientTypeSchema,
+  InstallModeSchema,
+  UserClientEntryListSchema,
+  UserClientTypeListSchema,
+  UserClientTypeSchema,
+  deduplicateClientEntries,
+  getClientInstallMode,
+  getClientTypes,
+  normalizeClientEntry,
+  type ClientEntry,
+  type ClientType,
+  type InstallMode,
+} from './client-entry-schema.js';
 
 /**
  * Managed mode for repositories:
@@ -77,79 +110,6 @@ export const PluginSourceSchema = z.string();
 
 export type PluginSource = z.infer<typeof PluginSourceSchema>;
 
-/**
- * Supported AI client types
- */
-export const ClientTypeSchema = z.enum([
-  'universal',
-  'claude',
-  'copilot',
-  'codex',
-  'pi',
-  'omp',
-  'cursor',
-  'opencode',
-  'gemini',
-  'factory',
-  'ampcode',
-  'vscode',
-  'openclaw',
-  'windsurf',
-  'cline',
-  'continue',
-  'roo',
-  'kilo',
-  'trae',
-  'augment',
-  'zencoder',
-  'junie',
-  'openhands',
-  'kiro',
-  'replit',
-  'kimi',
-]);
-
-export type ClientType = z.infer<typeof ClientTypeSchema>;
-
-/**
- * Installation mode for plugins
- * - 'file': Copy plugin files to client directories (default)
- * - 'native': Use client's native CLI to install (e.g., `claude plugin install`)
- */
-export const InstallModeSchema = z.enum(['file', 'native']);
-export type InstallMode = z.infer<typeof InstallModeSchema>;
-
-/**
- * Client entry — string shorthand, colon shorthand, or object with install mode.
- *
- * "claude"        → bare client, install defaults to "file"
- * "claude:native" → colon shorthand, parsed to { name: "claude", install: "native" }
- * { name, install } → explicit object form
- */
-const CLIENT_INSTALL_SHORTHAND_PATTERN = new RegExp(
-  `^(?:${ClientTypeSchema.options.join('|')}):(?:${InstallModeSchema.options.join('|')})$`,
-);
-
-const ClientInstallShorthandSchema = z
-  .string()
-  .regex(
-    CLIENT_INSTALL_SHORTHAND_PATTERN,
-    `Expected CLIENT:INSTALL with a known client and one of: ${InstallModeSchema.options.join(', ')}`,
-  )
-  .transform((value) => {
-    const [name, install] = value.split(':') as [ClientType, InstallMode];
-    return { name, install };
-  });
-
-export const ClientEntrySchema = z.union([
-  ClientTypeSchema,
-  ClientInstallShorthandSchema,
-  z.object({
-    name: ClientTypeSchema,
-    install: InstallModeSchema.default('file'),
-  }),
-]);
-export type ClientEntry = z.infer<typeof ClientEntrySchema>;
 
 /**
  * Skill selection config for a plugin entry.
@@ -167,23 +127,32 @@ export type PluginSkillsConfig = z.infer<typeof PluginSkillsConfigSchema>;
  * Plugin entry in workspace.yaml
  * Supports string shorthand and object form with optional client override.
  */
+const PluginEntryObjectSchema = z
+  .object({
+    source: PluginSourceSchema,
+    clients: ClientTypeListSchema.optional(),
+    install: InstallModeSchema.optional(),
+    exclude: z.array(z.string()).optional(),
+    skills: PluginSkillsConfigSchema.optional(),
+    /**
+     * Optional Git ref (tag or branch). Equivalent to passing the
+     * `owner/repo@<ref>` shorthand on install. When set, every sync resolves
+     * the plugin at this ref instead of the default branch.
+     */
+    ref: z.string().optional(),
+  })
+  .strict();
+
 export const PluginEntrySchema = z.union([
   PluginSourceSchema,
-  z
-    .object({
-      source: PluginSourceSchema,
-      clients: z.array(ClientTypeSchema).optional(),
-      install: InstallModeSchema.optional(),
-      exclude: z.array(z.string()).optional(),
-      skills: PluginSkillsConfigSchema.optional(),
-      /**
-       * Optional Git ref (tag or branch). Equivalent to passing the
-       * `owner/repo@<ref>` shorthand on install. When set, every sync resolves
-       * the plugin at this ref instead of the default branch.
-       */
-      ref: z.string().optional(),
-    })
-    .strict(),
+  PluginEntryObjectSchema,
+]);
+
+export const UserPluginEntrySchema = z.union([
+  PluginSourceSchema,
+  PluginEntryObjectSchema.extend({
+    clients: UserClientTypeListSchema.optional(),
+  }),
 ]);
 
 export type PluginEntry = z.infer<typeof PluginEntrySchema>;
@@ -262,40 +231,6 @@ export function getPluginRef(plugin: PluginEntry): string | undefined {
   return typeof plugin === 'string' ? undefined : plugin.ref;
 }
 
-/**
- * Normalize a client entry to { name, install } form.
- */
-export function normalizeClientEntry(entry: ClientEntry): {
-  name: ClientType;
-  install: InstallMode;
-} {
-  if (typeof entry === 'string') {
-    return { name: entry, install: 'file' };
-  }
-  return { name: entry.name, install: entry.install ?? 'file' };
-}
-
-/**
- * Extract ClientType values from client entries.
- */
-export function getClientTypes(entries: ClientEntry[]): ClientType[] {
-  return entries.map((e) => (typeof e === 'string' ? e : e.name));
-}
-
-/**
- * Get install mode for a specific client from entries.
- * Returns 'file' if client not found.
- */
-export function getClientInstallMode(
-  entries: ClientEntry[],
-  client: ClientType,
-): InstallMode {
-  for (const entry of entries) {
-    const normalized = normalizeClientEntry(entry);
-    if (normalized.name === client) return normalized.install;
-  }
-  return 'file';
-}
 
 /**
  * Resolve effective install mode for a (plugin, client) pair.
@@ -332,7 +267,7 @@ export type SyncMode = z.infer<typeof SyncModeSchema>;
  * Per-server MCP proxy override
  */
 export const McpProxyServerSchema = z.object({
-  proxy: z.array(z.string()),
+  proxy: ClientSelectorListSchema,
 });
 
 /**
@@ -340,7 +275,7 @@ export const McpProxyServerSchema = z.object({
  * built-in AllAgents HTTP proxy helper
  */
 export const McpProxyConfigSchema = z.object({
-  clients: z.array(z.string()).default([]),
+  clients: ClientSelectorListSchema.default([]),
   servers: z.record(McpProxyServerSchema).optional(),
 });
 
@@ -355,26 +290,37 @@ export type McpProxyConfig = z.infer<typeof McpProxyConfigSchema>;
  * When absent, the server is synced to every configured client that supports
  * project-scoped MCP (claude, codex, vscode, copilot).
  */
+const McpHttpServerConfigSchema = z
+  .object({
+    type: z.enum(['http']).optional(),
+    url: z.string(),
+    headers: z.record(z.string()).optional(),
+    clients: ClientTypeListSchema.optional(),
+  })
+  .strict();
+
+const McpStdioServerConfigSchema = z
+  .object({
+    type: z.enum(['stdio']).optional(),
+    command: z.string(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string()).optional(),
+    clients: ClientTypeListSchema.optional(),
+  })
+  .strict();
+
 export const McpServerConfigSchema = z.union([
-  // HTTP transport
-  z
-    .object({
-      type: z.enum(['http']).optional(),
-      url: z.string(),
-      headers: z.record(z.string()).optional(),
-      clients: z.array(ClientTypeSchema).optional(),
-    })
-    .strict(),
-  // stdio transport
-  z
-    .object({
-      type: z.enum(['stdio']).optional(),
-      command: z.string(),
-      args: z.array(z.string()).optional(),
-      env: z.record(z.string()).optional(),
-      clients: z.array(ClientTypeSchema).optional(),
-    })
-    .strict(),
+  McpHttpServerConfigSchema,
+  McpStdioServerConfigSchema,
+]);
+
+export const UserMcpServerConfigSchema = z.union([
+  McpHttpServerConfigSchema.extend({
+    clients: UserClientTypeListSchema.optional(),
+  }),
+  McpStdioServerConfigSchema.extend({
+    clients: UserClientTypeListSchema.optional(),
+  }),
 ]);
 
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
@@ -527,10 +473,18 @@ const ProfileClientCommonShape = {
   launcher: ProfileNameSchema.optional(),
 } as const;
 
+const ClaudeProfileClientNameSchema = z
+  .enum(['claude', 'claude-code'])
+  .transform(() => 'claude' as const);
+
+const CopilotProfileClientNameSchema = z
+  .enum(['copilot', 'github-copilot'])
+  .transform(() => 'copilot' as const);
+
 export const ProfileClientSchema = z.union([
   z
     .object({
-      name: z.literal('claude'),
+      name: ClaudeProfileClientNameSchema,
       ...ProfileClientCommonShape,
       settings: ClaudeProfileSettingsSchema.default({}),
     })
@@ -544,7 +498,7 @@ export const ProfileClientSchema = z.union([
     .strict(),
   z
     .object({
-      name: z.literal('copilot'),
+      name: CopilotProfileClientNameSchema,
       ...ProfileClientCommonShape,
       settings: CopilotProfileSettingsSchema.default({}),
     })
@@ -565,28 +519,7 @@ export const ProfileClientSchema = z.union([
     .strict(),
   z
     .object({
-      name: z.enum([
-        'universal',
-        'cursor',
-        'gemini',
-        'factory',
-        'ampcode',
-        'vscode',
-        'openclaw',
-        'windsurf',
-        'cline',
-        'continue',
-        'roo',
-        'kilo',
-        'trae',
-        'augment',
-        'zencoder',
-        'junie',
-        'openhands',
-        'kiro',
-        'replit',
-        'kimi',
-      ]),
+      name: UserClientTypeSchema,
       ...ProfileClientCommonShape,
       settings: EmptyProfileSettingsSchema.default({}),
     })
@@ -611,7 +544,7 @@ export const ProfilePluginEntrySchema = z.union([
       source: PluginSourceSchema,
       ref: z.string().optional(),
       install: InstallModeSchema.optional(),
-      clients: z.array(ClientTypeSchema).optional(),
+      clients: z.array(UserClientTypeSchema).optional(),
       skills: ProfilePluginSkillsConfigSchema.optional(),
     })
     .strict(),
@@ -715,7 +648,7 @@ export const ProfileMcpServerConfigSchema = z.union([
       type: z.enum(['http']).optional(),
       url: z.string(),
       headers: z.record(ProfileSecretReferenceSchema).optional(),
-      clients: z.array(ClientTypeSchema).optional(),
+      clients: z.array(UserClientTypeSchema).optional(),
     })
     .strict(),
   z
@@ -724,7 +657,7 @@ export const ProfileMcpServerConfigSchema = z.union([
       command: z.string(),
       args: ProfileMcpArgumentsSchema.optional(),
       env: z.record(ProfileSecretReferenceSchema).optional(),
-      clients: z.array(ClientTypeSchema).optional(),
+      clients: z.array(UserClientTypeSchema).optional(),
     })
     .strict(),
 ]);
@@ -904,7 +837,7 @@ const WorkspaceConfigBaseSchema = z.object({
   workspace: WorkspaceSchema.optional(),
   repositories: z.array(RepositorySchema),
   plugins: z.array(PluginEntrySchema),
-  clients: z.array(ClientEntrySchema),
+  clients: ClientEntryListSchema,
   vscode: VscodeConfigSchema.optional(),
   syncMode: SyncModeSchema.optional(),
   mcpProxy: McpProxyConfigSchema.optional(),
@@ -935,8 +868,9 @@ export type ProjectWorkspaceConfig = z.infer<typeof WorkspaceConfigBaseSchema>;
  */
 export const UserWorkspaceConfigSchema = WorkspaceConfigBaseSchema.extend({
   repositories: z.array(RepositorySchema).default([]),
-  plugins: z.array(PluginEntrySchema).default([]),
-  clients: z.array(ClientEntrySchema).default([]),
+  plugins: z.array(UserPluginEntrySchema).default([]),
+  clients: UserClientEntryListSchema.default([]),
+  mcpServers: z.record(UserMcpServerConfigSchema).optional(),
   profiles: ProfilesSchema.optional(),
 });
 

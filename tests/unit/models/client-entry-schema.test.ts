@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'bun:test';
-import { ClientEntrySchema, WorkspaceConfigSchema, normalizeClientEntry } from '../../../src/models/workspace-config.js';
+import {
+  ClientEntrySchema,
+  UserClientTypeSchema,
+  UserWorkspaceConfigSchema,
+  WorkspaceConfigSchema,
+  getClientTypes,
+  normalizeClientEntry,
+} from '../../../src/models/workspace-config.js';
 
 describe('ClientEntrySchema', () => {
   describe('existing behavior', () => {
@@ -57,6 +64,100 @@ describe('ClientEntrySchema', () => {
     });
   });
 
+  it('canonicalizes every public alias in bare, shorthand, and object forms', () => {
+    const aliases = {
+      'claude-code': 'claude',
+      'github-copilot': 'copilot',
+      'gemini-cli': 'gemini',
+      droid: 'factory',
+      amp: 'ampcode',
+      'kiro-cli': 'kiro',
+      'kimi-code-cli': 'kimi',
+    } as const;
+
+    for (const [alias, canonical] of Object.entries(aliases)) {
+      expect(ClientEntrySchema.parse(alias)).toBe(canonical);
+      expect(ClientEntrySchema.parse(`${alias}:file`)).toEqual({
+        name: canonical,
+        install: 'file',
+      });
+      expect(ClientEntrySchema.parse({ name: alias })).toEqual({
+        name: canonical,
+        install: 'file',
+      });
+    }
+  });
+
+  it('deduplicates aliases and canonical IDs before sync consumers see them', () => {
+    const config = WorkspaceConfigSchema.parse({
+      repositories: [],
+      plugins: [
+        {
+          source: 'owner/plugin',
+          clients: ['claude-code', 'claude', 'droid', 'factory'],
+        },
+      ],
+      clients: ['claude-code', 'claude', 'droid', 'factory'],
+      mcpServers: {
+        example: {
+          command: 'example-mcp',
+          clients: ['github-copilot', 'copilot'],
+        },
+      },
+    });
+
+    expect(getClientTypes(config.clients)).toEqual(['claude', 'factory']);
+    expect(config.plugins[0]).toMatchObject({
+      clients: ['claude', 'factory'],
+    });
+    expect(config.mcpServers?.example?.clients).toEqual(['copilot']);
+  });
+
+  it('distinguishes project-only clients from unknown user-scope inputs', () => {
+    expect(() =>
+      UserWorkspaceConfigSchema.parse({
+        repositories: [],
+        plugins: [],
+        clients: ['eve'],
+      }),
+    ).toThrow("Client 'eve' does not support user scope");
+    expect(() => UserClientTypeSchema.parse('missing-client')).toThrow(
+      "Unknown client 'missing-client'",
+    );
+  });
+
+  it('applies user scope and alias normalization to nested selectors', () => {
+    expect(
+      UserWorkspaceConfigSchema.safeParse({
+        plugins: [{ source: 'owner/plugin', clients: ['eve'] }],
+      }).success,
+    ).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse({
+        mcpServers: {
+          example: { command: 'example-mcp', clients: ['eve'] },
+        },
+      }).success,
+    ).toBe(false);
+
+    const config = UserWorkspaceConfigSchema.parse({
+      plugins: [
+        {
+          source: 'owner/plugin',
+          clients: ['github-copilot', 'copilot'],
+        },
+      ],
+      mcpServers: {
+        example: {
+          command: 'example-mcp',
+          clients: ['claude-code', 'claude'],
+        },
+      },
+    });
+    expect(config.plugins[0]).toMatchObject({ clients: ['copilot'] });
+    expect(config.mcpServers?.example?.clients).toEqual(['claude']);
+  });
+
   describe('colon shorthand', () => {
     it('parses claude:native to object', () => {
       expect(ClientEntrySchema.parse('claude:native')).toEqual({
@@ -94,6 +195,73 @@ describe('ClientEntrySchema', () => {
 
     it('rejects uppercase (case-sensitive)', () => {
       expect(() => ClientEntrySchema.parse('CLAUDE:NATIVE')).toThrow();
+    });
+
+    it('accepts the complete project native client and alias set', () => {
+      for (const { input, canonical } of [
+        { input: 'claude', canonical: 'claude' },
+        { input: 'pi', canonical: 'pi' },
+        { input: 'omp', canonical: 'omp' },
+        { input: 'claude-code', canonical: 'claude' },
+      ] as const) {
+        const expected = { name: canonical, install: 'native' };
+        expect(ClientEntrySchema.parse(`${input}:native`)).toEqual(expected);
+        expect(
+          ClientEntrySchema.parse({ name: input, install: 'native' }),
+        ).toEqual(expected);
+      }
+    });
+
+    it('accepts the complete user native client and alias set', () => {
+      for (const { input, canonical } of [
+        { input: 'claude', canonical: 'claude' },
+        { input: 'copilot', canonical: 'copilot' },
+        { input: 'codex', canonical: 'codex' },
+        { input: 'pi', canonical: 'pi' },
+        { input: 'omp', canonical: 'omp' },
+        { input: 'claude-code', canonical: 'claude' },
+        { input: 'github-copilot', canonical: 'copilot' },
+      ] as const) {
+        for (const entry of [
+          `${input}:native`,
+          { name: input, install: 'native' },
+        ]) {
+          expect(
+            UserWorkspaceConfigSchema.parse({
+              repositories: [],
+              plugins: [],
+              clients: [entry],
+            }).clients,
+          ).toEqual([{ name: canonical, install: 'native' }]);
+        }
+      }
+    });
+
+    it('rejects native mode outside each scope capability set', () => {
+      for (const input of [
+        'copilot',
+        'codex',
+        'github-copilot',
+        'cursor',
+      ]) {
+        expect(() => ClientEntrySchema.parse(`${input}:native`)).toThrow();
+        expect(() =>
+          ClientEntrySchema.parse({ name: input, install: 'native' }),
+        ).toThrow();
+      }
+
+      for (const entry of [
+        'cursor:native',
+        { name: 'cursor', install: 'native' },
+      ]) {
+        expect(() =>
+          UserWorkspaceConfigSchema.parse({
+            repositories: [],
+            plugins: [],
+            clients: [entry],
+          }),
+        ).toThrow();
+      }
     });
   });
 

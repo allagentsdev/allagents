@@ -5,7 +5,9 @@ import { getHomeDir } from '../constants.js';
 import {
   CLIENT_MAPPINGS,
   USER_CLIENT_MAPPINGS,
+  getMapping,
   type ClientMapping,
+  type ClientMappings,
 } from '../models/client-mapping.js';
 import type { ClientType } from '../models/workspace-config.js';
 
@@ -109,7 +111,6 @@ function relocateMapping(
     );
   const relocated: ClientMapping = {
     skillsPath: relocate(mapping.skillsPath, true),
-    agentFile: relocate(mapping.agentFile, false),
   };
 
   for (const key of MAPPING_PATH_KEYS) {
@@ -117,6 +118,10 @@ function relocateMapping(
     const value = mapping[key];
     if (!value) continue;
     relocated[key] = relocate(value, true);
+  }
+
+  if (mapping.agentFile) {
+    relocated.agentFile = relocate(mapping.agentFile, false);
   }
 
   if (mapping.agentFileFallback) {
@@ -255,7 +260,7 @@ function resolvePiContext(
       scope,
       writeRoot: agentRoot,
       mapping: relocateMapping(
-        USER_CLIENT_MAPPINGS.pi,
+        getMapping('pi', 'user'),
         operationRoot,
         defaultAgentRoot,
         agentRoot,
@@ -355,7 +360,7 @@ function resolveOmpContext(
       scope,
       writeRoot: roots.agent,
       mapping: relocateMapping(
-        USER_CLIENT_MAPPINGS.omp,
+        getMapping('omp', 'user'),
         operationRoot,
         defaultAgentRoot,
         roots.agent,
@@ -432,6 +437,9 @@ export function resolveClientContext(
   const mapping = scope === 'user'
     ? USER_CLIENT_MAPPINGS[client]
     : CLIENT_MAPPINGS[client];
+  if (!mapping) {
+    throw new Error(`Client '${client}' does not support ${scope} scope`);
+  }
   return {
     client,
     scope,
@@ -455,8 +463,8 @@ export function resolveClientContexts(
 
 export function clientMappingsFromContexts(
   contexts: ReadonlyMap<ClientType, ResolvedClientContext>,
-  fallback: Record<ClientType, ClientMapping>,
-): Record<ClientType, ClientMapping> {
+  fallback: ClientMappings,
+): ClientMappings {
   if (contexts.size === 0) return fallback;
   return {
     ...fallback,

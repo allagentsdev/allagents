@@ -37,7 +37,7 @@ describe('published workspace JSON Schemas', () => {
 profiles:
   review:
     clients:
-      - name: claude
+      - name: claude-code
         launcher: claude-review
         settings:
           model: sonnet
@@ -57,6 +57,12 @@ profiles:
         env:
           REVIEW_TOKEN: \${REVIEW_TOKEN}
 `);
+    const userWithNativeClients = parsedYaml(`
+clients:
+  - codex:native
+  - name: github-copilot
+    install: native
+`);
     const projectWorkspace = parsedYaml(`
 repositories: []
 plugins:
@@ -65,6 +71,12 @@ plugins:
 clients:
   - name: claude
     install: native
+`);
+    const projectWithNativeAlias = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - claude-code:native
 `);
     const projectWithProfiles = parsedYaml(`
 repositories: []
@@ -87,20 +99,70 @@ profiles:
 clients:
   - claude:bogus
 `);
+    const projectWithUnsupportedNativeClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - cursor:native
+`);
+    const projectWithUserOnlyNativeClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - codex:native
+`);
+    const userWithUnsupportedNativeClient = parsedYaml(`
+clients:
+  - name: cursor
+    install: native
+`);
     const userWithInvalidProfileName = parsedYaml(`
 profiles:
   ../escape:
     clients:
       - name: claude
 `);
+    const projectWithAliasesAndProjectOnlyClient = parsedYaml(`
+repositories: []
+plugins: []
+clients:
+  - claude-code
+  - eve
+`);
+    const userWithAliases = parsedYaml(`
+clients:
+  - claude-code
+  - warp
+`);
+    const userWithProjectOnlyClient = parsedYaml(`
+clients:
+  - eve
+`);
+    const userWithProjectOnlyNestedSelectors = parsedYaml(`
+plugins:
+  - source: owner/plugin
+    clients: [eve]
+mcpServers:
+  example:
+    command: example-mcp
+    clients: [eve]
+`);
 
     expect(validateUser(userWorkspace)).toBe(true);
     expect(UserWorkspaceConfigSchema.safeParse(userWorkspace).success).toBe(
       true,
     );
+    expect(validateUser(userWithNativeClients)).toBe(true);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithNativeClients).success,
+    ).toBe(true);
     expect(validateProject(projectWorkspace)).toBe(true);
     expect(
       ProjectWorkspaceConfigSchema.safeParse(projectWorkspace).success,
+    ).toBe(true);
+    expect(validateProject(projectWithNativeAlias)).toBe(true);
+    expect(
+      ProjectWorkspaceConfigSchema.safeParse(projectWithNativeAlias).success,
     ).toBe(true);
     expect(validateProject(projectWithProfiles)).toBe(false);
     expect(
@@ -115,9 +177,42 @@ profiles:
       UserWorkspaceConfigSchema.safeParse(userWithInvalidClientShorthand)
         .success,
     ).toBe(false);
+    for (const invalid of [
+      projectWithUnsupportedNativeClient,
+      projectWithUserOnlyNativeClient,
+    ]) {
+      expect(validateProject(invalid)).toBe(false);
+      expect(ProjectWorkspaceConfigSchema.safeParse(invalid).success).toBe(
+        false,
+      );
+    }
+    expect(validateUser(userWithUnsupportedNativeClient)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithUnsupportedNativeClient)
+        .success,
+    ).toBe(false);
     expect(validateUser(userWithInvalidProfileName)).toBe(false);
     expect(
       UserWorkspaceConfigSchema.safeParse(userWithInvalidProfileName).success,
+    ).toBe(false);
+    expect(validateProject(projectWithAliasesAndProjectOnlyClient)).toBe(true);
+    expect(
+      ProjectWorkspaceConfigSchema.safeParse(
+        projectWithAliasesAndProjectOnlyClient,
+      ).success,
+    ).toBe(true);
+    expect(validateUser(userWithAliases)).toBe(true);
+    expect(UserWorkspaceConfigSchema.safeParse(userWithAliases).success).toBe(
+      true,
+    );
+    expect(validateUser(userWithProjectOnlyClient)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithProjectOnlyClient).success,
+    ).toBe(false);
+    expect(validateUser(userWithProjectOnlyNestedSelectors)).toBe(false);
+    expect(
+      UserWorkspaceConfigSchema.safeParse(userWithProjectOnlyNestedSelectors)
+        .success,
     ).toBe(false);
   });
 });

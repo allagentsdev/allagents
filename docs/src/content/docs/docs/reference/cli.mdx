@@ -228,6 +228,7 @@ allagents plugin list
 allagents plugin validate <path>
 allagents plugin install <plugin> [--skill <name>] [--scope <scope>] [--client <clients>] [--yes]
 allagents plugin uninstall <plugin> [--scope <scope>]
+allagents plugin update [plugin] [--scope <scope>]
 allagents plugin marketplace add <source> [--name <name>] [--branch <branch>]
 allagents plugin marketplace list
 allagents plugin marketplace remove <name>
@@ -309,6 +310,31 @@ marketplace plugins. Use `plugin@owner/marketplace-repository` or
 `plugin@https://github.com/owner/marketplace-repository` for OMP. Both forms
 use the normal marketplace registration flow; the URL form is normalized to
 the canonical GitHub source before registration and deduplication.
+
+### plugin update
+
+Update one declared plugin or every plugin in the selected scope.
+
+```bash
+allagents plugin update
+allagents plugin update my-plugin@official
+allagents plugin update --scope all
+```
+
+| Argument or flag | Description |
+|------|-------------|
+| `[plugin]` | Update one declared plugin; omit it to update all selected-scope plugins. |
+| `-s, --scope <scope>` | Installation scope: `project` (default), `user`, or `all`. |
+
+When the direct command writes to a TTY, it appends a source line before each
+plugin starts and leaves that line and the settled result visible. JSON and
+redirected human output stay one-shot: JSON remains one document, and human
+results remain batched until the update finishes.
+
+The interactive TUI's **Plugins → Update all** action uses a different display:
+the current plugin or standalone skill source replaces the message on its
+existing spinner. After the spinner ends, the existing **Update Results** note
+shows the final counts.
 
 ### skill list
 
@@ -424,6 +450,12 @@ allagents --json skill update --scope project
 | `[skill...]` | Update only the physical sources containing the named enabled skills. Names, qualified paths, and `plugin:path` selectors are accepted. All enabled siblings sharing a selected source are still checked for deletion safety. |
 | `-s, --scope <scope>` | Scope: `project` (default when a project config exists), `user`, or `all`. |
 | `-y, --yes` | Run without prompts. This does **not** authorize deletion: a source with upstream deletions is retained and skipped. |
+
+When the direct command writes to a TTY, it appends a
+`Checking skills from source: ...` line before each physical source check and
+leaves that line and the settled source result visible. JSON and redirected
+human output stay one-shot: JSON remains one document, and human results remain
+batched until the update finishes.
 
 AllAgents performs a read-only preflight against disposable checkouts before changing a config or plugin cache. When an installed skill has disappeared upstream, interactive terminals list the affected skill copies and ask once for the shared physical source:
 

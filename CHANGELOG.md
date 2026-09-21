@@ -33,6 +33,11 @@
 
 ### Added
 
+- Plugin and skill updates now identify each current source and show its result
+  as it settles. Direct TTY commands use persistent append-only lines, while
+  **Plugins → Update all** replaces the message on its existing spinner; JSON
+  and redirected direct output remain one-shot and batched.
+
 - Added a thin first-party AllAgents skill that treats the installed CLI as
   authoritative and follows its progressive `--help --json` indexes and leaf
   contracts instead of relying on memorized commands.

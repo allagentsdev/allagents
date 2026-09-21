@@ -41,6 +41,7 @@ import {
 } from '../../../core/marketplace.js';
 import { resetFetchCache, updatePlugin } from '../../../core/plugin.js';
 import { UpdateContext } from '../../../core/update-context.js';
+import { terminalSafe } from '../../terminal-output.js';
 import { formatVerboseSyncLines } from '../../format-sync.js';
 import { parseMarketplaceManifest } from '../../../utils/marketplace-manifest-parser.js';
 import { getWorkspaceStatus } from '../../../core/status.js';
@@ -77,6 +78,7 @@ import {
   type InstallScope,
 } from '../../install-target.js';
 import { createClackInstallTargetPromptPort } from '../install-target-prompts.js';
+import { formatPluginSource } from '../../../utils/plugin-path.js';
 
 const { select, text, confirm, multiselect, autocomplete } = p;
 
@@ -328,13 +330,19 @@ export async function runUpdateAllPlugins(
   skillPrecheckDependencies: SkillUpdateNodePrecheckDependencies = {},
 ): Promise<void> {
   const updateContext = new UpdateContext();
+  const s = p.spinner();
+  s.start('Gathering plugins...');
   try {
     await runUpdateAllPluginsWithContext(
       context,
       updateContext,
+      s,
       cache,
       skillPrecheckDependencies,
     );
+  } catch (error) {
+    s.error('Update failed');
+    throw error;
   } finally {
     updateContext.dispose();
   }
@@ -343,12 +351,10 @@ export async function runUpdateAllPlugins(
 async function runUpdateAllPluginsWithContext(
   context: TuiContext,
   updateContext: UpdateContext,
+  s: p.SpinnerResult,
   cache?: TuiCache,
   skillPrecheckDependencies: SkillUpdateNodePrecheckDependencies = {},
 ): Promise<void> {
-  const s = p.spinner();
-  s.start('Gathering plugins...');
-
   // Collect all installed plugins
   const pluginsToUpdate: Array<{ spec: string; scope: 'project' | 'user' }> = [];
 
@@ -431,6 +437,8 @@ async function runUpdateAllPluginsWithContext(
           updateContext,
           skillPrecheckDependencies,
         ),
+        onUnitStart: (unit) =>
+          s.message(`Updating ${terminalSafe(unitDisplayName(unit))}...`),
       },
     );
 
@@ -457,6 +465,7 @@ async function runUpdateAllPluginsWithContext(
   // scope sync, otherwise that sync's fetch-cache entries can mask updates.
   for (const { spec, scope } of pluginsToUpdate) {
     if (handledPlugins.has(`${scope}:${spec}`)) continue;
+    s.message(`Updating ${terminalSafe(formatPluginSource(spec))}...`);
     const result = await updatePlugin(
       spec,
       scope === 'project' ? projectDeps : userDeps,

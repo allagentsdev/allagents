@@ -78,7 +78,7 @@ export const skillsUpdateMeta: AgentCommandMeta = {
     'allagents --json skill update --scope project',
   ],
   expectedOutput:
-    'Reports updated, removed, retained, skipped, failed, or cancelled refresh units',
+    'On a TTY, prints a persistent source line before each check and its result as it settles; JSON and redirected output remain one-shot and batched. Reports updated, removed, retained, skipped, failed, or cancelled refresh units.',
   positionals: [
     {
       name: 'skills',

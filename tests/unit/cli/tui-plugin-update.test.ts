@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { dump } from 'js-yaml';
 import {
   resetUpdatePromptMocks,
+  spinnerErrorMock,
+  spinnerMessageMock,
+  spinnerStartMock,
+  spinnerStopMock,
   updateNoteMock as noteMock,
   updateSelectMock as selectMock,
   updateSelectResponses as selectResponses,
@@ -204,6 +208,10 @@ function restoreEnvironment(): void {
   }
 }
 
+beforeEach(() => {
+  resetUpdatePromptMocks();
+});
+
 afterEach(() => {
   restoreEnvironment();
   resetUpdatePromptMocks();
@@ -248,13 +256,28 @@ describe('interactive plugin updates', () => {
           'v2',
         );
 
-        await runUpdateAllPlugins(fixture.context);
+        const tuiCache = new TuiCache();
+        const invalidate = mock(tuiCache.invalidate.bind(tuiCache));
+        tuiCache.invalidate = invalidate;
+
+        await runUpdateAllPlugins(fixture.context, tuiCache);
 
         expect(noteMock).toHaveBeenCalledTimes(1);
         expect(noteMock).toHaveBeenCalledWith(
           `✓ ${GENERIC_SOURCE} (updated)\n✓ setup-matt-pocock-skills (updated)\n\nUpdated: 2  Skipped: 0  Failed: 0`,
           'Update Results',
         );
+        expect(spinnerStartMock).toHaveBeenCalledTimes(1);
+        expect(spinnerStartMock).toHaveBeenCalledWith('Gathering plugins...');
+        expect(spinnerMessageMock.mock.calls).toEqual([
+          ['Updating 2 plugin(s)...'],
+          ['Updating setup-matt-pocock-skills...'],
+          ['Updating example/plugins...'],
+        ]);
+        expect(spinnerStopMock).toHaveBeenCalledTimes(1);
+        expect(spinnerStopMock).toHaveBeenCalledWith('Update complete');
+        expect(spinnerErrorMock).not.toHaveBeenCalled();
+        expect(invalidate).toHaveBeenCalledTimes(1);
         expect(noteMock.mock.calls[0]?.[0]).not.toContain(SOURCE);
         expect(runGit(fixture.cache, ['rev-parse', 'HEAD'])).toBe(
           skillShaV2,
@@ -287,6 +310,48 @@ describe('interactive plugin updates', () => {
           ),
         ).toContain('# generic v2');
       } finally {
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+
+  test(
+    'ends the spinner before the Plugins menu renders an unexpected error',
+    async () => {
+      const fixture = await createUpdateFixture({ includeGeneric: false });
+      const events: string[] = [];
+      spinnerErrorMock.mockImplementation((message) => {
+        events.push(`spinner:${message}`);
+      });
+      noteMock.mockImplementation((_message, title) => {
+        events.push(`note:${title}`);
+      });
+      selectMock.mockImplementation(async () => {
+        const userConfigDirectory = join(process.env.HOME!, '.allagents');
+        await mkdir(userConfigDirectory, { recursive: true });
+        await writeFile(
+          join(userConfigDirectory, 'workspace.yaml'),
+          'plugins: [',
+        );
+        return '__update_all__';
+      });
+
+      try {
+        await runPlugins(fixture.context);
+
+        expect(spinnerErrorMock).toHaveBeenCalledWith('Update failed');
+        expect(spinnerStopMock).not.toHaveBeenCalled();
+        expect(noteMock).toHaveBeenCalledTimes(1);
+        expect(noteMock.mock.calls[0]?.[1]).toBe('Error');
+        expect(events).toEqual(['spinner:Update failed', 'note:Error']);
+      } finally {
+        spinnerErrorMock.mockImplementation(() => {});
+        noteMock.mockImplementation(() => {});
+        selectMock.mockImplementation(
+          async () => selectResponses.shift() ?? '__back__',
+        );
         await rm(fixture.root, { recursive: true, force: true });
       }
     },

@@ -1546,6 +1546,8 @@ const pluginUninstallCmd = command({
 // plugin update
 // =============================================================================
 
+type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'scope'>;
+
 const pluginUpdateCmd = command({
   name: 'update',
   description: buildDescription(pluginUpdateMeta),
@@ -1574,7 +1576,7 @@ const pluginUpdateCmd = command({
       const updateProject = scope === 'project' || (!scope && !updateAll) || updateAll;
 
       // Collect installed plugins based on scope
-      const pluginsToUpdate: Array<{ spec: string; scope: 'project' | 'user' }> = [];
+      const pluginsToUpdate: PluginUpdateEntry[] = [];
       const addPluginToUpdate = (spec: string, pluginScope: 'project' | 'user') => {
         if (!pluginsToUpdate.some((entry) =>
           entry.spec === spec && entry.scope === pluginScope
@@ -1656,28 +1658,24 @@ const pluginUpdateCmd = command({
         console.log('No plugins to update.');
         return;
       }
-      const scopesByIdentity = new Map<
-        string,
-        Set<'project' | 'user'>
-      >();
-      for (const entry of toUpdate) {
-        const scopes = scopesByIdentity.get(entry.spec) ?? new Set();
-        scopes.add(entry.scope);
-        scopesByIdentity.set(entry.spec, scopes);
+      const duplicateCrossScopeIdentities = new Set<string>();
+      if (progressiveOutput) {
+        const scopesByIdentity = new Map<
+          string,
+          Set<PluginUpdateEntry['scope']>
+        >();
+        for (const entry of toUpdate) {
+          const scopes = scopesByIdentity.get(entry.spec) ?? new Set();
+          scopes.add(entry.scope);
+          scopesByIdentity.set(entry.spec, scopes);
+        }
+        for (const [identity, scopes] of scopesByIdentity) {
+          if (scopes.size > 1) duplicateCrossScopeIdentities.add(identity);
+        }
       }
-      const duplicateCrossScopeIdentities = new Set(
-        [...scopesByIdentity]
-          .filter(([, scopes]) => scopes.size > 1)
-          .map(([identity]) => identity),
-      );
-      const declarationKey = (entry: {
-        spec: string;
-        scope: 'project' | 'user';
-      }) => `${entry.scope}:${entry.spec}`;
-      const declarationLabel = (entry: {
-        spec: string;
-        scope: 'project' | 'user';
-      }) => {
+      const declarationKey = (entry: PluginUpdateEntry) =>
+        `${entry.scope}:${entry.spec}`;
+      const declarationLabel = (entry: PluginUpdateEntry) => {
         const label = terminalSafe(formatPluginSource(entry.spec));
         return duplicateCrossScopeIdentities.has(entry.spec)
           ? `${label} (${entry.scope})`
@@ -1704,10 +1702,7 @@ const pluginUpdateCmd = command({
           announcedDeclarations.add(declarationKey(soleHeaderEntry));
         }
       }
-      const announceDeclaration = (entry: {
-        spec: string;
-        scope: 'project' | 'user';
-      }) => {
+      const announceDeclaration = (entry: PluginUpdateEntry) => {
         if (!progressiveOutput) return;
         const key = declarationKey(entry);
         if (announcedDeclarations.has(key)) return;
@@ -1750,7 +1745,7 @@ const pluginUpdateCmd = command({
         if ((plan?.nativeClients.length ?? 0) > 0) {
           nativeTargets[entry.scope].push(entry.spec);
           if (plan?.clients.length === 0) {
-            nativeOnly.add(`${entry.scope}:${entry.spec}`);
+            nativeOnly.add(declarationKey(entry));
           }
         }
       }
@@ -1790,7 +1785,7 @@ const pluginUpdateCmd = command({
       for (const entry of toUpdate) {
         const { spec: pluginSpec, scope: pluginScope } = entry;
         let result: InstalledPluginUpdateResult;
-        if (nativeOnly.has(`${pluginScope}:${pluginSpec}`)) {
+        if (nativeOnly.has(declarationKey(entry))) {
           result = {
             plugin: pluginSpec,
             success: true,
@@ -1858,7 +1853,7 @@ const pluginUpdateCmd = command({
 
       for (let index = 0; index < toUpdate.length; index++) {
         const entry = toUpdate[index];
-        if (!entry || !nativeOnly.has(`${entry.scope}:${entry.spec}`)) continue;
+        if (!entry || !nativeOnly.has(declarationKey(entry))) continue;
         const effects = (nativeEffects[entry.scope] ?? []).filter((effect) =>
           nativeIdentityMatches(
             entry.spec,

@@ -221,12 +221,12 @@ export const skillUpdateCmd = command({
           : {},
       );
       const summary = skillUpdateSummary(result);
-      const results = result.units.map((unitResult) => {
-        return {
-          ...unitResult,
-          source: sourceForResult(unitResult),
-        };
-      });
+      const results = progressiveOutput
+        ? []
+        : result.units.map((unitResult) => ({
+            ...unitResult,
+            source: sourceForResult(unitResult),
+          }));
 
       if (jsonMode) {
         jsonOutput({

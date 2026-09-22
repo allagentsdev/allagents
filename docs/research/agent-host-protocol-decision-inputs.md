@@ -1,5 +1,9 @@
 # Agent Host Protocol decision inputs for the execution gateway
 
+> Historical decision input. [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md)
+> superseded this A2A recommendation after selecting UHP through HarnessRouter.
+> Retained as research provenance, not current implementation direction.
+
 ## Decision
 
 Keep A2A 1.0 plus the versioned AllAgents extension as the execution gateway's
@@ -102,7 +106,7 @@ The conclusion is based on:
 - direct inspection of `microsoft/vscode` commit
   [`046944034292b5479b4e9a50ad1a508033ffb64f`](https://github.com/microsoft/vscode/tree/046944034292b5479b4e9a50ad1a508033ffb64f),
   whose generated registry identifies AHP `0.9.0`; and
-- [ADR 0002](../decisions/0002-serve-coding-agent-execution-through-an-a2a-gateway.md).
+- [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md).
 
 The inspected implementation demonstrates host-owned state/sequencing,
 provider-neutral adapters for Copilot, Claude, and Codex, layered persistence,

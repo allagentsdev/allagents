@@ -312,7 +312,8 @@
                 "additionalProperties": false
               }
             ]
-          }
+          },
+          "default": []
         },
         "clients": {
           "type": "array",
@@ -622,7 +623,8 @@
                 ]
               }
             ]
-          }
+          },
+          "default": []
         },
         "vscode": {
           "type": "object",
@@ -643,6 +645,7 @@
           "type": "object",
           "properties": {
             "clients": {
+              "default": [],
               "type": "array",
               "items": {
                 "type": "string"
@@ -1516,6 +1519,7 @@
                 }
               },
               "plugins": {
+                "default": [],
                 "type": "array",
                 "items": {
                   "anyOf": [
@@ -1916,6 +1920,7 @@
                 "type": "object",
                 "properties": {
                   "clients": {
+                    "default": [],
                     "type": "array",
                     "items": {
                       "type": "string"

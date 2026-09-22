@@ -1,9 +1,7 @@
 # ADR 0002: Adopt UHP through HarnessRouter with an AllAgents workspace materializer
 
 - Status: Accepted; implementation pending
-- Date: 2026-09-17
-- Updated: 2026-09-21
-- Supersedes: the original A2A/HEC execution-gateway design recorded by this ADR
+- Date: 2026-09-21
 
 ## Decision
 
@@ -12,11 +10,11 @@ pinned HarnessRouter Community Edition deployment for remote Codex execution.
 Pi remains capability-gated until a real probe proves a HarnessRouter-supported
 custom-provider format against `codex-lb`.
 
-AllAgents will not implement an A2A gateway, a separate Harness Execution
-Contract, provider adapters, or its own task/session engine. HarnessRouter owns
-authentication, UHP request and response semantics, streaming, cancellation,
-idempotency, session continuity, per-session workspaces, agent execution, usage,
-and artifacts.
+HarnessRouter owns authentication, UHP request and response semantics, streaming,
+cancellation, idempotency, session continuity, per-session workspaces, agent
+execution, usage, and artifacts. AllAgents owns the workspace descriptor,
+deterministic source materialization, and provenance returned through the
+HarnessRouter response.
 
 The initial deployment will use a narrow AllAgents-maintained HarnessRouter fork.
 The fork adds a generic pre-turn workspace-materializer hook. An AllAgents
@@ -120,9 +118,9 @@ acquisition failure starts no agent process and never falls through to another
 source mode or credential identity.
 
 Workspaces are writable and private to the HarnessRouter session. Version one
-does not add the former `readOnly` optimization or copy-on-write generations.
-The fork extends HarnessRouter's existing workspace checkpoint with a durable
-pre-agent materialization state and nested-repository collection metadata.
+does not provide read-only workspaces or copy-on-write generations. The fork
+extends HarnessRouter's existing workspace checkpoint with a durable pre-agent
+materialization state and nested-repository collection metadata.
 
 Completed session state survives a HarnessRouter restart when its documented
 durable data volume is preserved. An in-flight agent process does not survive
@@ -250,28 +248,21 @@ complete workspace identity.
 
 ## Consequences
 
-This decision deletes substantial custom scope:
+HarnessRouter is the execution control plane. AllAgents does not add a parallel
+task/session store, streaming lifecycle, process supervisor, artifact service,
+provider adapter, or Promptfoo-specific runtime.
 
-- no A2A server or Agent Card;
-- no HEC schemas, bindings, or conformance suite;
-- no AllAgents Task/session SQLite store;
-- no custom SSE lifecycle or cancellation protocol;
-- no direct Codex SDK or Pi RPC adapters;
-- no custom process supervisor or artifact store;
-- no separate `allagents-gateway` npm product; and
-- no Promptfoo-specific runtime in AllAgents.
+AllAgents owns workspace selection, deterministic Git/OCI materialization,
+source credentials, provenance, the HarnessRouter integration patch, and
+deployment documentation.
 
-AllAgents instead owns the smaller differentiated surface: workspace selection,
-deterministic Git/OCI materialization, source credentials, provenance, the
-HarnessRouter integration patch, and deployment documentation.
-
-The cost is a temporary fork and custom image. The fork must be rebased and
-tested against upstream releases until the generic hook is accepted or an
-equivalent supported extension exists.
+The integration requires a maintained fork and custom image. The fork must be
+rebased and tested against upstream releases until the generic hook is accepted
+or an equivalent supported extension exists.
 
 ## Alternatives rejected
 
-- **Custom A2A/HEC gateway:** duplicates mature UHP/HarnessRouter session,
+- **Custom execution gateway:** duplicates mature UHP/HarnessRouter session,
   streaming, cancellation, authentication, artifact, and provider behavior.
 - **Thin adapter in front of stock HarnessRouter:** avoids a fork but introduces
   another network service and makes source acquisition a client-side concern.

@@ -45,7 +45,8 @@ execution: code
   if either source credentials or the long-lived `codex-lb` key reach the agent,
   or if the fork cannot preserve stock UHP behavior and conformance. Do not fall
   back to prompt instructions, an MCP acquisition tool, client-side repository
-  upload, A2A/HEC, owner-trust provider keys, or a new task/session engine.
+  upload, owner-trust provider keys, a second execution protocol, or a parallel
+  task/session engine.
 - **Tail ownership:** Implementation owns focused tests in both repositories,
   upstream UHP conformance, built-image smoke tests, exact Git/OCI E2E,
   two-turn Promptfoo success and failure verification, credential leak checks,
@@ -57,7 +58,7 @@ execution: code
 
 ### Summary
 
-AllAgents uses HarnessRouter as the execution gateway instead of building one.
+AllAgents uses HarnessRouter as the execution gateway.
 HarnessRouter exposes UHP, authenticates callers, creates and persists sessions,
 streams events, runs Codex and capability-gated Pi, handles cancellation and
 idempotency, and returns output, usage, and artifacts.
@@ -78,10 +79,10 @@ beyond HarnessRouter's UHP behavior.
 
 ### Problem Frame
 
-Stock HarnessRouter already implements the expensive generic execution concerns.
-Rebuilding those concerns behind A2A would add a second protocol, lifecycle,
-session store, process supervisor, artifact model, provider integration, and
-conformance burden without differentiating AllAgents.
+HarnessRouter already implements the generic execution concerns. Reimplementing
+them in AllAgents would add a second protocol, lifecycle, session store, process
+supervisor, artifact model, provider integration, and conformance burden without
+differentiating the product.
 
 Stock HarnessRouter does not expose a documented generic pre-turn seam for a
 server-side Git/OCI descriptor. It does not copy arbitrary request metadata into
@@ -115,8 +116,8 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 ### Key Decisions
 
-- **Use UHP, not A2A or HEC.** UHP `2026-09-12` is the only northbound execution
-  contract. HarnessRouter conformance is authoritative.
+- **Use UHP as the northbound contract.** UHP `2026-09-12` is the only
+  northbound execution contract. HarnessRouter conformance is authoritative.
 - **Fork narrowly and upstream later.** Delivery uses an AllAgents-maintained
   fork. The upstreamable layer is a configured opaque-metadata key, immutable
   first-turn binding, typed command envelope, durable pre-provider lifecycle,
@@ -135,9 +136,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
   the agent. Only `codex-lb` handles provider OAuth.
 - **Preserve stock UHP requests.** Requests without the configured metadata key
   behave exactly as upstream.
-- **Use a custom image, not an `allagents-gateway` package.** The image combines a
-  pinned HarnessRouter revision, reviewed patch series, pinned agent runtimes,
-  and the AllAgents materializer executable.
+- **Use a custom HarnessRouter image.** The image combines a pinned HarnessRouter
+  revision, reviewed patch series, pinned agent runtimes, and the AllAgents
+  materializer executable.
 
 ### Requirements
 
@@ -444,9 +445,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 **Out of scope**
 
-- A2A, HEC, Agent Cards, or a second execution protocol.
-- An `allagents-gateway` server, task database, session engine, process
-  supervisor, Codex SDK adapter, Pi RPC adapter, or artifact service.
+- A second northbound execution protocol or parallel task/session control plane.
+- A separate AllAgents network gateway, process supervisor, provider adapter, or
+  artifact service.
 - Promptfoo runtime code inside AllAgents.
 - Provider OAuth handling outside `codex-lb`.
 - Caller-provided origins, credentials, commands, host paths, materializers, or
@@ -815,8 +816,9 @@ published.
 
 - ADR 0002, this plan, implementation, deployment topology, and request examples
   agree on UHP, the fork, the behind-router materializer, and `codex-lb`.
-- No A2A, HEC, `allagents-gateway`, custom task/session store, direct provider
-  adapter, or client-side workspace expansion remains in implementation scope.
+- No second execution protocol, parallel task/session control plane, separate
+  AllAgents gateway, direct provider adapter, or client-side workspace expansion
+  remains in implementation scope.
 - R1-R15 and AE1-AE13 are implemented and verified against the exact released
   image.
 - Stock UHP requests and upstream conformance remain green.

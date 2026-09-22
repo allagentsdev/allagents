@@ -13,7 +13,10 @@ The selected harness owns provider authentication. Codex signs in through
 `codex login`; Pi signs in through its `/login` flow for the configured provider.
 Those native OAuth sessions are the default and require no provider-route API
 key. An explicitly configured API-key-authenticated proxy is a last-resort
-route, never an automatic fallback from failed OAuth.
+route, never an automatic fallback from failed OAuth. Optional describes
+deployment configuration, not release scope: version one implements and verifies
+the route so operators that reject the native owner-trust boundary have a
+supported alternative.
 
 HarnessRouter owns caller authentication, UHP request and response semantics,
 streaming, cancellation, idempotency, session continuity, per-session
@@ -182,9 +185,20 @@ temporary file, file and parent-directory `fsync`, atomic rename, and validation
 A crash after the provider rotates credentials but before local commit may leave
 the profile stale; restart marks it `repair-required` when validation fails and
 requires native login again. It never switches profiles or activates the proxy.
-Version one holds a per-profile lock for every refresh-capable turn and every
-login, logout, or repair operation. A second turn for that profile waits or
-fails before launch.
+Version one supports exactly one active refresh-capable turn per native profile
+and holds that profile lock for every turn and every login, logout, or repair
+operation. Admission first atomically claims the UHP `Idempotency-Key`; concurrent
+same-key requests share one admission/result, and same-session overlap returns
+stock `session_busy`. Only a genuinely new cross-session turn tries the
+zero-waiter profile lock. Collision returns HTTP 503 `harness_unavailable` with
+`detail.reason: "allagents_auth_profile_busy"` before response allocation,
+runner work, or materialization.
+
+The runner turn supervisor persists the admission record and owns the profile
+lock through descendant termination, terminal-state acknowledgement, and refresh
+commit. Gateway-only failure cannot release it. Runner failure leaves a durable
+fence; startup blocks readiness and admission until descendant and profile
+reconciliation. Operators provision distinct profiles for parallel capacity.
 
 The generic fork layer does not understand the AllAgents descriptor. It enforces
 only the configured key, JSON/size bounds, immutable first-turn binding, hook
@@ -252,10 +266,20 @@ rejects option-like or refspec-shaped values, resolves advertised refs to full
 commits before agent execution, fetches by verified object ID, and records those
 commits in provenance.
 
-Snapshot mode accepts only a configured OCI repository plus immutable manifest
-and workspace-manifest digests. It verifies manifest, config, layer sizes and
-digests, applies OCI whiteouts, validates the resulting declared workspace
-layout, and records the ordered layer digests.
+Snapshot mode accepts only a configured OCI repository plus immutable image-
+manifest and workspace-manifest digests. It verifies the image manifest,
+canonical workspace-manifest bytes, layer sizes and digests, applies OCI
+whiteouts, validates the resulting declared workspace layout against the
+manifest, and records the ordered layer digests.
+
+Both source modes produce the same versioned canonical workspace manifest. Its
+RFC 8785 bytes enumerate every directory, regular file, and symbolic link in
+logical path order with normalized mode, size, content digest, or link target as
+applicable. Git mode computes it from completed staging. OCI mode carries the
+same bytes in the configured workspace-manifest blob and must reproduce them
+after applying the layers. The runner receives the manifest through a private
+bounded result root, verifies its digest and the staged tree independently, and
+never publishes the manifest as source content.
 
 Source credentials are selected server-side from an owner-only secret mount or
 credential-store handle available to the runner, not from the long-lived service
@@ -291,6 +315,11 @@ The deployment uses a pinned custom HarnessRouter image containing:
 - version-locked OS packages and Git/OCI source-acquisition tools; and
 - pinned HarnessRouter-supported Codex and Pi versions.
 
+The runtime grants only the runner a delegated cgroup v2 subtree and applies an
+`on-failure` restart policy. Readiness stays false unless that delegation is
+usable and startup has removed or quarantined every orphaned materializer
+cgroup.
+
 AllAgents publishes the `linux/amd64` release image as the public package
 `ghcr.io/allagentsdev/harnessrouter`. Version and commit tags are mutable
 discovery labels; deployment configuration pins the published manifest digest.
@@ -316,8 +345,10 @@ broker, and endpoint compatibility for `proxyApiKey`. A missing, expired,
 revoked, or unrefreshable OAuth profile disables that target; it does not select
 another profile or fall through to an API key.
 
-`proxyApiKey` is an optional, explicit last-resort mode. HarnessRouter keeps the
-long-lived proxy client key in the gateway. It gives the harness a
+`proxyApiKey` is optional to configure but its implementation and verification
+remain required version-one scope. It is an explicit last-resort mode.
+HarnessRouter keeps the long-lived proxy client key in the gateway. It gives the
+harness a
 non-refreshable broker credential bound to one proxy audience, harness target,
 model allowlist, response/turn ID, and the UHP deadline plus minimal clock skew.
 The token may authorize the bounded provider calls, compaction, and retries
@@ -333,11 +364,27 @@ automatically.
 - **Invalid extension:** the AllAgents hook rejects it before acquisition.
 - **Extension on a continuation:** reject without changing session state.
 - **Unknown logical source or working directory:** fail before network access.
+- **Busy auth profile:** after atomic idempotency replay and stock `session_busy`
+  precedence, a genuinely new cross-session turn fails immediately with HTTP 503
+  `harness_unavailable` and
+  `detail.reason: "allagents_auth_profile_busy"` before response allocation;
+  never queue it on the profile lock.
 - **Source authentication or acquisition failure:** remove partial workspace
-  state, return a stable materializer failure, and start no agent or provider
+  state, return the plan's cataloged UHP failure, and start no agent or provider
   fallback.
-- **Materializer timeout or crash:** terminate the hook, remove partial source
-  state, return failure, and start no agent.
+- **Materializer timeout, cancellation, malformed result, crash, or live
+  descendant after parent exit:** create a runner-owned cgroup v2 leaf and start
+  the child inside it atomically with `clone3(CLONE_INTO_CGROUP)` or a stopped,
+  secret-free pre-exec move-and-verify handshake. The child cannot escape or
+  administer the subtree; process groups and post-exec migration are
+  insufficient. On every outcome, use `cgroup.kill` when membership remains and
+  wait for `cgroup.events` to report `populated 0` before any terminal response
+  or event, private-manifest read, publication, secret release, or cleanup. A
+  completed parent with a live descendant returns the containment failure even
+  when forced kill succeeds. An unquiescent leaf enters internal non-terminal
+  `containment_pending`; the runner exits for required restart, and GET/stream
+  stay non-terminal until startup proves the old boundary empty. Only then expose
+  failed containment or the UHP-mandated `cancelled`/`incomplete` status.
 - **Agent cancellation or timeout:** use HarnessRouter's UHP lifecycle and
   cancellation behavior.
 - **HarnessRouter restart:** preserve completed state from the durable volume;
@@ -346,6 +393,10 @@ automatically.
   switching OAuth profiles or activating the proxy/API-key route.
 - **Provider execution failure:** return HarnessRouter's normalized UHP failure
   without source fallback or credential material in public output.
+- **Public error mapping:** use UHP request errors before response allocation and
+  terminal failed responses afterward. New codes carry the `allagents_` vendor
+  prefix. Promptfoo maps every non-success to a coded error, never successful
+  empty output or an automatic retry.
 
 Failures report only verified provenance. Partial acquisition never appears as a
 complete workspace identity.

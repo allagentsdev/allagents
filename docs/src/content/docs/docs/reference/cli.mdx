@@ -454,10 +454,12 @@ allagents --json skill update --scope project
 | `-s, --scope <scope>` | Scope: `project` (default when a project config exists), `user`, or `all`. |
 | `-y, --yes` | Run without prompts. This does **not** authorize deletion: a source with upstream deletions is retained and skipped. |
 
-When the direct command writes to a TTY, it appends one `Updating ...` line for
-each physical source and leaves that line and the settled source result visible.
-Internal preflight and client synchronization do not introduce separate status
-phases. JSON and redirected human output stay one-shot: JSON remains one
+When the direct command writes to a TTY, it first appends
+`Checking skills from source: ...` for each physical source. After preflight,
+it reports how many installed skill updates were found, then prints
+`Updating <skill>…` and the settled result for each skill that enters apply
+work. Sources retained or rejected before mutation never show an update-start
+line. JSON and redirected human output stay one-shot: JSON remains one
 document, and human results remain batched until the update finishes.
 
 AllAgents performs a read-only preflight against disposable checkouts before changing a config or plugin cache. When an installed skill has disappeared upstream, interactive terminals list the affected skill copies and ask once for the shared physical source:

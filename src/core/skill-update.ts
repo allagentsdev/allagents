@@ -149,7 +149,7 @@ export interface BuildSkillUpdatePreflightDeps {
     node: CheckoutNode,
     unit: SkillUpdateUnitInput,
   ) => Promise<SkillUpdateNodePrecheck>;
-  onUnitStart?: (unit: SkillUpdateUnitInput) => void;
+  onUnitCheckStart?: (unit: SkillUpdateUnitInput) => void;
 }
 
 export interface CreateGitHubSkillUpdateInstallationInput {
@@ -227,6 +227,7 @@ export interface ExecuteSkillUpdateDeps {
     scope: SkillUpdateScope,
     options: { offline: true },
   ) => Promise<{ success: boolean; error?: string }>;
+  onUnitApplyStart?: (unit: SkillUpdateUnit) => void;
   onUnitResult?: (result: SkillUpdateUnitExecution) => void;
 }
 
@@ -508,7 +509,7 @@ export async function buildSkillUpdatePreflight(
 
   const units: SkillUpdateUnit[] = [];
   for (const unit of physicalUnits) {
-    notifyObserver(deps.onUnitStart, unit);
+    notifyObserver(deps.onUnitCheckStart, unit);
     const nodeIds = new Set(unit.nodes.map((node) => node.id));
     const sharedFailures = (input.failures ?? []).filter((failure) =>
       failure.nodeIds.some((nodeId) => nodeIds.has(nodeId)),
@@ -724,6 +725,7 @@ export async function executeSkillUpdatePlan(
         continue;
       }
     }
+    notifyObserver(deps.onUnitApplyStart, unit);
 
     const revisionByNode = new Map(
       unit.inspectedNodes.map((entry) => [entry.nodeId, entry.sha]),

@@ -32,6 +32,7 @@ import {
   type SkillUpdatePreflight,
   type SkillUpdateNodePrecheck,
   type SkillUpdateScope,
+  type SkillUpdateUnit,
   type SkillUpdateUnitInput,
   type UnitInspection,
   buildSkillUpdatePreflight,
@@ -172,7 +173,7 @@ export interface PrepareSkillUpdateOptions {
   workspacePath: string;
   scopes: SkillUpdateScope[];
   filters?: string[];
-  onUnitStart?: (unit: SkillUpdateUnitInput) => void;
+  onUnitCheckStart?: (unit: SkillUpdateUnitInput) => void;
 }
 
 export interface PrepareSkillUpdateDependencies
@@ -190,6 +191,7 @@ export interface PreparedSkillUpdate {
 }
 
 export interface ExecutePreparedSkillUpdateOptions {
+  onUnitApplyStart?: (unit: SkillUpdateUnit) => void;
   onUnitResult?: (result: SkillUpdateUnitExecution) => void;
 }
 
@@ -1002,7 +1004,9 @@ export async function prepareSkillUpdateFromInventory(
       {
         inspectUnit: dependencies.inspectUnit ?? inspectSkillUpdateUnit,
         precheckNode: createSkillUpdateNodePrecheck(context, dependencies),
-        ...(options.onUnitStart && { onUnitStart: options.onUnitStart }),
+        ...(options.onUnitCheckStart && {
+          onUnitCheckStart: options.onUnitCheckStart,
+        }),
       },
     );
     return { inventory, plan };
@@ -1107,6 +1111,9 @@ export async function executePreparedSkillUpdate(
         ? { success: true }
         : { success: false, error: `Offline ${scope} sync failed` };
     },
+    ...(options.onUnitApplyStart && {
+      onUnitApplyStart: options.onUnitApplyStart,
+    }),
     ...(options.onUnitResult && { onUnitResult: options.onUnitResult }),
   });
   return result;
@@ -1131,6 +1138,17 @@ export function unitDisplayName(
     ),
   ];
   return labels.length > 0 ? labels.join(', ') : basename(unit.id);
+}
+
+export function unitSourceDisplayName(unit: SkillUpdateUnitInput): string {
+  const sources = [
+    ...new Set(
+      unit.installations.map((installation) =>
+        formatPluginSource(installation.rawSource),
+      ),
+    ),
+  ];
+  return sources.length > 0 ? sources.join(', ') : basename(unit.id);
 }
 
 export interface SkillUpdateSummary {

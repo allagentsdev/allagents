@@ -256,8 +256,9 @@ async function writeSkill(
   root: string,
   name: string,
   body: string,
+  standalone = false,
 ): Promise<void> {
-  const directory = join(root, 'skills', name);
+  const directory = standalone ? root : join(root, 'skills', name);
   await mkdir(directory, { recursive: true });
   await writeFile(
     join(directory, 'SKILL.md'),
@@ -282,6 +283,7 @@ async function createRemoteSource(
   slug: string,
   initialSkills: Array<{ name: string; body: string }>,
   updatedSkills: Array<{ name: string; body: string }>,
+  standalone = false,
 ): Promise<RemoteSourceFixture> {
   const worktree = join(fixture.root, `${slug}-work`);
   const remote = join(fixture.root, `${slug}.git`);
@@ -299,7 +301,7 @@ async function createRemoteSource(
   await git.addConfig('user.name', 'AllAgents UAT');
   await git.addConfig('user.email', 'allagents@example.test');
   for (const skill of initialSkills) {
-    await writeSkill(worktree, skill.name, skill.body);
+    await writeSkill(worktree, skill.name, skill.body, standalone);
   }
   await git.add('.');
   await git.commit('fixture v1');
@@ -328,8 +330,9 @@ async function createRemoteSource(
   ]);
 
   await rm(join(worktree, 'skills'), { recursive: true, force: true });
+  await rm(join(worktree, 'SKILL.md'), { force: true });
   for (const skill of updatedSkills) {
-    await writeSkill(worktree, skill.name, skill.body);
+    await writeSkill(worktree, skill.name, skill.body, standalone);
   }
   await git.add(['-A']);
   await git.commit('fixture v2');
@@ -829,7 +832,7 @@ describe('skill update CLI e2e', () => {
   );
 
   test(
-    'streams the active source before delayed Git work completes',
+    'separates delayed source checks from named skill updates',
     async () => {
       const fixture = await createFixture();
       fixtures.push(fixture);
@@ -838,29 +841,122 @@ describe('skill update CLI e2e', () => {
       ]);
       const enteredPath = join(fixture.root, 'git-entered');
       const releasePath = join(fixture.root, 'git-release');
-      const sourceLine = 'Updating uat/skill-update-e2e...';
+      const checkLine =
+        'Checking skills from source: uat/skill-update-e2e';
+      const foundLine = 'Found 1 skill update.';
+      const updateLine = 'Updating keep…';
+      const resultLine = '✓ Updated keep';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         fixture,
         ['skill', 'update', '--scope', 'project', '--yes'],
-        sourceLine,
+        checkLine,
         enteredPath,
         releasePath,
       );
 
-      expect(beforeRelease).toContain(sourceLine);
+      expect(beforeRelease).toContain(checkLine);
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout.match(new RegExp(sourceLine, 'g'))).toHaveLength(1);
-      expect(
-        result.stdout.match(/✓ Updated uat\/skill-update-e2e/g),
-      ).toHaveLength(1);
+      expect(result.stdout.match(new RegExp(checkLine, 'g'))).toHaveLength(1);
+      expect(result.stdout.match(new RegExp(updateLine, 'g'))).toHaveLength(1);
+      expect(result.stdout.match(new RegExp(resultLine, 'g'))).toHaveLength(1);
+      const orderedLines = [checkLine, foundLine, updateLine, resultLine].map(
+        (line) => result.stdout.indexOf(line),
+      );
+      expect(orderedLines.every((index) => index >= 0)).toBe(true);
+      expect(orderedLines).toEqual([...orderedLines].sort((a, b) => a - b));
       expect(result.stdout).toContain(
         'Done: 1 updated, 0 removed, 0 retained, 0 skipped.',
       );
     },
     15_000,
   );
+
+  test('qualifies duplicate skill names across update sources', async () => {
+    const fixture = await createFixture();
+    fixtures.push(fixture);
+    const alpha = await createRemoteSource(
+      fixture,
+      'skill-alpha',
+      [{ name: 'review', body: '# alpha v1' }],
+      [{ name: 'review', body: '# alpha v2' }],
+    );
+    const beta = await createRemoteSource(
+      fixture,
+      'skill-beta',
+      [{ name: 'review', body: '# beta v1' }],
+      [{ name: 'review', body: '# beta v2' }],
+    );
+    await writeProjectConfig(fixture, [
+      { source: alpha.source, skills: ['review'] },
+      { source: beta.source, skills: ['review'] },
+    ]);
+
+    const result = await runInteractiveCli(
+      fixture,
+      ['skill', 'update', '--scope', 'project', '--yes'],
+      '',
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Found 2 skill updates.');
+    for (const source of [alpha.source, beta.source]) {
+      const label = `review (project, ${source}:review)`;
+      expect(result.stdout).toContain(`Updating ${label}…`);
+      expect(result.stdout).toContain(`✓ Updated ${label}`);
+    }
+  }, 20_000);
+
+  test('preserves standalone skill labels in JSON and redirected output', async () => {
+    const fixture = await createFixture();
+    fixtures.push(fixture);
+    const standalone = await createRemoteSource(
+      fixture,
+      'standalone-skill',
+      [{ name: 'direct', body: '# direct v1' }],
+      [{ name: 'direct', body: '# direct v2' }],
+      true,
+    );
+    await writeProjectConfig(fixture, [
+      { source: standalone.source, skills: ['direct'] },
+    ]);
+
+    const jsonResult = runCli(fixture, [
+      '--json',
+      'skill',
+      'update',
+      '--scope',
+      'project',
+      '--yes',
+    ]);
+    expect(jsonResult.exitCode).toBe(0);
+    expect(jsonResult.stderr).toBe('');
+    const payload = JSON.parse(jsonResult.stdout);
+    expect(payload.data.results[0]).toMatchObject({
+      status: 'updated',
+      source: 'direct',
+    });
+
+    await simpleGit(standalone.cache).reset([
+      '--hard',
+      standalone.initialSha,
+    ]);
+    const redirectedResult = runCli(fixture, [
+      'skill',
+      'update',
+      '--scope',
+      'project',
+      '--yes',
+    ]);
+    expect(redirectedResult.exitCode).toBe(0);
+    expect(redirectedResult.stderr).toBe('');
+    expect(redirectedResult.stdout).toContain('✓ Updated direct');
+    expect(redirectedResult.stdout).not.toContain(
+      `✓ Updated ${standalone.source}`,
+    );
+  }, 20_000);
 
   test('keeps pseudo-TTY JSON output to one document without lifecycle text', async () => {
     const fixture = await createFixture();
@@ -874,7 +970,8 @@ describe('skill update CLI e2e', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating keep…');
     expect(result.stdout).not.toContain('Done:');
     const payload = JSON.parse(result.stdout);
     expect(payload.success).toBe(true);
@@ -905,7 +1002,8 @@ describe('skill update CLI e2e', () => {
     );
 
     expect(result.exitCode).toBe(2);
-    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating ');
     expect(result.stdout).toContain(
       'No enabled installed skill matched: missing',
     );
@@ -928,7 +1026,8 @@ describe('skill update CLI e2e', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toStartWith('Checking for skill updates…\n');
-    expect(result.stdout).not.toContain('Updating uat/skill-update-e2e...');
+    expect(result.stdout).not.toContain('Checking skills from source:');
+    expect(result.stdout).not.toContain('Updating keep…');
     expect(result.stdout).toContain(
       'Kept local copies and skipped updates for uat/skill-update-e2e',
     );
@@ -985,7 +1084,6 @@ describe('skill update CLI e2e', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('appear to have been deleted upstream');
-    expect(result.stdout).toContain('Removed deleted skills and updated');
     expect(await cacheSha(fixture)).toBe(fixture.updatedSha);
     expect(existsSync(join(fixture.cache, 'skills', 'gone'))).toBe(false);
     expect(
@@ -1042,7 +1140,6 @@ describe('skill update CLI e2e', () => {
       'No keeps them and skips every update from this source',
     );
     expect(result.stdout).toContain('Kept local copies and skipped updates');
-    expect(result.stdout).toContain(`Updated ${healthy.source}`);
     expect(await readFile(configPath, 'utf8')).toBe(configBefore);
     expect(await cacheSha(fixture)).toBe(fixture.initialSha);
     expect(await readFile(goneArtifact, 'utf8')).toBe(goneBefore);
@@ -1131,7 +1228,6 @@ describe('skill update CLI e2e', () => {
     expect(scopeAll.stderr).toBe('');
     expect(scopeAll.stdout).toContain('gone (project)');
     expect(scopeAll.stdout).toContain('gone (user)');
-    expect(scopeAll.stdout).toContain('Removed deleted skills and updated');
     expect(await cacheSha(fixture)).toBe(fixture.updatedSha);
 
     const projectConfig = await readWorkspaceConfig(
@@ -1160,7 +1256,6 @@ describe('skill update CLI e2e', () => {
     expect(result.stdout).toContain(
       'skills from demo@uat-market appear to have been deleted upstream',
     );
-    expect(result.stdout).toContain('Removed deleted skills and updated');
     expect(await checkoutSha(marketplace.cache)).toBe(marketplace.updatedSha);
     expect(
       existsSync(

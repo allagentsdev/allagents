@@ -26,10 +26,16 @@ export const updateSelectMock = mock(
   async () => updateSelectResponses.shift() ?? '__back__',
 );
 
+export const spinnerStartMock = mock((_message?: string) => {});
+export const spinnerMessageMock = mock((_message?: string) => {});
+export const spinnerStopMock = mock((_message?: string) => {});
+export const spinnerErrorMock = mock((_message?: string) => {});
+
 const spinner = {
-  start: mock((_message?: string) => {}),
-  message: mock((_message?: string) => {}),
-  stop: mock((_message?: string) => {}),
+  start: spinnerStartMock,
+  message: spinnerMessageMock,
+  stop: spinnerStopMock,
+  error: spinnerErrorMock,
 };
 
 mock.module('@clack/prompts', () => ({
@@ -59,16 +65,25 @@ mock.module('@clack/prompts', () => ({
   text: mock(async () => ''),
 }));
 
+function resetSpinnerMocks(): void {
+  spinnerStartMock.mockClear();
+  spinnerMessageMock.mockClear();
+  spinnerStopMock.mockClear();
+  spinnerErrorMock.mockClear();
+}
+
 export function resetInstallPromptMocks(): void {
   installScopeResponses.length = 0;
   installClientResponses.length = 0;
   installConfirmationResponses.length = 0;
   installNoteMock.mockClear();
   installConfirmMock.mockClear();
+  resetSpinnerMocks();
 }
 
 export function resetUpdatePromptMocks(): void {
   updateSelectResponses.length = 0;
   updateNoteMock.mockClear();
   updateSelectMock.mockClear();
+  resetSpinnerMocks();
 }

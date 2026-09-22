@@ -41,6 +41,7 @@ import {
 } from '../../../core/marketplace.js';
 import { resetFetchCache, updatePlugin } from '../../../core/plugin.js';
 import { UpdateContext } from '../../../core/update-context.js';
+import { terminalSafe } from '../../terminal-output.js';
 import { formatVerboseSyncLines } from '../../format-sync.js';
 import { parseMarketplaceManifest } from '../../../utils/marketplace-manifest-parser.js';
 import { getWorkspaceStatus } from '../../../core/status.js';
@@ -77,6 +78,7 @@ import {
   type InstallScope,
 } from '../../install-target.js';
 import { createClackInstallTargetPromptPort } from '../install-target-prompts.js';
+import { formatPluginSource } from '../../../utils/plugin-path.js';
 
 const { select, text, confirm, multiselect, autocomplete } = p;
 
@@ -304,7 +306,6 @@ async function runUpdatePlugin(
 
     // Preserve the action-driven sync contract, including no-op updates and
     // later-invocation retries after a sync failure.
-    s.message('Updating...');
     if (scope === 'project' && context.workspacePath) {
       await syncWorkspace(context.workspacePath);
     } else {
@@ -328,13 +329,19 @@ export async function runUpdateAllPlugins(
   skillPrecheckDependencies: SkillUpdateNodePrecheckDependencies = {},
 ): Promise<void> {
   const updateContext = new UpdateContext();
+  const s = p.spinner();
+  s.start('Gathering plugins...');
   try {
     await runUpdateAllPluginsWithContext(
       context,
       updateContext,
+      s,
       cache,
       skillPrecheckDependencies,
     );
+  } catch (error) {
+    s.error('Update failed');
+    throw error;
   } finally {
     updateContext.dispose();
   }
@@ -343,12 +350,10 @@ export async function runUpdateAllPlugins(
 async function runUpdateAllPluginsWithContext(
   context: TuiContext,
   updateContext: UpdateContext,
+  s: p.SpinnerResult,
   cache?: TuiCache,
   skillPrecheckDependencies: SkillUpdateNodePrecheckDependencies = {},
 ): Promise<void> {
-  const s = p.spinner();
-  s.start('Gathering plugins...');
-
   // Collect all installed plugins
   const pluginsToUpdate: Array<{ spec: string; scope: 'project' | 'user' }> = [];
 
@@ -431,6 +436,8 @@ async function runUpdateAllPluginsWithContext(
           updateContext,
           skillPrecheckDependencies,
         ),
+        onUnitStart: (unit) =>
+          s.message(`Updating ${terminalSafe(unitDisplayName(unit))}...`),
       },
     );
 
@@ -457,6 +464,7 @@ async function runUpdateAllPluginsWithContext(
   // scope sync, otherwise that sync's fetch-cache entries can mask updates.
   for (const { spec, scope } of pluginsToUpdate) {
     if (handledPlugins.has(`${scope}:${spec}`)) continue;
+    s.message(`Updating ${terminalSafe(formatPluginSource(spec))}...`);
     const result = await updatePlugin(
       spec,
       scope === 'project' ? projectDeps : userDeps,
@@ -477,10 +485,30 @@ async function runUpdateAllPluginsWithContext(
   const standaloneSyncedScopes = new Set<SkillUpdateScope>();
   if (standalonePlan) {
     const prepared = { inventory, plan: standalonePlan };
+    const executionUnits = standalonePlan.units;
+    let currentExecutionUnitIndex = 0;
+    const firstExecutionUnit = executionUnits[currentExecutionUnitIndex];
+    if (firstExecutionUnit) {
+      s.message(
+        `Updating ${terminalSafe(unitDisplayName(firstExecutionUnit))}...`,
+      );
+    }
     const execution = await executePreparedSkillUpdate(
       prepared,
       resolveNonInteractiveSkillUpdateDecisions(standalonePlan),
       workspacePath,
+      {
+        onUnitResult: (result) => {
+          // Scope-sync failures are synthetic results, not standalone units.
+          const currentUnit = executionUnits[currentExecutionUnitIndex];
+          if (!currentUnit || result.id !== currentUnit.id) return;
+          currentExecutionUnitIndex++;
+          const nextUnit = executionUnits[currentExecutionUnitIndex];
+          if (nextUnit) {
+            s.message(`Updating ${terminalSafe(unitDisplayName(nextUnit))}...`);
+          }
+        },
+      },
     );
     const planById = new Map(
       standalonePlan.units.map((unit) => [unit.id, unit]),
@@ -516,7 +544,6 @@ async function runUpdateAllPluginsWithContext(
     (needsProjectSync && !standaloneSyncedScopes.has('project')) ||
     (needsUserSync && !standaloneSyncedScopes.has('user'))
   ) {
-    s.message('Updating...');
     if (
       needsProjectSync &&
       !standaloneSyncedScopes.has('project') &&

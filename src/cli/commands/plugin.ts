@@ -55,6 +55,7 @@ import {
 } from '../../core/status.js';
 import { parseMarketplaceManifest } from '../../utils/marketplace-manifest-parser.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
+import { terminalSafe } from '../terminal-output.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
 import {
   marketplaceListMeta,
@@ -100,11 +101,22 @@ import {
 } from '../tui/install-target-prompts.js';
 
 
+interface SyncDisplayOptions {
+  announceWorkspace?: boolean;
+  compactSuccess?: boolean;
+}
+
 /**
  * Run sync and print results. Returns true if sync succeeded.
  */
-async function runSyncAndPrint(options: SyncOptions = {}) {
-  if (!isJsonMode()) {
+async function runSyncAndPrint(
+  options: SyncOptions = {},
+  {
+    announceWorkspace = true,
+    compactSuccess = false,
+  }: SyncDisplayOptions = {},
+) {
+  if (!isJsonMode() && announceWorkspace) {
     console.log('\nUpdating workspace...\n');
   }
   const result = await syncWorkspace(process.cwd(), options);
@@ -114,8 +126,12 @@ async function runSyncAndPrint(options: SyncOptions = {}) {
   }
 
   const syncData = buildSyncData(result);
+  const ok = result.success && result.totalFailed === 0;
 
-  if (!isJsonMode()) {
+  if (
+    !isJsonMode() &&
+    (!compactSuccess || !ok || (result.warnings?.length ?? 0) > 0)
+  ) {
     for (const pluginResult of result.pluginResults) {
       console.log(formatPluginHeader(pluginResult));
 
@@ -180,13 +196,16 @@ async function runSyncAndPrint(options: SyncOptions = {}) {
     }
   }
 
-  return { ok: result.success && result.totalFailed === 0, syncData };
+  return { ok, syncData };
 }
 
 /**
  * Run user-scope sync and print results. Returns true if sync succeeded.
  */
-async function runUserSyncAndPrint(options: SyncOptions = {}) {
+async function runUserSyncAndPrint(
+  options: SyncOptions = {},
+  { compactSuccess = false }: SyncDisplayOptions = {},
+) {
   const result = await syncUserWorkspace(options);
 
   if (!result.success && result.error && !isJsonMode()) {
@@ -194,8 +213,12 @@ async function runUserSyncAndPrint(options: SyncOptions = {}) {
   }
 
   const syncData = buildSyncData(result);
+  const ok = result.success && result.totalFailed === 0;
 
-  if (!isJsonMode()) {
+  if (
+    !isJsonMode() &&
+    (!compactSuccess || !ok || (result.warnings?.length ?? 0) > 0)
+  ) {
     for (const pluginResult of result.pluginResults) {
       console.log(formatPluginHeader(pluginResult));
 
@@ -260,7 +283,7 @@ async function runUserSyncAndPrint(options: SyncOptions = {}) {
     }
   }
 
-  return { ok: result.success && result.totalFailed === 0, syncData };
+  return { ok, syncData };
 }
 
 
@@ -1545,6 +1568,8 @@ const pluginUninstallCmd = command({
 // plugin update
 // =============================================================================
 
+type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'scope'>;
+
 const pluginUpdateCmd = command({
   name: 'update',
   description: buildDescription(pluginUpdateMeta),
@@ -1554,6 +1579,8 @@ const pluginUpdateCmd = command({
   },
   handler: async ({ plugin, scope }) => {
     const updateContext = new UpdateContext();
+    const jsonMode = isJsonMode();
+    const progressiveOutput = Boolean(process.stdout.isTTY) && !jsonMode;
     try {
       if (
         scope &&
@@ -1571,7 +1598,7 @@ const pluginUpdateCmd = command({
       const updateProject = scope === 'project' || (!scope && !updateAll) || updateAll;
 
       // Collect installed plugins based on scope
-      const pluginsToUpdate: Array<{ spec: string; scope: 'project' | 'user' }> = [];
+      const pluginsToUpdate: PluginUpdateEntry[] = [];
       const addPluginToUpdate = (spec: string, pluginScope: 'project' | 'user') => {
         if (!pluginsToUpdate.some((entry) =>
           entry.spec === spec && entry.scope === pluginScope
@@ -1633,7 +1660,7 @@ const pluginUpdateCmd = command({
 
       if (plugin && toUpdate.length === 0) {
         const error = `Plugin not found: ${plugin}`;
-        if (isJsonMode()) {
+        if (jsonMode) {
           jsonOutput({ success: false, command: 'plugin update', error });
           process.exit(1);
         }
@@ -1642,7 +1669,7 @@ const pluginUpdateCmd = command({
       }
 
       if (toUpdate.length === 0) {
-        if (isJsonMode()) {
+        if (jsonMode) {
           jsonOutput({
             success: true,
             command: 'plugin update',
@@ -1653,6 +1680,58 @@ const pluginUpdateCmd = command({
         console.log('No plugins to update.');
         return;
       }
+      const duplicateCrossScopeLabels = new Set<string>();
+      if (progressiveOutput) {
+        const scopesByLabel = new Map<
+          string,
+          Set<PluginUpdateEntry['scope']>
+        >();
+        for (const entry of toUpdate) {
+          const label = terminalSafe(formatPluginSource(entry.spec));
+          const scopes = scopesByLabel.get(label) ?? new Set();
+          scopes.add(entry.scope);
+          scopesByLabel.set(label, scopes);
+        }
+        for (const [label, scopes] of scopesByLabel) {
+          if (scopes.size > 1) duplicateCrossScopeLabels.add(label);
+        }
+      }
+      const declarationKey = (entry: PluginUpdateEntry) =>
+        `${entry.scope}:${entry.spec}`;
+      const declarationLabel = (entry: PluginUpdateEntry) => {
+        const label = terminalSafe(formatPluginSource(entry.spec));
+        return duplicateCrossScopeLabels.has(label)
+          ? `${label} (${entry.scope})`
+          : label;
+      };
+      const soleHeaderEntry =
+        plugin && toUpdate.length === 1 ? toUpdate[0] : undefined;
+      const printUpdateHeader = () => {
+        if (plugin) {
+          const label =
+            progressiveOutput && soleHeaderEntry
+              ? declarationLabel(soleHeaderEntry)
+              : plugin;
+          console.log(
+            `${progressiveOutput ? 'Updating' : 'Updating plugin:'} ${label}...`,
+          );
+        } else {
+          console.log('Updating plugins...');
+        }
+        console.log();
+      };
+      const announcedDeclarations = new Set<string>();
+      if (progressiveOutput && soleHeaderEntry) {
+        printUpdateHeader();
+        announcedDeclarations.add(declarationKey(soleHeaderEntry));
+      }
+      const announceDeclaration = (entry: PluginUpdateEntry) => {
+        if (!progressiveOutput) return;
+        const key = declarationKey(entry);
+        if (announcedDeclarations.has(key)) return;
+        announcedDeclarations.add(key);
+        console.log(`Updating ${declarationLabel(entry)}...`);
+      };
 
       const nativeTargets = {
         project: [] as string[],
@@ -1666,6 +1745,14 @@ const pluginUpdateCmd = command({
           config.plugins.find(
             (candidate) => getPluginSource(candidate) === entry.spec,
           ) ?? entry.spec;
+        const plan = buildPluginSyncPlans(
+          [declaration],
+          config.clients,
+          entry.scope,
+        ).plans[0];
+        if ((plan?.nativeClients.length ?? 0) > 0) {
+          announceDeclaration(entry);
+        }
         const preflightErrors = await preflightNativePluginDeclaration(
           declaration,
           config.clients,
@@ -1677,26 +1764,27 @@ const pluginUpdateCmd = command({
             `Native preflight failed before update: ${preflightErrors.join('; ')}`,
           );
         }
-        const plan = buildPluginSyncPlans(
-          [declaration],
-          config.clients,
-          entry.scope,
-        ).plans[0];
         if ((plan?.nativeClients.length ?? 0) > 0) {
           nativeTargets[entry.scope].push(entry.spec);
           if (plan?.clients.length === 0) {
-            nativeOnly.add(`${entry.scope}:${entry.spec}`);
+            nativeOnly.add(declarationKey(entry));
           }
         }
       }
 
-      if (!isJsonMode()) {
-        console.log(plugin ? `Updating plugin: ${plugin}...` : 'Updating plugins...');
-        console.log();
-      }
+      if (!jsonMode && !progressiveOutput) printUpdateHeader();
 
       // Update each plugin
       const results: InstalledPluginUpdateResult[] = [];
+      const renderUpdateResult = (result: InstalledPluginUpdateResult) => {
+        const icon = result.success
+          ? result.action === 'updated'
+            ? '\u2713'
+            : '-'
+          : '\u2717';
+        console.log(`${icon} ${result.plugin} (${result.action})`);
+        if (result.error) console.log(`  Error: ${result.error}`);
+      };
       const createUpdateDeps = (pluginScope: 'project' | 'user') => {
         const workspacePath =
           pluginScope === 'project' ? process.cwd() : undefined;
@@ -1716,23 +1804,27 @@ const pluginUpdateCmd = command({
       };
 
       const updatedScopes = new Set<'project' | 'user'>();
-      for (const { spec: pluginSpec, scope: pluginScope } of toUpdate) {
-        const result = nativeOnly.has(`${pluginScope}:${pluginSpec}`)
-          ? {
-              plugin: pluginSpec,
-              success: true,
-              action: 'skipped' as const,
-            }
-          : await updatePlugin(
-              pluginSpec,
-              depsByScope[pluginScope],
-              updateContext,
-            );
+      for (const entry of toUpdate) {
+        const { spec: pluginSpec, scope: pluginScope } = entry;
+        let result: InstalledPluginUpdateResult;
+        if (nativeOnly.has(declarationKey(entry))) {
+          result = {
+            plugin: pluginSpec,
+            success: true,
+            action: 'skipped',
+          };
+        } else {
+          announceDeclaration(entry);
+          result = await updatePlugin(
+            pluginSpec,
+            depsByScope[pluginScope],
+            updateContext,
+          );
+          if (progressiveOutput) renderUpdateResult(result);
+        }
         if (result.action === 'updated') updatedScopes.add(pluginScope);
         results.push(result);
-
       }
-
 
       // Sync each affected scope independently. Native mutation is constrained
       // to the declarations named by this invocation.
@@ -1753,13 +1845,19 @@ const pluginUpdateCmd = command({
         targetsByScope.project.length > 0 &&
         (updatedScopes.has('project') || nativeTargets.project.length > 0)
       ) {
-        const { ok, syncData } = await runSyncAndPrint({
-          skipAgentFiles: true,
-          nativeSelection: {
-            mode: 'update',
-            targets: targetsByScope.project,
+        const { ok, syncData } = await runSyncAndPrint(
+          {
+            skipAgentFiles: true,
+            nativeSelection: {
+              mode: 'update',
+              targets: targetsByScope.project,
+            },
           },
-        });
+          {
+            announceWorkspace: !progressiveOutput,
+            compactSuccess: progressiveOutput,
+          },
+        );
         syncResults.project = syncData;
         if (!ok) syncOk = false;
         nativeEffects.project = syncData.nativeResources?.effects ?? [];
@@ -1768,13 +1866,16 @@ const pluginUpdateCmd = command({
         targetsByScope.user.length > 0 &&
         (updatedScopes.has('user') || nativeTargets.user.length > 0)
       ) {
-        const { ok, syncData } = await runUserSyncAndPrint({
-          skipAgentFiles: true,
-          nativeSelection: {
-            mode: 'update',
-            targets: targetsByScope.user,
+        const { ok, syncData } = await runUserSyncAndPrint(
+          {
+            skipAgentFiles: true,
+            nativeSelection: {
+              mode: 'update',
+              targets: targetsByScope.user,
+            },
           },
-        });
+          { compactSuccess: progressiveOutput },
+        );
         syncResults.user = syncData;
         if (!ok) syncOk = false;
         nativeEffects.user = syncData.nativeResources?.effects ?? [];
@@ -1782,7 +1883,7 @@ const pluginUpdateCmd = command({
 
       for (let index = 0; index < toUpdate.length; index++) {
         const entry = toUpdate[index];
-        if (!entry || !nativeOnly.has(`${entry.scope}:${entry.spec}`)) continue;
+        if (!entry || !nativeOnly.has(declarationKey(entry))) continue;
         const effects = (nativeEffects[entry.scope] ?? []).filter((effect) =>
           nativeIdentityMatches(
             entry.spec,
@@ -1792,7 +1893,7 @@ const pluginUpdateCmd = command({
         const failure = effects.find(
           (effect) => effect.action === 'failed' || effect.action === 'unknown',
         );
-        results[index] = failure
+        const settledResult: InstalledPluginUpdateResult = failure
           ? {
               plugin: entry.spec,
               success: false,
@@ -1819,23 +1920,18 @@ const pluginUpdateCmd = command({
                   action: 'failed',
                   error: 'Native update produced no matching lifecycle effect',
                 };
+        results[index] = settledResult;
+        if (progressiveOutput) renderUpdateResult(settledResult);
       }
 
-      for (const result of results) {
-        if (isJsonMode()) continue;
-        const icon = result.success
-          ? result.action === 'updated'
-            ? '\u2713'
-            : '-'
-          : '\u2717';
-        console.log(`${icon} ${result.plugin} (${result.action})`);
-        if (result.error) console.log(`  Error: ${result.error}`);
+      if (!jsonMode && !progressiveOutput) {
+        for (const result of results) renderUpdateResult(result);
       }
       const updated = results.filter((result) => result.action === 'updated').length;
       const skipped = results.filter((result) => result.action === 'skipped').length;
       const failed = results.filter((result) => result.action === 'failed').length;
 
-      if (isJsonMode()) {
+      if (jsonMode) {
         jsonOutput({
           success: failed === 0 && syncOk,
           command: 'plugin update',
@@ -1872,7 +1968,7 @@ const pluginUpdateCmd = command({
       }
     } catch (error) {
       if (error instanceof Error) {
-        if (isJsonMode()) {
+        if (jsonMode) {
           jsonOutput({ success: false, command: 'plugin update', error: error.message });
           process.exit(1);
         }

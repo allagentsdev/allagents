@@ -149,6 +149,7 @@ export interface BuildSkillUpdatePreflightDeps {
     node: CheckoutNode,
     unit: SkillUpdateUnitInput,
   ) => Promise<SkillUpdateNodePrecheck>;
+  onUnitStart?: (unit: SkillUpdateUnitInput) => void;
 }
 
 export interface CreateGitHubSkillUpdateInstallationInput {
@@ -226,6 +227,7 @@ export interface ExecuteSkillUpdateDeps {
     scope: SkillUpdateScope,
     options: { offline: true },
   ) => Promise<{ success: boolean; error?: string }>;
+  onUnitResult?: (result: SkillUpdateUnitExecution) => void;
 }
 
 export type SkillUpdateExecutionStatus =
@@ -472,6 +474,16 @@ function impact(
     source: installation.rawSource,
   };
 }
+function notifyObserver<T>(
+  observer: ((value: T) => void) | undefined,
+  value: T,
+): void {
+  try {
+    observer?.(value);
+  } catch {
+    // Progress observers cannot affect the domain outcome they observe.
+  }
+}
 
 /**
  * Inspect every selected physical unit without mutating persistent state.
@@ -496,6 +508,7 @@ export async function buildSkillUpdatePreflight(
 
   const units: SkillUpdateUnit[] = [];
   for (const unit of physicalUnits) {
+    notifyObserver(deps.onUnitStart, unit);
     const nodeIds = new Set(unit.nodes.map((node) => node.id));
     const sharedFailures = (input.failures ?? []).filter((failure) =>
       failure.nodeIds.some((nodeId) => nodeIds.has(nodeId)),
@@ -670,29 +683,35 @@ export async function executeSkillUpdatePlan(
   deps: ExecuteSkillUpdateDeps,
 ): Promise<SkillUpdateExecutionResult> {
   if (Object.values(decisions).includes('cancel')) {
+    const units = plan.units.map((unit) => execution(unit, 'cancelled'));
+    for (const unit of units) notifyObserver(deps.onUnitResult, unit);
     return {
       success: false,
       cancelled: true,
-      units: plan.units.map((unit) => execution(unit, 'cancelled')),
+      units,
       syncedScopes: [],
     };
   }
 
   const results: SkillUpdateUnitExecution[] = [];
   const scopesToSync = new Set<SkillUpdateScope>();
+  const record = (result: SkillUpdateUnitExecution): void => {
+    results.push(result);
+    notifyObserver(deps.onUnitResult, result);
+  };
 
   for (const unit of plan.units) {
     if (unit.outcome === 'failed') {
-      results.push(execution(unit, 'failed', unit.error));
+      record(execution(unit, 'failed', unit.error));
       continue;
     }
     if (unit.outcome === 'local') {
-      results.push(execution(unit, 'skipped'));
+      record(execution(unit, 'skipped'));
       continue;
     }
 
     if (unit.blockedByOutOfScope) {
-      results.push(
+      record(
         execution(unit, unit.deleted.length > 0 ? 'retained' : 'skipped'),
       );
       continue;
@@ -701,7 +720,7 @@ export async function executeSkillUpdatePlan(
     if (unit.deleted.length > 0) {
       const decision = decisions[unit.id] ?? 'retain';
       if (decision !== 'remove') {
-        results.push(execution(unit, 'retained'));
+        record(execution(unit, 'retained'));
         continue;
       }
     }
@@ -725,7 +744,7 @@ export async function executeSkillUpdatePlan(
           scopesToSync.add(installation.scope);
         }
       }
-      results.push(execution(unit, 'updated'));
+      record(execution(unit, 'updated'));
       continue;
     }
 
@@ -755,9 +774,7 @@ export async function executeSkillUpdatePlan(
           scopesToSync.add(installation.scope);
         }
       }
-      results.push(
-        execution(unit, unit.deleted.length > 0 ? 'removed' : 'updated'),
-      );
+      record(execution(unit, unit.deleted.length > 0 ? 'removed' : 'updated'));
     } catch (error) {
       const errors = [error instanceof Error ? error.message : String(error)];
       if (prepared) {
@@ -778,7 +795,7 @@ export async function executeSkillUpdatePlan(
           );
         }
       }
-      results.push(execution(unit, 'failed', errors.join('; ')));
+      record(execution(unit, 'failed', errors.join('; ')));
     }
   }
 
@@ -791,14 +808,14 @@ export async function executeSkillUpdatePlan(
         syncedScopes.push(scope);
         continue;
       }
-      results.push({
+      record({
         id: `sync:${scope}`,
         status: 'failed',
         skillCounts: { updated: 0, removed: 0, retained: 0 },
         ...(syncResult.error && { error: syncResult.error }),
       });
     } catch (error) {
-      results.push({
+      record({
         id: `sync:${scope}`,
         status: 'failed',
         skillCounts: { updated: 0, removed: 0, retained: 0 },

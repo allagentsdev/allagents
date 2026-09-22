@@ -33,6 +33,13 @@
 
 ### Added
 
+- Plugin and skill updates now identify each current source and show its result
+  as it settles. Direct TTY commands use one persistent `Updating ...` line per
+  source, while **Plugins → Update all** keeps the current source on its
+  existing spinner. Successful internal synchronization stays folded into that
+  operation; warnings and failures remain detailed. JSON and redirected direct
+  output remain one-shot and batched.
+
 - Added a thin first-party AllAgents skill that treats the installed CLI as
   authoritative and follows its progressive `--help --json` indexes and leaf
   contracts instead of relying on memorized commands.

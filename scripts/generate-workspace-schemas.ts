@@ -18,6 +18,40 @@ const SCHEMA_ROOT = resolve(
 const PUBLIC_ROOT = `https://allagents.dev/schemas/${SCHEMA_VERSION}`;
 const JSON_SCHEMA_DIALECT = 'http://json-schema.org/draft-07/schema#';
 
+type JsonSchemaNode = {
+  default?: unknown;
+  properties?: Record<string, JsonSchemaNode>;
+};
+
+/**
+ * Zod 4 aliases a `z.X().default(v)` node to its inner schema, so the emitted
+ * property loses the `default` annotation whenever that inner schema contains a
+ * transform — which is every client-backed collection here. `default` is only
+ * an annotation, but the published documents have always carried it, so restore
+ * it from the zod shape at the enclosing object.
+ */
+function restoreDefaultAnnotations(ctx: {
+  zodSchema?: { _zod?: { def?: { type?: string; shape?: Record<string, unknown> } } };
+  jsonSchema?: JsonSchemaNode;
+}): void {
+  const shape = ctx.zodSchema?._zod?.def?.shape;
+  if (!shape || !ctx.jsonSchema?.properties) return;
+  for (const [key, child] of Object.entries(shape)) {
+    const childDef = (
+      child as { _zod?: { def?: { type?: string; defaultValue?: unknown } } } | undefined
+    )?._zod?.def;
+    const property = ctx.jsonSchema.properties[key];
+    if (
+      childDef?.type === 'default' &&
+      childDef.defaultValue !== undefined &&
+      property &&
+      property.default === undefined
+    ) {
+      property.default = childDef.defaultValue;
+    }
+  }
+}
+
 const WORKSPACE_SCHEMAS = [
   {
     fileName: 'project-workspace.schema.json',
@@ -50,6 +84,10 @@ export function generateWorkspaceSchemas(): readonly GeneratedWorkspaceSchema[] 
       target: 'draft-7',
       io: 'input',
       unrepresentable: 'any',
+      override: (context) => {
+        restoreDefaultAnnotations(context);
+        return undefined;
+      },
     }) as Record<string, unknown>;
     const { $schema: _dialect, ...definition } = generated;
     const document = {

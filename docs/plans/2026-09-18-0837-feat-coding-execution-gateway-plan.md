@@ -1,7 +1,7 @@
 ---
 title: "UHP Coding-Agent Execution through HarnessRouter - Plan"
 date: 2026-09-18
-updated: 2026-09-21
+updated: 2026-09-22
 type: feat
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -26,7 +26,9 @@ execution: code
   durable harness-native OAuth state. Implement Git/OCI semantics in a separate
   AllAgents executable. Codex authenticates through `codex login`; Pi
   authenticates through its `/login` flow for the selected provider. An
-  API-key-authenticated proxy is an explicit last-resort target mode.
+  API-key-authenticated proxy is an explicit last-resort target mode. Optional
+  describes deployment configuration, not release scope: version one implements
+  and verifies it for operators that reject the native owner-trust boundary.
 - **Authority:** [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md)
   owns the protocol, fork, trust, workspace, harness-authentication, and
   provider-routing decisions. UHP `2026-09-12` and HarnessRouter's conformance
@@ -112,10 +114,10 @@ caller responsible for acquisition. The temporary fork closes those seams.
   and session identity, treats the configured workspace metadata value as
   bounded opaque JSON, drives materialization before provider fallback, and
   returns hook metadata on every response path.
-- **A3. AllAgents materializer:** A non-network executable invoked before the
-  first turn. It validates the AllAgents descriptor, reads the mounted project
-  workspace configuration, acquires Git or OCI sources into staging, validates
-  the tree, and returns provenance.
+- **A3. AllAgents materializer:** A subprocess executable that exposes no
+  listening service, invoked before the first turn. It validates the AllAgents
+  descriptor, reads the mounted project workspace configuration, acquires Git or
+  OCI sources into staging, validates the tree, and returns provenance.
 - **A4. HarnessRouter runner:** Owns the per-session operating-system identity,
   publication, checkpoints, nested-repository collection, input files, safe
   nested cwd, selected Codex/Pi process, session conversation state, and
@@ -155,8 +157,10 @@ caller responsible for acquisition. The temporary fork closes those seams.
   the UHP caller only. Codex and Pi use their own login, token storage, refresh,
   and provider request path; native mode has no provider-route API key.
 - **Make proxy auth explicit.** `proxyApiKey` is a last-resort target mode for a
-  compatibility or stronger-isolation requirement. OAuth failure never activates
-  it, and a session never changes its persisted authentication binding.
+  compatibility or stronger-isolation requirement. It is optional to configure
+  but remains required version-one implementation and verification scope. OAuth
+  failure never activates it, and a session never changes its persisted
+  authentication binding.
 - **Preserve stock UHP requests.** Requests without the configured metadata key
   behave exactly as upstream.
 - **Use a custom HarnessRouter image.** The image combines a pinned HarnessRouter
@@ -212,11 +216,38 @@ caller responsible for acquisition. The temporary fork closes those seams.
   checkpoints, produced-file records, passive logs/traces, materializer input,
   or response metadata. Native mode sets explicit owner trust because the
   harness and tool subprocesses sharing its operating-system identity may read
-  or emit that credential. Version one holds a per-profile lock for every
-  refresh-capable turn and every login, logout, or repair operation; a second
-  turn for that profile waits or fails before launch.
-  Preserve HarnessRouter streaming, cancellation, idempotency, files, artifacts,
-  completed-session persistence, and per-session workspace/UID isolation.
+  or emit that credential. In `nativeOAuth`, version one supports exactly one
+  active refresh-capable turn per profile and holds that profile lock for every
+  turn and every login, logout, or repair operation. Admission preserves UHP
+  precedence with an atomic `Idempotency-Key` claim around lookup and admission.
+  The single claim owner proceeds; simultaneous same-key arrivals wait on that
+  claim and receive the owner's result without a second profile-lock attempt. If
+  the owner fails before response allocation, the gateway publishes that same
+  request error to current waiters and removes the claim so a later retry can try
+  again. A new turn in an already-active session returns `session_busy`; only
+  then does a genuinely new executable turn try the native profile lock.
+  Cross-session collision returns HTTP 503 `harness_unavailable` with
+  `detail.reason: "allagents_auth_profile_busy"` before response allocation,
+  runner work, or materialization. No per-profile waiter queue exists; the UHP
+  idempotency claim wait is part of one logical request, not such a queue.
+
+  Admission is a private runner operation: the runner turn supervisor persists an
+  active-profile admission record, takes the operating-system advisory lock, and
+  returns an opaque admission token before the gateway allocates a response. The
+  runner—not the gateway—owns that lock through descendant termination and
+  refresh commit. A gateway-only crash therefore leaves the lock held; restart
+  reconciles the token and active runner before admitting another turn. The
+  runner releases only after the gateway acknowledges durable terminal
+  response/state and the runner has either durably committed native refresh state
+  or marked the profile `repair-required`. If the runner process dies, the OS
+  releases the lock, but its durable admission record keeps readiness/admission
+  closed until startup proves all descendant boundaries empty and validates or
+  repairs the profile. Ordinary and administrative paths use one `finally`
+  release/ack protocol. `proxyApiKey` uses no native profile lock.
+  Operators provision distinct native profiles when they require parallel turn
+  capacity. Preserve HarnessRouter streaming,
+  cancellation, idempotency, files, artifacts, completed-session persistence,
+  and per-session workspace/UID isolation.
 
 #### Workspace extension and hook
 
@@ -243,28 +274,66 @@ caller responsible for acquisition. The temporary fork closes those seams.
   after fresh-session hydrate and before `/turn`. Pass at most 128 KiB on stdin,
   accept at most 1 MiB on stdout and 64 KiB on stderr, and use the smaller of
   900 seconds or the remaining UHP deadline. The generic request contains the
-  opaque metadata value, session workspace and fixed sibling staging roots,
-  project configuration root, and deadline. Source values come from an
-  owner-only runner secret mount or credential-store handle, never the
+  opaque metadata value, session workspace, fixed sibling staging and private
+  result roots, project configuration root, and deadline. Source values come
+  from an owner-only runner secret mount or credential-store handle, never the
   gateway/runner base environment. The runner resolves only the selected handle
-  and constructs the allowlisted materializer child environment. It refuses
-  agent launch if a configured secret name or value appears in the service or
-  agent environment. The typed result is `completed` with effective relative cwd
-  and bounded public metadata or `failed` with stable code, safe message, and
-  retryability. A materializer failure terminalizes the UHP response and never
-  enters provider fallback.
+  and constructs the allowlisted materializer child environment. Startup
+  preflight blocks readiness if a configured secret name or value appears in the
+  service or agent environment. The per-request recheck, after allocation but
+  before child or agent launch, returns failed
+  `allagents_secret_boundary_violation` on the same condition. Before injecting
+  secrets, the runner creates a
+  per-materialization cgroup v2 leaf under a runner-owned delegated subtree and
+  starts the child inside it atomically with `clone3(CLONE_INTO_CGROUP)`. Where
+  that primitive is unavailable, it forks a child with no secret material and
+  holds it at a pre-exec handshake; the parent moves it to the leaf, verifies the
+  exact membership through `/proc/<pid>/cgroup`, then delivers the one-shot secret
+  bundle and releases the child to construct its environment and `exec`. The
+  stopped child cannot execute user code or fork before verified membership. The
+  child cannot write the parent `cgroup.procs` or administer the subtree; a
+  process group or post-exec PID migration is insufficient.
+  On every outcome, including a parent that returns `completed`, the runner
+  closes the hook streams, checks
+  `cgroup.events`, uses `cgroup.kill` when membership remains, and waits a bounded
+  interval for `populated 0`. It does not accept success, read the private
+  manifest, validate or publish staging, release the secret environment, or
+  remove roots before the cgroup is empty. Membership remaining after a parent
+  reports `completed` is itself failed
+  `allagents_workspace_containment_breach`, even when `cgroup.kill` subsequently
+  reaches `populated 0`; that recovered violation does not require runner exit.
+  If the cgroup cannot become empty, the runner reports an internal
+  `containment_pending` reason. The gateway CASes only the internal session state
+  to `containment_pending`/non-resumable and acknowledges that receipt; it emits
+  no terminal stream event and GET continues to show non-terminal `in_progress`.
+  The runner exits nonzero after that acknowledgement or a bounded
+  acknowledgement deadline. The required `on-failure` restart policy destroys
+  the old container boundary; startup keeps readiness false, removes or
+  quarantines orphaned cgroups, and reports `containment_reconciled` only after
+  the old boundary is proven empty. Only then may the gateway terminalize and
+  expose the response: client cancellation becomes `cancelled`, declared-budget
+  exhaustion becomes `incomplete`, and every other case becomes failed
+  `allagents_workspace_containment_breach`. No terminal response/state, terminal
+  event, result read, publication, secret release, or cleanup becomes observable
+  before that proof. The typed hook result is `completed` with effective relative
+  cwd, a private workspace-manifest reference and digest, and bounded public
+  metadata, or `failed` with a cataloged code, safe message, and retryability.
+  Materializer failure never enters provider fallback.
 - **R8.** Persist a CAS-protected session materialization state:
-  `unbound -> materializing -> ready` or `failed`, plus the resolved harness
-  target, auth mode, native-profile or proxy-connection identity, and canonical
-  binding-config digest. The runner validates successful staging, publishes it
-  with a recoverable same-filesystem rename protocol, writes a
+  `unbound -> materializing -> ready`, `failed`, or internal
+  `containment_pending -> failed`, plus the resolved harness target, auth mode,
+  native-profile or proxy-connection identity, and canonical
+  binding-config digest. The runner validates the private workspace manifest and
+  successful staging independently, publishes staging with a recoverable
+  same-filesystem rename protocol, removes the private result root, writes a
   descriptor/provenance marker, initializes the HarnessRouter root checkpoint
   and nested-repository collection baselines, and returns `published` with the
   checkpoint digest. Before provider dispatch, the gateway stores that digest
-  and public metadata and CASes the session to `ready`. On restart in
-  `materializing`, reconcile to `ready` only when the workspace marker and
-  durable checkpoint match the bound descriptor; otherwise mark the session
-  non-resumable, remove or quarantine the workspace, and never replay acquisition.
+  and public metadata and CASes the session to `ready`.
+  On restart in `materializing`, reconcile to `ready` only when the workspace
+  marker and durable checkpoint match the bound descriptor; otherwise mark the
+  session non-resumable, remove or quarantine the workspace, and never replay
+  acquisition.
   Every continuation resolves the persisted auth binding by identity and digest;
   if unavailable or changed, it fails before runner work instead of selecting a
   replacement. Provider fallback sees `ready` state only and cannot invoke the
@@ -310,19 +379,30 @@ caller responsible for acquisition. The temporary fork closes those seams.
   submodule recursion, Git LFS hydration, or configured clean/smudge filters.
   Preserve each repository's `.git` directory for the coding agent. Failure never
   falls through to snapshot mode or another credential identity.
+  Limit one materialization to 128 repositories, 500,000 filesystem entries, and
+  32 GiB across the staged workspace. A count or byte violation returns failed
+  `allagents_workspace_limit_exceeded`. Exhausting the declared UHP time budget
+  returns `incomplete` with `error: null`; only an unexpected execution timeout
+  before that budget returns failed `timeout`. Every outcome proves the cgroup
+  empty before removing staging and starts no provider.
 - **R11.** Snapshot mode constructs a server-side immutable OCI reference from
   the selected snapshot's configured repository and caller-provided digest.
   Accept only a direct OCI image manifest with at most 64 distributable
-  tar/gzip/zstd layers and the entry's configured workspace-manifest media type;
-  redirects may not change registry authority. Verify manifest, config, layer
-  size and digest before use; apply OCI whiteouts; limit manifest and config to
-  4 MiB each, total compressed layers to 8 GiB, expanded bytes to 32 GiB,
-  entries to 500,000, one regular file to 4 GiB, paths to 4096 UTF-8 bytes and
-  128 components, and one PAX/extended header to 1 MiB. Reject devices, sockets,
-  traversal, escaping links, sparse files, unknown or foreign layers, mutable
-  tags, and undeclared output. Validate the final logical repository catalog and
-  workspace-manifest digest in staging. Snapshot repository roots need not
-  contain `.git`; after publication the runner creates private collection
+  tar/gzip/zstd layers. Its config descriptor must use the entry's configured
+  workspace-manifest media type and address canonical workspace-manifest bytes;
+  redirects may not change registry authority. Verify the image manifest,
+  workspace manifest, layer size, and digest before use; apply OCI whiteouts;
+  limit the image manifest to 4 MiB, the workspace-manifest blob to 128 MiB,
+  its `repositories` array to 128 items, total compressed layers to 8 GiB,
+  expanded bytes to 32 GiB, entries to 500,000, one regular file to 4 GiB, paths
+  to 4096 UTF-8 bytes and 128 components, and one PAX/extended header to 1 MiB.
+  The runner independently rejects a 129th repository root even when the archive
+  and fetched manifest otherwise agree. Reject devices,
+  sockets, traversal, escaping links, sparse files, unknown or foreign layers,
+  mutable tags, and undeclared output. Recompute the canonical workspace
+  manifest from staging and require it to match both the fetched manifest bytes
+  and caller-provided digest. Snapshot repository roots need not contain `.git`;
+  after publication the runner creates private collection
   baselines from the verified trees so later produced-file reporting remains
   truthful.
 - **R12.** Extend HarnessRouter's response translator and stored-response paths
@@ -330,8 +410,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
   idempotent replay return the same bounded
   `response.metadata["allagents.workspace"]`. It contains extension version,
   effective descriptor digest, logical cwd, source mode, completeness, resolved
-  commits or OCI manifest/config/layer digests, and workspace-manifest digest.
-  It never contains origins, physical paths, credentials, or unverified facts.
+  commits or OCI image/workspace-manifest/layer digests, and the canonical
+  workspace-manifest digest. It never contains origins, physical paths,
+  credentials, or unverified facts.
 - **R13.** The materializer resolves `${ENV_VAR}` references from its allowlisted
   child environment, uses hermetic Git/registry configuration, removes temporary
   auth files before returning, and emits no secret. Prove with a deliberately
@@ -375,9 +456,11 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **R15.** AI Evals owns its Promptfoo provider. It sends the UHP request directly
   to HarnessRouter, maps Promptfoo variables to the closed extension, and maps
   terminal output, usage, artifacts, provenance, and failures to
-  `ProviderResponse`. Multi-turn cases retain the prior response ID and send it
-  as `previous_response_id`. AllAgents documents the contract and examples but
-  does not depend on Promptfoo at runtime.
+  `ProviderResponse`. Every non-success follows the Failure Contract's exact
+  status/error/retryability/metadata mapping; none becomes empty success or an
+  automatic retry. Multi-turn cases retain the prior response ID and send it as
+  `previous_response_id`. AllAgents documents the contract and examples but does
+  not depend on Promptfoo at runtime.
 
 ### Key Flows
 
@@ -400,25 +483,38 @@ caller responsible for acquisition. The temporary fork closes those seams.
 4. Start the attestation-verified, digest-pinned custom HarnessRouter image with
    durable session data, durable harness auth roots, a private listener,
    HarnessRouter caller key, materializer command, project configuration,
-   owner-only source-secret mount/credential-store handle, and the configured
-   native or proxy trust mode.
+   owner-only source-secret mount/credential-store handle, the configured native
+   or proxy trust mode, a runner-owned delegated cgroup v2 subtree, and required
+   `on-failure` restart policy. Startup sweeps or quarantines orphaned
+   materializer cgroups and withholds readiness unless delegation is usable and
+   every prior boundary is empty.
 5. From the exact container network, verify each advertised harness ID and model
    allowlist, safe roots, materializer version, selected auth binding, and a live
    turn. Native targets exercise login status, atomic local refresh persistence,
-   stale-profile repair, same-binding continuation, and serialized overlapping
-   turns. An explicit proxy deployment exercises schema/TLS/model-map/endpoint
-   compatibility plus bounded in-turn use and wrong-scope/expired/revoked
-   rejection. Any required
-   preflight or auth failure prevents readiness.
+   stale-profile repair, same-binding continuation, and fail-fast overlapping
+   turns. An explicit proxy deployment exercises
+   schema/TLS/model-map/endpoint compatibility plus bounded in-turn use and
+   wrong-scope/expired/revoked rejection. Any required preflight, containment,
+   or auth failure prevents readiness.
 
 #### F2. Execute the first repository-backed turn
 
 1. Promptfoo sends one authenticated UHP request with `model`, stock
    `metadata.harness_id`, idempotency input, and the AllAgents workspace object.
-2. HarnessRouter validates UHP plus generic metadata bounds, resolves and
-   persists the selected harness target and canonical auth-binding identity/
-   config digest, creates the response/session, CASes materialization from
-   `unbound` to `materializing`, and hydrates a fresh session workspace.
+2. HarnessRouter validates UHP plus generic metadata bounds and atomically claims
+   the `Idempotency-Key` around lookup and admission. One owner proceeds;
+   simultaneous same-key arrivals wait on the claim and receive the owner's
+   result without another admission attempt. For a genuinely new turn, the owner
+   resolves the selected target and canonical auth-binding identity/config
+   digest. In `nativeOAuth` it asks the runner supervisor to persist an admission
+   record and acquire the profile's zero-waiter try-lock; a cross-session
+   collision publishes the cataloged HTTP 503 to current same-key waiters, then
+   removes the pre-allocation claim so a later retry can try again. The runner
+   returns an opaque admission token and retains the lock. `proxyApiKey` acquires
+   no native profile lock. Once admitted, HarnessRouter binds the idempotency
+   claim to the response, persists the binding, creates the response/session,
+   CASes materialization from `unbound` to `materializing`, and hydrates a fresh
+   session workspace.
 3. Before provider selection, the gateway calls runner `/materialize`. The
    AllAgents child validates the descriptor and catalog, resolves exact commits
    and source credentials, writes and validates staging, removes credential
@@ -436,22 +532,34 @@ caller responsible for acquisition. The temporary fork closes those seams.
 6. Normal UHP events and every stored/retrieved terminal response include the
    same namespaced provenance. Produced-file collection walks the HarnessRouter
    root plus each declared nested repository without reporting initial source
-   files as agent output.
+   files as agent output. A single native-mode `finally` path covers completion,
+   cancellation, and every post-admission failure: it persists terminal state,
+   durably commits refresh state or marks the profile `repair-required`, and
+   acknowledges the admission token. Only then may the runner release the
+   profile lock.
 
 #### F3. Continue the session
 
 1. The caller sends `previous_response_id` and omits
    `metadata["allagents.workspace"]`.
-2. HarnessRouter resolves its current session state and writable workspace,
-   requires materialization `ready`, and resolves the persisted auth-binding
-   identity and config digest. An unavailable or changed binding,
-   extension-bearing continuation, concurrent active turn, or non-resumable
-   session fails before runner work.
+2. HarnessRouter atomically claims the `Idempotency-Key` around lookup and
+   admission. A simultaneous duplicate waits for or returns the owner's result
+   without another admission attempt. For a new request it resolves the current
+   session state and writable workspace, requires materialization `ready`, and
+   resolves the persisted auth-binding identity and config digest. An
+   extension-bearing continuation, changed or unavailable binding, or
+   non-resumable session fails before runner work. Same-session concurrency
+   returns stock `session_busy` before profile admission. Only then does
+   `nativeOAuth` acquire the runner-owned zero-waiter profile lock; cross-session
+   saturation returns cataloged `harness_unavailable`. A pre-allocation error is
+   delivered to claim waiters before claim removal. Proxy mode acquires no native
+   profile lock.
 3. HarnessRouter follows its stock predecessor/session semantics. Native mode
    projects the persisted profile; proxy mode mints a new scoped turn token for
    the persisted connection. It resumes the native conversation and returns
    pinned provenance plus new output, usage, and artifacts without changing auth
-   mode or binding.
+   mode or binding. The native `finally` boundary releases the profile lock on
+   every terminal outcome.
 
 #### F4. Execute an OCI-backed first turn
 
@@ -466,8 +574,22 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 #### F5. Cancel, fail, or restart
 
-1. Materializer cancellation or deadline terminates the child and removes
-   staging. The session becomes `failed` and non-resumable; no provider starts.
+1. On every materializer outcome, including a parent that returns `completed`,
+   the runner proves the cgroup empty before exposing any terminal result,
+   reading the manifest, publishing, releasing secrets, or cleanup. Membership
+   after a parent
+   reports `completed` produces failed
+   `allagents_workspace_containment_breach` even if `cgroup.kill` empties the
+   leaf; the runner may remain ready after cleanup in that recovered case. If
+   `populated 0` cannot be proved, the runner reports internal
+   `containment_pending`; the gateway persists and acknowledges only that
+   non-terminal state, withholding terminal GET/stream visibility. The runner
+   exits nonzero after acknowledgement or its bounded deadline. Restart destroys
+   the old boundary and keeps readiness false until it proves the old cgroup
+   empty, then reports reconciliation. Only after that proof does the gateway
+   expose `cancelled` for client cancellation, `incomplete` for declared-budget
+   stop, or failed `allagents_workspace_containment_breach` otherwise. No provider
+   starts.
 2. Agent cancellation and deadline use HarnessRouter's normal UHP lifecycle.
 3. Startup reconciles a `materializing` session to `ready` only when the bound
    descriptor, published workspace marker, and durable checkpoint all match.
@@ -476,6 +598,12 @@ caller responsible for acquisition. The temporary fork closes those seams.
    rehydrates from its durable checkpoint.
 4. Whole-container termination does not preserve the in-flight agent process.
    Interrupted agent turns fail according to HarnessRouter behavior.
+5. Every failure after native admission persists terminal state and valid or
+   `repair-required` refresh state before acknowledging the runner's admission
+   token. A gateway-only crash leaves the runner-held lock intact until restart
+   reconciliation; a runner crash leaves a durable admission record that blocks
+   readiness until descendant/profile reconciliation. Only then can a new turn
+   acquire the profile; a failed request is never retained as a waiter.
 
 ### Acceptance Examples
 
@@ -489,10 +617,14 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **AE3.** Repository mode resolves configured branch/default/HEAD refs to full
   commits, prepares every execution-eligible repository, preserves nested Git
   history, starts in a validated nested cwd, and returns path-free provenance.
-- **AE4.** HarnessRouter rejects non-object/oversized metadata and an extension
-  on continuation before the hook. The hook rejects unknown logical names,
-  caller-provided URLs, absolute/traversal paths, commands, environment fields,
-  credentials, originless/local repositories, and duplicate names/destinations
+- **AE4.** HarnessRouter maps a non-object extension to HTTP 400 `invalid_input`,
+  an oversized extension to HTTP 413 `allagents_workspace_too_large`, and an
+  extension on continuation to HTTP 409 `allagents_workspace_immutable`; each is
+  an `invalid_request_error` with `param: "metadata.allagents.workspace"` and
+  `detail.retryable: false`, before the hook or response allocation. The hook
+  rejects unknown logical names, caller-provided URLs, absolute/traversal paths,
+  commands, environment fields, credentials, originless/local repositories, and
+  duplicate names/destinations
   before source network access or agent launch.
 - **AE5.** Two turns linked by `previous_response_id` preserve a file and native
   conversation context. The hook runs once; produced-file collection reports
@@ -502,10 +634,21 @@ caller responsible for acquisition. The temporary fork closes those seams.
   workspace. A new revision uses a new session.
 - **AE7.** Explicit UHP input files overlay materialized paths after the
   pre-agent checkpoint and before agent launch.
-- **AE8.** A materializer crash, timeout, cancellation, malformed result,
-  publication crash, checkpoint failure, or Git failure starts no provider,
-  leaks no credential, and leaves the session failed/non-resumable rather than
-  partially ready. Provider fallback never reruns materialization.
+- **AE8.** A materializer spawn/nonzero/crash or malformed/oversized result maps
+  to `allagents_materializer_failed`; publication/marker, checkpoint/baseline, and
+  materialization-state/CAS failures map respectively to
+  `allagents_workspace_publication_failed`,
+  `allagents_workspace_checkpoint_failed`, and
+  `allagents_workspace_state_failed`. A post-allocation secret-boundary recheck
+  maps to `allagents_secret_boundary_violation`. Each starts no provider, leaks
+  no credential, and leaves the session failed/non-resumable rather than
+  partially ready. Atomic-placement, `setsid()`, and double-fork fixtures include
+  a parent that returns `completed` while a descendant attempts a delayed write;
+  that case returns `allagents_workspace_containment_breach` even when forced
+  kill empties the cgroup. An unquiescent leaf preserves public cancellation/
+  budget status when mandated, records the containment reason, and exits the
+  runner nonzero. Provider fallback never reruns materialization. After every
+  fault, a new native turn proves profile admission was safely reconciled.
 - **AE9.** OCI mode accepts a valid digest-pinned fixture with gzip/zstd layers
   and whiteouts and rejects mutable tags, indexes, mismatched digests/sizes,
   traversal, escaping links, devices, sparse files, unknown media types, and
@@ -514,10 +657,16 @@ caller responsible for acquisition. The temporary fork closes those seams.
   refreshes through Pi for its configured provider. Missing, revoked, expired,
   unrefreshable, or locally stale-after-crash OAuth marks only that profile
   unavailable or `repair-required`; it never selects another profile or proxy.
-  A second turn sharing a profile waits or fails before launch. A separately
-  configured `proxyApiKey` deployment's broker permits the bounded multi-request
-  provider flow during the active turn and rejects wrong-audience, wrong-model,
-  wrong-turn, expired, or revoked credentials.
+  A barriered pair of simultaneous first arrivals with one `Idempotency-Key`
+  produces one admission and one result; a new continuation in that active
+  session returns `session_busy`; and genuinely new turns in other sessions
+  sharing the profile fail immediately with cataloged `harness_unavailable`
+  before allocation. Same-key waiters receive a pre-allocation error before its
+  claim is removed; they never fall through to a second execution. Cross-session
+  callers are never queued and cannot acquire later. A separately configured
+  `proxyApiKey` deployment's broker permits bounded multi-request provider flow
+  and rejects wrong-audience, wrong-model, wrong-turn, expired, or revoked
+  credentials.
 - **AE11.** Restart after a completed first turn preserves the session and exact
   persisted auth binding. Removing or changing that binding makes continuation
   fail before runner work; restoring the matching identity and config digest
@@ -531,9 +680,12 @@ caller responsible for acquisition. The temporary fork closes those seams.
   owner, repository, workflow, approved ref, subject digest, and predicate, and
   pulls that digest rather than `latest`. The evidence records upstream, patch,
   materializer, Codex, and Pi inputs; mismatches fail closed.
-- **AE13.** Promptfoo maps one stable materializer failure and one HarnessRouter
-  execution failure to failed `ProviderResponse` results with code, safe message,
-  and metadata; neither becomes a successful empty response.
+- **AE13.** Promptfoo maps request-time auth errors, every cataloged materializer
+  failure, UHP `failed`/`incomplete`/`cancelled` results, and HarnessRouter
+  execution failures to `ProviderResponse.error`. It preserves the wire error
+  code when one exists and otherwise uses the exact terminal status, plus
+  retryability, safe message, and verified metadata. None becomes successful
+  empty output or an automatic retry.
 
 ### Scope Boundaries
 
@@ -695,21 +847,23 @@ The hook supports two operations:
 - `preflight`: validate contract version, project catalog, credential-reference
   syntax and presence, required binaries, and filesystem assumptions without
   source network access; and
-- `materialize`: validate the opaque descriptor, write only to the supplied
-  sibling staging root, and return without publishing.
+- `materialize`: validate the opaque descriptor, write source content only to the
+  supplied sibling staging root, write the canonical manifest only to the
+  supplied private result root, and return without publishing.
 
 The materialize request contains the generic contract version, opaque metadata
-value, session workspace and fixed staging roots, project configuration root,
-and deadline. Secret values are injected only through the configured allowlisted
-child environment; credential identifiers and values are absent from JSON.
+value, session workspace, fixed staging and private result roots, project
+configuration root, and deadline. Secret values are injected only through the
+configured allowlisted child environment; credential identifiers and values are
+absent from JSON.
 
 The generic result is either:
 
 - `completed`, effective relative cwd, effective descriptor digest,
-  workspace-manifest digest, complete path-free public metadata, and declared
-  nested-repository roots; or
-- `failed`, stable code, safe message, retryability, and any verified incomplete
-  public metadata.
+  `workspaceManifest: { path: "workspace-manifest.json", digest }`, complete
+  path-free public metadata, and declared nested-repository roots; or
+- `failed`, cataloged code, safe message, retryability, and any verified
+  incomplete public metadata.
 
 The runner validates the result and staged tree independently. It rejects an
 unknown envelope field/version, digest mismatch, physical path in public
@@ -717,6 +871,131 @@ metadata, incomplete success, undeclared repository root, escaping cwd, or tree
 that does not match the manifest. The runner then owns publication, marker and
 checkpoint setup; a valid result never means the live workspace is already
 published.
+
+### Workspace Manifest Contract
+
+The source tree includes one generated normative
+`workspace-manifest.schema.json`, imported unchanged by the Git materializer,
+OCI producer/materializer, runner validator, and their contract fixtures. The
+document is at most 128 MiB and is an object with `additionalProperties: false`,
+required string `version` fixed to `"1"`, required `repositories`, and required
+`entries`.
+
+`repositories` is an array with at most 128 items. Every item is an object with
+`additionalProperties: false` and exactly the required string fields `name` and
+`destination`, validated as `ConfigName` and non-root `RelativeDirectory`.
+Names and destinations are each unique; items are sorted by the UTF-8 bytes of
+the NFC-normalized `name`. Every destination must exactly equal the `path` of a
+directory entry in the same manifest. Duplicate destinations, missing
+destination entries, and destinations naming files or symbolic links are
+invalid even when the manifest digest is correct.
+
+`entries` is an array with at most 500,000 items. Every item has
+`additionalProperties: false` and is exactly one of:
+
+- directory: required string fields `path`, `type: "directory"`, and
+  `mode: "040755"`;
+- regular file: required string fields `path`, `type: "file"`,
+  `mode: "100644" | "100755"`, and
+  `sha256: "sha256:<64 lowercase hex>"`, plus integer `size` from zero through
+  4 GiB; or
+- symbolic link: required string fields `path`, `type: "symlink"`,
+  `mode: "120000"`, and `target`.
+
+Paths are unique, non-empty, relative POSIX paths sorted by their NFC-normalized
+UTF-8 bytes. Every path component and symlink target must already be valid UTF-8
+and NFC; implementations reject rather than normalize non-UTF-8 or non-NFC
+values. Paths and targets containing NUL, absolute paths, missing parents, or
+links escaping the workspace are invalid. The root is implicit and has no entry.
+Hard links are expanded to regular-file entries.
+
+The digest is `sha256:` plus the lowercase SHA-256 of the RFC 8785 bytes. Git
+mode computes those bytes after completing staging. OCI mode requires its
+configured workspace-manifest blob to contain the same canonical bytes and
+copies them to the private result root. The runner resolves only the fixed
+`workspace-manifest.json` relative path, validates it against the shared schema,
+verifies its size and digest, walks staging without following links, reconstructs
+the same catalog and entries, and requires byte-for-byte canonical equality
+before publication. The private result root is never published or exposed
+through UHP.
+
+The frozen cross-repository fixture is:
+
+```json
+{"entries":[{"mode":"040755","path":"services","type":"directory"},{"mode":"040755","path":"services/api","type":"directory"},{"mode":"100644","path":"services/api/README.md","sha256":"sha256:98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4","size":3,"type":"file"},{"mode":"120000","path":"services/api/current","target":"README.md","type":"symlink"}],"repositories":[{"destination":"services/api","name":"api"}],"version":"1"}
+```
+
+Those exact bytes digest to
+`sha256:667fef29fd8d241818263c5697075ba99eb86331c41eda5a27a812dc8771e4f8`.
+The file bytes are `hi\n`. A change to the schema, fixture bytes, or digest is a
+versioned contract change, not an implementation detail.
+
+### Failure Contract
+
+Failures before response allocation use the UHP non-2xx error envelope. Failures
+after allocation return HTTP 200 with terminal `status: "failed"` and the same
+error object in `response.error`; workspace failures use
+`type: "harness_error"`, a safe message, `param: null`, and
+`detail: { "retryable": <boolean> }`. Stock cancellation remains terminal
+`status: "cancelled"`. The hook's `retryable` field must equal this catalog:
+
+| Code | UHP placement | Retryable |
+|---|---|---|
+| `invalid_input` | HTTP 400 `invalid_request_error` before response allocation for a non-object workspace extension; `param` is `metadata.allagents.workspace` | no |
+| `allagents_workspace_too_large` | HTTP 413 `invalid_request_error` before response allocation for the 64-KiB/depth bound; `param` is `metadata.allagents.workspace`; `detail.max_bytes` is 65536 for the byte bound | no |
+| `allagents_workspace_immutable` | HTTP 409 `invalid_request_error` before response allocation when a continuation contains the workspace extension; `param` is `metadata.allagents.workspace` | no |
+| `harness_unavailable` / `detail.reason: "allagents_auth_profile_busy"` | HTTP 503 `server_error` before response allocation for a saturated auth profile; `param` is null | yes |
+| `harness_unavailable` / `detail.reason: "allagents_auth_profile_unavailable"` | HTTP 503 `server_error` before response allocation for an unavailable or repair-required auth binding; `param` is null | yes |
+| `allagents_workspace_invalid` | failed response for post-allocation descriptor, catalog, path, layout, OCI image-manifest shape, index, or unsupported/foreign media rejection that is not a numeric limit | no |
+| `allagents_workspace_source_auth_failed` | failed response for Git or registry credential rejection | no |
+| `allagents_workspace_acquisition_failed` | failed response when Git, registry, HTTP, or transport I/O prevents complete byte acquisition; excludes digest, schema, and limit failures | no |
+| `allagents_workspace_limit_exceeded` | failed response for source/workspace/archive/manifest repository, entry, byte, layer, file, path, or header limits; excludes hook request/stdout/stderr envelope limits | no |
+| `timeout` | failed response only for an unexpected execution timeout before the declared task budget; a declared time/step budget remains UHP `incomplete` with `error: null` | no |
+| `allagents_materializer_failed` | failed response for materializer spawn/nonzero/crash or malformed/oversized hook output | no |
+| `allagents_secret_boundary_violation` | failed response when a post-allocation recheck finds a configured source-secret name or value in the service or agent environment | no |
+| `allagents_workspace_manifest_invalid` | failed response for the workspace-manifest media type, schema, RFC 8785 bytes, or declared workspace-manifest digest | no |
+| `allagents_workspace_integrity_mismatch` | failed response for OCI image/config/layer descriptor digest or size mismatch, or when staging differs from the verified workspace manifest | no |
+| `allagents_workspace_publication_failed` | failed response for recoverable staging publication or marker failure | no |
+| `allagents_workspace_checkpoint_failed` | failed response for root/nested checkpoint or collection-baseline failure | no |
+| `allagents_workspace_state_failed` | failed response for a materialization-state persistence/CAS failure | no |
+| `allagents_workspace_containment_breach` | failed response for completed-parent/live-descendant even if forced kill succeeds; an unquiescent leaf first enters internal non-terminal `containment_pending`, exits/restarts, and becomes public only after the old boundary is proven empty, preserving client-cancellation or declared-budget status | no |
+
+Classification order is normative. A completed-parent/live-descendant violation
+is the failed containment code. Any other containment breach supersedes the
+hook's earlier result for internal session state but never overwrites
+UHP-mandated public `cancelled` or `incomplete`; absent either, it becomes the
+failed containment code. Otherwise a declared UHP budget produces `incomplete`;
+an unexpected execution timeout produces `timeout`; the post-allocation secret
+boundary recheck precedes numeric limits; numeric limits are classified before
+generic schema validation; and remaining failures use source authentication,
+semantic workspace validation, acquisition I/O, materializer process/envelope
+validation, workspace-manifest validation, cryptographic/tree integrity,
+publication, checkpoint, then durable-state failure in that order.
+One terminal outcome carries exactly one code. Thus a 129-item repository array
+is `allagents_workspace_limit_exceeded`, malformed canonical workspace-manifest
+bytes are `allagents_workspace_manifest_invalid`, registry transport failure is
+`allagents_workspace_acquisition_failed`, and an OCI layer digest mismatch is
+`allagents_workspace_integrity_mismatch`.
+
+Deployment `preflight` runs before readiness and allocates no UHP response. Its
+failure stays operational: readiness is false and the safe operator diagnostic
+uses the same classification vocabulary without pretending a task failed.
+
+Vendor codes and vendor detail reasons use the required `allagents_` prefix. A
+request failure includes `detail.retryable`; the busy-profile reason omits
+`retry_after_ms` rather than guessing. Promptfoo maps a non-2xx or `failed`
+response to `ProviderResponse.error = "<error.code>: <error.message>"`. It maps
+`incomplete` to `ProviderResponse.error = "incomplete: task stopped at a budget"`
+and `cancelled` to
+`ProviderResponse.error = "cancelled: task cancelled by client"`; both have
+`code: null` and `retryable: false`. Every failure includes
+`metadata.uhp = { httpStatus, responseStatus, code, reason, retryable }`.
+`responseStatus` is null for a pre-allocation non-2xx request error and is the
+actual terminal status for an HTTP-200 response. Verified
+`metadata.allagentsWorkspace` is included when available; `reason` is the error
+detail reason or the incomplete detail reason when present, otherwise null.
+Promptfoo never converts a non-2xx, failed, incomplete, or cancelled UHP result
+into successful empty output and performs no automatic retry.
 
 ### Fork Maintenance Contract
 
@@ -750,25 +1029,41 @@ published.
 - **Provider retry/fallback:** Run materialization before the provider candidate
   loop and surface a typed non-provider failure; a ready marker prevents reruns.
 - **Source credential leakage:** Use subprocess-only source credentials,
-  hermetic configuration, leak scans, and hostile fixtures.
+  hermetic configuration, leak scans, hostile fixtures, and a non-escapable
+  cgroup v2 boundary. Prove `populated 0` before interpreting success, reading
+  result files, publishing, releasing secrets, or cleanup.
 - **Native OAuth exposure:** Treat the selected profile as available to the
   harness and same-identity tools. Mount no other profile and prevent passive
   gateway/runner persistence from serializing the auth file. A malicious harness
   or tool can still emit its contents; use explicit proxy mode when this
   owner-trust boundary is unacceptable.
-- **OAuth refresh loss or races:** Hold one per-profile lock for every
-  refresh-capable turn and administrative mutation. Persist local writes through
-  same-filesystem temp-write, file `fsync`, atomic rename, parent `fsync`, and
-  validation. Fault process death around local persistence; if remote rotation
-  leaves the committed profile invalid, mark it `repair-required`. Never switch
-  profiles or auth mode, and never run shared-profile turns concurrently.
-- **Partial publication:** The materializer writes staging only. The runner
-  validates and publishes with recovery markers; no agent runs until the gateway
-  durably stores the resulting checkpoint and marks the session ready.
+- **OAuth refresh loss, races, or queue collapse:** Have the runner supervisor
+  persist the admission record and hold the zero-waiter per-profile advisory lock
+  through descendant termination, terminal-state acknowledgement, and refresh
+  commit. Gateway death cannot release it; runner death leaves a durable fence
+  that blocks readiness until startup reconciliation. Preserve idempotency and
+  same-session precedence before cross-session admission. Cross-session overlap
+  returns `harness_unavailable` with
+  `detail.reason: "allagents_auth_profile_busy"` before allocation and can never
+  acquire later. Provision distinct profiles for parallelism. Persist local
+  writes through same-filesystem temp-write, file `fsync`, atomic rename, parent
+  `fsync`, and validation. Fault process death around local persistence; if
+  remote rotation leaves the committed profile invalid, mark it
+  `repair-required`. Never switch profiles or auth mode, and never run
+  shared-profile turns concurrently.
+- **Partial publication or forged staging:** The materializer writes source
+  content only to staging and the canonical manifest only to the private result
+  root. The runner reconstructs and compares the tree, then publishes with
+  recovery markers; no agent runs until the gateway durably stores the resulting
+  checkpoint and marks the session ready.
 - **Descriptor/session drift:** Accept the key only on the initial request and
   persist the hook's effective digest/provenance for every later response.
 - **OCI attack surface:** Use a closed media profile, streaming digest checks,
   fixed limits, strict path/link/type validation, and exact-host redirect policy.
+- **Catalog scale:** Reject more than 128 repositories, 500,000 entries, 32 GiB
+  staged content, or work exceeding the request deadline. Exercise the supported
+  boundary with representative multi-repository fixtures and publish those
+  limits for Promptfoo operators.
 - **Harness auth drift:** Pin Codex and Pi versions and require non-secret login,
   live-turn, refresh, and continuation probes before advertising each target.
 - **HarnessRouter restart semantics:** Claim persistence only for completed state
@@ -796,10 +1091,12 @@ published.
    operation, publishes/checkpoints once, survives two-turn reuse, supports a
    safe nested cwd, reports nested-repository files, and cannot rerun under
    provider fallback.
-5. Freeze generic hook envelope/state/auth fixtures and AllAgents descriptor,
-   configuration, provenance, and failure fixtures.
+5. Freeze generic hook envelope/state/auth fixtures, canonical workspace-manifest
+   bytes, and AllAgents descriptor, configuration, provenance, and failure
+   fixtures.
 6. Implement project schema projection, preflight, Git materialization,
-   credential containment, and checkpoint/collection integration.
+   credential containment, bounded catalog acquisition, and
+   checkpoint/collection integration.
 7. Implement OCI materialization and its archive/registry security profile.
 8. Prove the separately configured authenticated-proxy mode, then run Promptfoo
    one-shot, continuation, cancellation, restart, and failure mappings.
@@ -831,10 +1128,20 @@ published.
   Pi version, and auth-adapter patch digest used by the gate.
 - **Verification:** For both Codex and Pi, complete login, a real first turn,
   continuation, and restart without a provider-route API key. Change or remove
-  the binding and prove continuation fails before runner work. Force overlapping
-  turns and prove the second waits or fails before launch. Terminate immediately
-  before, during, and after local refresh persistence; restart must see a
-  complete file that validates or becomes `repair-required`. Prove unselected
+  the binding and prove continuation fails before runner work. Use a barrier to
+  make two first arrivals atomically contend for the same new `Idempotency-Key`
+  and prove one admission/one result; prove a new same-session continuation
+  returns `session_busy`; and prove genuinely new cross-session turns fail
+  immediately with cataloged `harness_unavailable` before allocation. Same-key
+  waiters receive any pre-allocation owner error before claim removal; no rejected
+  cross-session request can acquire later. Record representative turn duration
+  and the one-active-turn-per-profile, zero-waiter operator capacity rule. Inject
+  materializer, publication, checkpoint, provider, cancellation, gateway-only
+  crash, runner crash, and whole-process-death faults; after each, prove
+  reconciliation completes before the next new turn acquires the runner-owned
+  fenced profile lock.
+  Terminate before, during, and after local refresh persistence; restart must see
+  a complete file that validates or becomes `repair-required`. Prove unselected
   profiles and other sessions' conversation state are inaccessible. With an
   inert agent, scan checkpoints, produced-file records, passive logs, and response
   metadata for automatic credential serialization. Record that an active
@@ -855,14 +1162,33 @@ published.
   `runner/server.py`, response/session persistence, checkpoint/produced-file
   helpers, runner/gateway tests, and a fake materializer hook.
 - **Approach:** Add configured opaque metadata extraction and bounds, generic
-  result envelope, materialization CAS, a dedicated runner operation before the
-  provider loop, response-translator persistence, safe nested cwd, staged
-  publication, pre-agent checkpoint, and nested-repository collection.
+  result envelope, generated workspace-manifest schema and frozen canonical
+  fixture, materialization CAS, a dedicated runner operation before the provider
+  loop, response-translator persistence, safe nested cwd, staged publication,
+  pre-agent checkpoint, runner-owned cgroup v2 containment, and
+  nested-repository collection.
 - **Verification:** Upstream UHP conformance stays green and stock requests are
-  unchanged. Faults at every state/publication/checkpoint boundary fail closed.
-  Provider fallback cannot rerun the hook. A continuation reuses workspace,
-  provenance, and the persisted auth binding without the extension. Root and
-  nested repository files collect correctly, and an escaping cwd fails.
+  unchanged. Faults at every state/publication/checkpoint boundary fail closed
+  with the exact catalog code: materializer process/envelope, publication/marker,
+  checkpoint/baseline, state/CAS, and secret-boundary fixtures cover their rows.
+  The runner independently rejects a forged manifest, changed staging entry,
+  escaping link, undeclared or 129th repository, duplicate/missing repository
+  destination, repository destination naming a file or symlink, or invalid
+  private manifest path. `clone3(CLONE_INTO_CGROUP)` and stopped pre-exec
+  fallback fixtures immediately fork, call `setsid()`, and double-fork; cases
+  cover cancellation, deadline, and a `completed` parent whose descendant
+  attempts a delayed write. All prove `populated 0` before any terminal result,
+  manifest read, publication, secret release, or cleanup. The completed-parent
+  violation
+  returns the containment code even after successful kill. An unquiescent fixture
+  proves internal `containment_pending`, bounded acknowledgement, nonzero runner
+  exit, `on-failure` restart, old-boundary emptiness, and readiness held false
+  through orphan sweep. GET and stream remain non-terminal until reconciliation,
+  after which mandated cancellation/budget or failed-containment status appears.
+  Provider fallback cannot rerun the
+  hook. A continuation reuses workspace, provenance, and the persisted auth
+  binding without the extension. Root and nested repository files collect
+  correctly, and an escaping cwd fails.
 
 ### U2. AllAgents workspace contracts and Git materializer
 
@@ -875,18 +1201,21 @@ published.
   configuration documentation, unit fixtures, and Git E2E fixtures.
 - **Approach:** Reuse authoritative workspace parsing and source normalization.
   Extend the project schema with strict snapshot and environment credential
-  references; add descriptor/hook/result schemas, defaults, canonicalization,
-  and a `preflight` mode. Expose a direct no-shell materializer entrypoint.
-  Resolve the complete execution-eligible catalog to exact commits in staging,
-  preserve nested `.git`, enforce the closed Git policy, validate destinations
-  and cwd, compute the workspace manifest, and return without publishing.
+  references; generate the normative workspace-manifest schema; add
+  descriptor/hook/result schemas, defaults, canonicalization, and a `preflight`
+  mode. Expose a direct no-shell materializer entrypoint. Resolve the complete
+  execution-eligible catalog to exact commits in staging, preserve nested
+  `.git`, enforce the closed Git policy, validate destinations and cwd, compute
+  the workspace manifest, and return without publishing.
 - **Verification:** Local HTTPS fixtures cover branches, tags, commits, PR refs,
   configured defaults and symbolic HEAD, multiple repositories, optional-name
   fallback, conflicting/originless/local sources, root/duplicate destinations,
   unknown names, missing directories, traversal, leading-dash/control/refspec
   revisions, ambiguous shorthand, hooks/helpers/filters, submodules, LFS,
   file/ext protocols, redirects, cancellation, timeout, partial cleanup,
-  canonical defaults, preflight failures, and exact provenance.
+  canonical defaults, preflight failures, exact provenance, generated-schema
+  validation, frozen canonical fixture bytes/digest, manifest reconstruction,
+  and the 128-repository, 500,000-entry, 32-GiB, and deadline boundaries.
 
 ### U3. Session binding, failures, and credential containment
 
@@ -894,32 +1223,47 @@ published.
   continued sessions.
 - **Repositories/files:** HarnessRouter session/response persistence and tests;
   AllAgents credential-selection/environment code and hostile fixtures.
-- **Approach:** Persist `unbound/materializing/ready/failed`, opaque request
+- **Approach:** Persist `unbound/materializing/containment_pending/ready/failed`,
+  opaque request
   digest, effective descriptor digest, public provenance, workspace marker,
   checkpoint digest, and canonical auth-binding identity/digest through
   compare-and-set transitions. Extend every response construction/retrieval/
-  replay path with identical public metadata. Resolve source `${ENV_VAR}`
-  references only when constructing the materializer child from an owner-only
-  runner secret source; reject configured names or values in the base service or
-  agent environment. In native mode, project only the selected harness OAuth
-  profile and exclude it from passive session persistence. In explicit proxy
-  mode, broker the proxy client key with the required audience, target, model,
-  turn, expiry, and revocation constraints. Scan workspace, nested Git, CLI
-  session state, checkpoints, logs, and responses.
+  replay path with identical public metadata and the exact failure catalog.
+  Resolve source `${ENV_VAR}` references only when constructing the materializer
+  child from an owner-only runner secret source; reject configured names or
+  values in the base service or agent environment. Use a delegated,
+  child-inaccessible cgroup v2 leaf and prove it empty before accepting any hook
+  outcome, reading result files, publishing, releasing secrets, or cleaning
+  staging. In native mode, project only the selected harness OAuth profile and
+  exclude it from passive session persistence. In explicit proxy mode, broker
+  the proxy client key with the required audience, target, model, turn, expiry,
+  and revocation constraints. Scan workspace, nested Git, CLI session state,
+  checkpoints, logs, and responses.
 - **Verification:** Initial idempotent replay preserves one result; continuation
   omits the extension and reuses ready state plus the exact auth binding;
   extension-bearing continuation or changed/unavailable binding fails. Crashes
   around hook/publication/checkpoint/CAS reconcile to ready only when the bound
   descriptor, published marker, and durable checkpoint all match; missing or
-  mismatched evidence becomes failed/non-resumable. Source secrets and the
-  HarnessRouter caller key are absent from the base service and every
-  shell-enabled agent path. The selected OAuth profile is available only through
-  its harness home; other profiles are inaccessible. An inert-agent probe
-  confirms no gateway/runner path automatically serializes it into checkpoints,
-  produced-file records, passive logs, or public metadata; an active tool can
-  still exfiltrate it in owner-trust mode. Native mode has no provider-route API
-  key. Proxy tests allow bounded in-turn provider calls and reject every
-  out-of-scope, expired, or revoked broker token.
+  mismatched evidence becomes failed/non-resumable with the exact materializer,
+  publication, checkpoint, or state code. Cancellation, deadline, malformed
+  output, completed-parent/live-descendant, and runner-shutdown fixtures leave
+  the cgroup empty before cleanup. A recovered completed-parent violation returns
+  `allagents_workspace_containment_breach`; failure to prove emptiness records
+  internal `containment_pending`, completes the internal gateway handshake or
+  bounded timeout, exits/restarts the runner, and withholds readiness plus every
+  terminal GET/stream result until the old boundary is proven empty. Reconciled
+  cancellation/budget retains its mandated public status; other cases become
+  failed containment. Startup and post-allocation secret-boundary fixtures
+  respectively block readiness with no UHP response and return
+  `allagents_secret_boundary_violation`. Source secrets and the HarnessRouter
+  caller key are absent from the base service and every shell-enabled agent path.
+  The selected OAuth profile is available only through its harness home; other
+  profiles are inaccessible. An inert-agent probe confirms no gateway/runner
+  path automatically serializes it into checkpoints, produced-file records,
+  passive logs, or public metadata; an active tool can still exfiltrate it in
+  owner-trust mode. Native mode has no provider-route API key. Proxy tests allow
+  bounded in-turn provider calls and reject every out-of-scope, expired, or
+  revoked broker token.
 
 ### U4. Immutable OCI workspace materialization
 
@@ -929,15 +1273,24 @@ published.
   types, deterministic snapshot producer fixture, local registry E2E, and
   security fixtures.
 - **Approach:** Resolve only configured registries, implement bounded
-  Basic/Bearer authentication and exact-host redirect policy, verify direct
-  manifest/config/layers while streaming, apply changesets in staging, validate
-  paths/types/limits/catalog, and return through the same hook envelope as Git.
-  The HarnessRouter runner remains the sole publisher.
+  Basic/Bearer authentication and exact-host redirect policy, verify the direct
+  manifest, canonical workspace-manifest blob, and layers while streaming, apply
+  changesets in staging, validate paths/types/limits/catalog, reconstruct the
+  canonical manifest, and return through the same hook envelope as Git. The
+  HarnessRouter runner remains the sole publisher.
 - **Verification:** Local Distribution fixtures cover anonymous and authenticated
-  pulls, private CA, gzip/zstd, whiteouts, digest/size mismatch, redirects,
-  rebinding policy, indexes, unknown/foreign media, traversal, escaping links,
-  devices, sparse files, limit overflow, cancellation, cleanup, and no Git
-  fallback.
+  pulls, private CA, gzip/zstd, whiteouts, redirects, rebinding policy, indexes,
+  unknown/foreign media, traversal, escaping links, devices, sparse files,
+  cancellation, cleanup, and no Git fallback. They assert exact precedence:
+  transport failure is `allagents_workspace_acquisition_failed`; an OCI index,
+  malformed image-manifest shape, unknown/foreign media, or
+  duplicate/missing/non-directory repository destination is
+  `allagents_workspace_invalid`; 129 repositories or any other numeric overflow
+  is `allagents_workspace_limit_exceeded`; workspace-manifest media/schema/
+  canonical-byte/declared-digest failure is
+  `allagents_workspace_manifest_invalid`; and OCI image/config/layer digest/size
+  or final staged-tree mismatch is
+  `allagents_workspace_integrity_mismatch`.
 
 ### U5. Harness-native OAuth, optional proxy, and Promptfoo E2E
 
@@ -960,17 +1313,29 @@ published.
   agent failures.
 - **Verification:** Through the exact container network, Codex and Pi authenticate
   through their own OAuth sessions and use allowed models. Turn two sees turn
-  one's conversation and file mutation with the same persisted auth binding; an
-  overlapping turn sharing that profile waits or fails before launch. A config
+  one's conversation and file mutation with the same persisted auth binding. A
+  barriered pair of simultaneous first arrivals with one `Idempotency-Key`
+  produces one admission and one result; a new same-session continuation returns
+  `session_busy`; and genuinely new cross-session turns sharing the profile fail
+  immediately with cataloged `harness_unavailable` before allocation. Same-key
+  waiters receive any pre-allocation owner error before claim removal; none starts
+  a second execution. Cross-session callers are not queued. After each
+  materializer, publication, checkpoint, provider, cancellation, gateway-only
+  crash, runner crash, and whole-process-death fault, prove reconciliation
+  completes before the next new turn acquires the runner-owned fenced profile
+  lock. A config
   change or unavailable binding fails before runner work. Cancellation terminates
   the real turn. OAuth failure disables the target without selecting another
   profile or proxy. Faults around local refresh persistence leave a complete file
   that either validates or marks the profile `repair-required`; unselected
-  profiles remain inaccessible. The separately configured proxy permits bounded
-  multi-request use inside the active turn and rejects wrong-audience,
-  wrong-target, wrong-model, wrong-turn, expired, or revoked credentials.
-  Promptfoo returns successful output/usage/artifacts/provenance and maps all
-  failure classes to failed, coded responses rather than empty success.
+  profiles remain
+  inaccessible. The separately configured proxy permits bounded multi-request
+  use inside the active turn and rejects wrong-audience, wrong-target,
+  wrong-model, wrong-turn, expired, or revoked credentials. Promptfoo exercises
+  every catalog row plus UHP incomplete/cancelled outcomes and returns either
+  successful output/usage/artifacts/provenance or the exact
+  `ProviderResponse.error`/metadata mapping, preserving the error code when one
+  exists and terminal status otherwise, never empty success or automatic retry.
 
 ### U6. Release, operations, review, and upstream preparation
 
@@ -1015,16 +1380,19 @@ published.
 | Stock compatibility | Upstream HarnessRouter tests and UHP conformance pass; requests without the configured metadata key are unchanged. |
 | Caller authentication | Every unauthenticated external create, continuation, retrieval, stream, cancellation, file, and artifact request fails before resource existence or metadata disclosure; runner operations are private and mutually authenticated. |
 | Hook ordering | Dedicated materialization finishes, publishes, and checkpoints before provider selection; fallback never reruns it. |
+| Manifest integrity | Git and OCI share the generated normative schema and frozen canonical fixture. The runner rejects forged manifests, changed staging, unsupported modes/types, escaping links, undeclared or 129th repositories, duplicate/missing/non-directory repository destinations, invalid private paths, and digest or byte mismatches before publication. |
+| Materializer containment | Atomic-placement, immediate-fork, `setsid()`, and double-fork fixtures prove the delegated cgroup reaches `populated 0` before any terminal result, manifest read, publication, secret release, or cleanup. A completed-parent/live-descendant violation returns the containment code after successful kill. An unquiescent boundary enters internal non-terminal `containment_pending`, exits/restarts the runner, withholds terminal GET/stream results and readiness until old-boundary emptiness, then exposes the mandated cancellation/budget status or failed containment. |
+| Capacity envelope | Native profiles admit one active refresh-capable turn and zero cross-session waiters. UHP precedence is atomic: simultaneous duplicate idempotency keys share one claim/admission/result, new same-session overlap returns `session_busy`, and only genuinely new cross-session overlap fails with cataloged `harness_unavailable` before allocation. Pre-allocation claim errors reach current waiters before claim removal. After every post-admission fault, reconciliation precedes reacquisition of the runner-owned fenced lock. Git and OCI reject more than 128 repositories, 500,000 entries, 32 GiB staged content, or work beyond the request deadline. |
 | Durable state | Fault injection proves only sessions with matching bound descriptor, published marker, and durable checkpoint become ready; missing/corrupt/mismatched evidence fails non-resumable without replay. |
 | Session continuity | Two real turns share native conversation, writable workspace, and the persisted auth-binding identity/digest; continuation omits the extension. A changed or unavailable binding fails before runner work. |
 | Workspace integration | Safe nested cwd, repository-mode root/nested Git checkpoints, snapshot private tree baselines, produced list/file/ack, hydrate, and initial-source suppression pass. |
 | Git acquisition | Closed transport/config policy, constrained revisions, exact commits, non-root destinations, catalog validation, and partial cleanup pass against local HTTPS remotes. |
 | OCI acquisition | Digest/media/path/link/type/limit matrix passes against a real local registry. |
 | Credential boundary | Every configured source secret and the HarnessRouter caller key are absent from the base service and every agent-readable source/session path, checkpoint, log, and public output. The selected OAuth profile is available inside the documented harness owner-trust boundary; other profiles are inaccessible, and an inert-agent probe proves the gateway/runner never serializes the auth file automatically. |
-| Provider boundary | Codex and Pi login, live-turn, atomic local refresh, crash/stale-profile repair, bound continuation, serialized overlapping turns, and failure probes use harness-native OAuth without a provider-route API key. OAuth failure never changes profile or auth mode. A separate proxy broker permits bounded in-turn calls and rejects wrong-scope, expired, or revoked tokens. |
+| Provider boundary | Codex and Pi login, live-turn, atomic local refresh, crash/stale-profile repair, bound continuation, atomic idempotency/session/profile admission, and failure probes use harness-native OAuth without a provider-route API key. OAuth failure never changes profile or auth mode. Simultaneous duplicate keys share one admission/result, same-session overlap returns `session_busy`, and new cross-session profile overlap returns cataloged `harness_unavailable` before allocation. A separate proxy broker permits bounded in-turn calls and rejects wrong-scope, expired, or revoked tokens. |
 | Lifecycle | Streaming, cancellation, idempotency, artifacts, usage, response metadata, completed restart, and interrupted-work failure match the contract. |
 | Packaging | The public `linux/amd64` GHCR manifest and GitHub/Sigstore build-provenance and SBOM attestations are verified for expected owner, repository, workflow, approved ref, subject digest, predicates, base-image digest, runtime lockfiles, OS packages, Git/OCI tools, and harness versions. Deployment uses that digest and publishing needs no Docker Hub credential. |
-| Consumer | Promptfoo one-shot/two-turn Git/OCI success and materializer/agent failure mappings pass. |
+| Consumer | Promptfoo one-shot/two-turn Git/OCI success passes. Every failure-catalog row and UHP failed/incomplete/cancelled result maps to the exact `ProviderResponse.error` and metadata, preserving a wire code when present and terminal status otherwise, never empty success or automatic retry. |
 | Review | Final review findings in both repositories are resolved before the final built-image E2E. |
 
 ## Definition of Done
@@ -1048,12 +1416,33 @@ published.
   runner operations remain private and mutually authenticated.
 - Git and OCI materialization publish and checkpoint before provider dispatch and
   happen exactly once per extension-bearing session.
+- The generated normative workspace-manifest schema, frozen canonical fixture,
+  private result-root transport, Git generation, OCI blob, RFC 8785 digest, and
+  independent runner reconstruction agree byte-for-byte before publication and
+  enforce the same 128-repository/500,000-entry limits.
+- Every materializer outcome proves the delegated cgroup reaches `populated 0`
+  before any terminal result, result read, publication, secret release, or
+  cleanup. A completed-parent/live-descendant violation returns the cataloged
+  containment failure after successful kill. An unquiescent boundary stays
+  internal/non-terminal through runner exit/restart; deployment
+  restart-on-failure destroys the old container, and readiness plus terminal
+  GET/stream visibility remain withheld until startup proves the old boundary
+  empty.
+- Published operator limits state one active turn and zero cross-session profile
+  waiters per native auth profile, while UHP idempotency duplicates share one
+  atomic claim/result, plus the 128-repository, 500,000-entry, 32-GiB, and
+  request-deadline acquisition caps.
 - Continuation preserves native conversation/workspace state and the persisted
   auth-binding identity/digest, omits the extension, and follows HarnessRouter's
   predecessor semantics. A changed or unavailable binding fails before runner
-  work. Every native auth profile serializes refresh-capable turns. Local refresh
-  writes are atomic and validated; a stale credential after remote rotation
-  becomes `repair-required` rather than changing profile or auth mode.
+  work. Simultaneous duplicate idempotency keys share one atomic claim,
+  admission, and result; new same-session overlap returns `session_busy`; and
+  genuinely new cross-session profile overlap fails with cataloged
+  `harness_unavailable` before response, runner, or materializer allocation.
+  Runner-owned durable fencing survives gateway failure, and reconciliation
+  precedes lock reacquisition after runner failure. Local refresh writes are
+  validated; a stale credential after remote rotation becomes `repair-required`
+  rather than changing profile or auth mode.
 - Repository-mode roots preserve usable Git state. Every source mode preserves
   truthful root/nested produced files across checkpoint/hydrate.
 - Source credential values are read from an owner-only runner secret source and

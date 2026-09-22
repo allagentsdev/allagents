@@ -44,7 +44,7 @@ export function flattenZodIssues(error: z.ZodError): z.ZodIssue[] {
   const leaves = new Map<string, NestedIssue>();
 
   const add = (issue: NestedIssue): void => {
-    leaves.set(`${issue.path.join('.')}|${issue.message}`, issue);
+    leaves.set(`${issue.path.join('.')}|${issue.code}|${issue.message}`, issue);
   };
 
   const visit = (issue: NestedIssue, prefix: readonly PropertyKey[]): void => {
@@ -59,9 +59,7 @@ export function flattenZodIssues(error: z.ZodError): z.ZodIssue[] {
       return;
     }
     if (issue.code === 'invalid_key' && issue.issues && issue.issues.length > 0) {
-      for (const nested of issue.issues) {
-        add({ ...nested, path: [...path, ...nested.path] });
-      }
+      for (const nested of issue.issues) visit(nested, path);
       return;
     }
     add({ ...issue, path });

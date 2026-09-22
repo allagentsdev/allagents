@@ -13,44 +13,51 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Let Promptfoo and other authenticated UHP clients run Codex
-  against a configured AllAgents Git workspace or immutable OCI workspace
-  snapshot, continue the same conversation and writable workspace with
-  `previous_response_id`, and receive source provenance, output, usage, and
-  artifacts. Pi is optional and advertised only after its `codex-lb` route
-  passes a release-gating probe.
+- **Objective:** Let Promptfoo and other authenticated UHP clients run a
+  configured Codex or Pi harness against an AllAgents Git workspace or immutable
+  OCI workspace snapshot, continue the same conversation and writable workspace
+  with `previous_response_id`, and receive source provenance, output, usage, and
+  artifacts.
 - **Means:** Deploy a pinned HarnessRouter CE fork. Preserve HarnessRouter's UHP,
-  authentication, session, streaming, cancellation, artifact, and agent-runner
-  behavior. Add a generic first-turn materializer boundary, nested working
-  directory support, durable materialization state, and nested-repository
-  checkpoint/collection support. Implement Git/OCI semantics in a separate
-  AllAgents executable. Route Codex through HarnessRouter's credential broker to
-  `codex-lb`; keep the long-lived `codex-lb` key in the gateway and provider OAuth
-  in `codex-lb`.
+  caller authentication, session, streaming, cancellation, artifact, and
+  agent-runner behavior. Add a generic first-turn materializer boundary, nested
+  working-directory support, durable materialization state, nested-repository
+  checkpoint/collection support, and a separation between session state and
+  durable harness-native OAuth state. Implement Git/OCI semantics in a separate
+  AllAgents executable. Codex authenticates through `codex login`; Pi
+  authenticates through its `/login` flow for the selected provider. An
+  API-key-authenticated proxy is an explicit last-resort target mode.
 - **Authority:** [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md)
-  owns the protocol, fork, trust, workspace, and provider-routing decisions.
-  UHP `2026-09-12` and HarnessRouter's conformance suite own execution-wire
-  behavior. The project `workspace.yaml` owns logical Git/OCI sources and
-  environment-variable credential references; deployment secrets provide the
-  values; HarnessRouter configuration owns harness/model/provider targets. The
-  namespaced AllAgents extension owns acquisition and provenance semantics.
-- **Execution order:** Prove the fork seam, brokered Codex route, materialization
-  state machine, checkpoint integration, and optional Pi route against a real
-  HarnessRouter runner; freeze the generic hook and AllAgents contracts;
-  implement Git then OCI acquisition; run Promptfoo one-shot and continuation
-  E2E; complete release, fork-maintenance, and upstream-ready documentation.
+  owns the protocol, fork, trust, workspace, harness-authentication, and
+  provider-routing decisions. UHP `2026-09-12` and HarnessRouter's conformance
+  suite own execution-wire behavior. The project `workspace.yaml` owns logical
+  Git/OCI sources and environment-variable credential references; deployment
+  secrets provide the values. HarnessRouter configuration owns harness IDs,
+  model allowlists, and authentication bindings. The namespaced
+  AllAgents extension owns acquisition and provenance semantics.
+- **Execution order:** Prove the fork seam, Codex and Pi native-OAuth routes,
+  auth-state isolation, materialization state machine, and checkpoint integration
+  against a real HarnessRouter runner; freeze the generic hook and AllAgents
+  contracts; implement Git then OCI acquisition; prove an explicit proxy mode
+  separately; run Promptfoo one-shot and continuation E2E; complete release,
+  fork-maintenance, and upstream-ready documentation.
 - **Stop conditions:** Stop before production implementation if materialization
   cannot complete and durably checkpoint before provider dispatch, if nested Git
   workspaces cannot be collected without corrupting HarnessRouter checkpoints,
-  if either source credentials or the long-lived `codex-lb` key reach the agent,
-  or if the fork cannot preserve stock UHP behavior and conformance. Do not fall
-  back to prompt instructions, an MCP acquisition tool, client-side repository
-  upload, owner-trust provider keys, a second execution protocol, or a parallel
-  task/session engine.
+  if source credentials enter the harness, if the gateway/runner automatically
+  copies harness OAuth files into a materialized source tree, checkpoint,
+  produced-file record, passive log, or public metadata, if local OAuth state
+  cannot be persisted atomically and validated fail-closed while conversation
+  state remains session-scoped, or if the fork cannot preserve stock UHP
+  behavior and conformance. Do not fall back to prompt
+  instructions, an MCP acquisition tool, client-side repository upload, another
+  OAuth profile, an implicit API-key route, a second execution protocol, or a
+  parallel task/session engine.
 - **Tail ownership:** Implementation owns focused tests in both repositories,
-  upstream UHP conformance, built-image smoke tests, exact Git/OCI E2E,
-  two-turn Promptfoo success and failure verification, credential leak checks,
-  documentation, and a clean upstreamable HarnessRouter patch series.
+  upstream UHP conformance, built-image smoke tests, exact Git/OCI E2E, native
+  Codex/Pi OAuth and explicit proxy-mode E2E, two-turn Promptfoo success and
+  failure verification, credential boundary checks, documentation, and a clean
+  upstreamable HarnessRouter patch series.
 
 ---
 
@@ -60,7 +67,7 @@ execution: code
 
 AllAgents uses HarnessRouter as the execution gateway.
 HarnessRouter exposes UHP, authenticates callers, creates and persists sessions,
-streams events, runs Codex and capability-gated Pi, handles cancellation and
+streams events, runs configured Codex and Pi harnesses, handles cancellation and
 idempotency, and returns output, usage, and artifacts.
 
 The missing product-specific capability is deterministic workspace acquisition
@@ -106,13 +113,20 @@ caller responsible for acquisition. The temporary fork closes those seams.
   the tree, and returns provenance.
 - **A4. HarnessRouter runner:** Owns the per-session operating-system identity,
   publication, checkpoints, nested-repository collection, input files, safe
-  nested cwd, and Codex/Pi process.
-- **A5. `codex-lb`:** Exposes the Codex Responses endpoint, accepts the
-  gateway-held API key through HarnessRouter's broker, owns provider OAuth and
-  account routing, and preserves continuation affinity.
-- **A6. Operator:** Pins and deploys the custom image, mounts durable data and
-  project workspace configuration, supplies deployment-only source credential
-  values through the allowlisted environment, and controls private-network access.
+  nested cwd, selected Codex/Pi process, session conversation state, and
+  projection of the selected durable auth profile.
+- **A5. Harness-native auth profile:** One dedicated durable credential root for
+  one Codex or Pi harness target. The harness owns login and token refresh. The
+  gateway lifecycle never copies its files into workspace checkpoints or public
+  metadata; active harness access is part of the owner-trust boundary.
+- **A6. Optional authenticated proxy:** A last-resort, explicitly configured
+  target mode. The gateway keeps the long-lived proxy client key, the proxy owns
+  upstream provider authentication, and the harness receives only a
+  non-refreshable, scoped turn credential that the HarnessRouter broker validates.
+- **A7. Operator:** Pins and deploys the custom image, mounts durable data and
+  project workspace configuration, completes each native harness login, supplies
+  deployment-only source credential values, selects any explicit proxy targets,
+  and controls private-network access.
 
 ### Key Decisions
 
@@ -121,8 +135,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **Fork narrowly and upstream later.** Delivery uses an AllAgents-maintained
   fork. The upstreamable layer is a configured opaque-metadata key, immutable
   first-turn binding, typed command envelope, durable pre-provider lifecycle,
-  safe nested cwd, and checkpoint/collection integration. It contains no
-  AllAgents Git/OCI schema logic. Upstream acceptance is not critical-path.
+  safe nested cwd, checkpoint/collection integration, and separation of durable
+  harness-auth state from session state. It contains no AllAgents Git/OCI schema
+  logic. Upstream acceptance is not critical-path.
 - **Run the AllAgents component behind HarnessRouter.** The materializer is a
   subprocess hook, not another HTTP gateway and not a custom agent backend.
 - **Materialize once per extension-bearing session.** An extension-bearing
@@ -131,14 +146,20 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **Keep source authority server-side.** Callers select logical source names and
   revisions but cannot send origins, credentials, host paths, commands, or
   Docker options.
-- **Broker provider access.** Promptfoo uses a HarnessRouter API key. The gateway
-  keeps the `codex-lb` key and mints an invocation-scoped broker credential for
-  the agent. Only `codex-lb` handles provider OAuth.
+- **Prefer harness-native OAuth.** Promptfoo's HarnessRouter API key authenticates
+  the UHP caller only. Codex and Pi use their own login, token storage, refresh,
+  and provider request path; native mode has no provider-route API key.
+- **Make proxy auth explicit.** `proxyApiKey` is a last-resort target mode for a
+  compatibility or stronger-isolation requirement. OAuth failure never activates
+  it, and a session never changes its persisted authentication binding.
 - **Preserve stock UHP requests.** Requests without the configured metadata key
   behave exactly as upstream.
 - **Use a custom HarnessRouter image.** The image combines a pinned HarnessRouter
   revision, reviewed patch series, pinned agent runtimes, and the AllAgents
   materializer executable.
+- **Publish from an AllAgents-owned registry.** Release the public image as
+  `ghcr.io/allagentsdev/harnessrouter`; tags identify releases, but deployment
+  and E2E pin the published manifest digest.
 
 ### Requirements
 
@@ -147,27 +168,50 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **R1.** Pin HarnessRouter CE to a reviewed upstream commit and UHP version
   `2026-09-12`. The deployment must pass the applicable upstream conformance
   suite without weakening, replacing, or reinterpreting stock UHP behavior.
-- **R2.** Require a HarnessRouter API key for every execution endpoint. Bind the
-  service to loopback or a private interface and document the remaining need for
-  Tailscale ACLs, firewall policy, or equivalent network controls.
-- **R3.** HarnessRouter deployment configuration owns stable harness IDs and
-  their backend, model allowlist, and provider integration. Requests select a
-  harness with stock `metadata.harness_id` and a model with `model`; AllAgents
-  profiles are not projected into this catalog. Codex uses a custom
-  `api_format: "responses"` integration pointed at the `codex-lb`
-  `/backend-api/codex` base. Its generated provider block must use
-  `name = "openai"` and `requires_openai_auth = true`, including remote
-  compaction. Pi is advertised only when a separate real probe proves a
-  HarnessRouter-supported Pi custom format against a documented `codex-lb`
-  endpoint; otherwise Pi is unavailable without fallback.
-- **R4.** Set `HR_SANDBOX_TRUST` to a non-owner broker mode and configure both
-  `HARNESS_PUBLIC_BASE_URL` and runner-reachable `HARNESS_GATEWAY_URL` to the same
-  private gateway address so stock broker eligibility and runner routing agree.
-  The gateway holds the long-lived `codex-lb` key; the runner receives only a
-  turn credential and broker URL. Preserve HarnessRouter streaming,
-  cancellation, idempotency, files, artifacts, usage, errors, completed-session
-  persistence, and per-session workspace/UID isolation. Do not duplicate those
-  capabilities in AllAgents.
+- **R2.** Require a HarnessRouter API key for every externally reachable UHP,
+  response/session retrieval, stream, cancellation, file, and artifact endpoint.
+  Reject unauthenticated requests before disclosing resource existence or
+  metadata. Gateway-to-runner operations are not externally routable and are
+  mutually authenticated. Bind the service to loopback or a private interface
+  and document the remaining need for Tailscale ACLs, firewall policy, or
+  equivalent network controls.
+- **R3.** HarnessRouter deployment configuration owns stable harness IDs,
+  backend, model allowlist, and exactly one auth binding:
+  `{ mode: "nativeOAuth", profile: ConfigName }` or
+  `{ mode: "proxyApiKey", connection: ConfigName }`. A proxy connection is a
+  closed server-side record containing private HTTPS base URL, expected TLS
+  identity/CA, HarnessRouter-supported API format and endpoint set, gateway-only
+  proxy-client-key secret handle, broker audience, and requested-to-proxy model
+  map. Callers cannot override any field. Requests select a harness with stock
+  `metadata.harness_id` and a model with `model`; AllAgents profiles are not
+  projected into this catalog. Codex and Pi targets default to `nativeOAuth`.
+  A target is advertised only after its selected auth binding passes: profile
+  login/refresh/live-turn checks for native OAuth, or schema, TLS, broker,
+  model-map, endpoint, and live compatibility checks for `proxyApiKey`. On the
+  first turn, the gateway persists the harness target, auth mode, binding
+  identity, and canonical binding-config digest in the session. Continuations
+  require that exact binding; deployment config changes never switch it.
+- **R4.** Add a durable auth root outside session workspaces with one
+  least-access profile directory per harness target. Controlled setup runs
+  `CODEX_HOME=<profile> codex login` with file credential storage for Codex or
+  runs Pi `/login` in an isolated Pi home for the configured provider. The
+  runner projects only the selected profile's exact auth files into the
+  session-specific CLI home and keeps conversation/rollout state session-scoped.
+  The projection must preserve the harness's credential-file write and
+  atomic-replacement behavior. A locally committed refresh uses a same-filesystem
+  temporary file, file `fsync`, atomic rename, parent-directory `fsync`, and
+  validation. A crash after the provider rotates credentials but before local
+  commit can leave the profile stale; restart then marks it `repair-required`
+  and requires native login instead of changing profile or auth mode. The
+  gateway/runner must not automatically serialize auth files into root or nested
+  checkpoints, produced-file records, passive logs/traces, materializer input,
+  or response metadata. Native mode sets explicit owner trust because the
+  harness and tool subprocesses sharing its operating-system identity may read
+  or emit that credential. Version one holds a per-profile lock for every
+  refresh-capable turn and every login, logout, or repair operation; a second
+  turn for that profile waits or fails before launch.
+  Preserve HarnessRouter streaming, cancellation, idempotency, files, artifacts,
+  completed-session persistence, and per-session workspace/UID isolation.
 
 #### Workspace extension and hook
 
@@ -195,28 +239,33 @@ caller responsible for acquisition. The temporary fork closes those seams.
   accept at most 1 MiB on stdout and 64 KiB on stderr, and use the smaller of
   900 seconds or the remaining UHP deadline. The generic request contains the
   opaque metadata value, session workspace and fixed sibling staging roots,
-  project configuration root, and deadline. Source secret values arrive only in
-  a configured allowlisted child environment; the runner subtracts every name
-  in that allowlist from all agent child environments regardless of its spelling.
-  The typed result is `completed` with effective relative cwd and bounded public
-  metadata or `failed` with stable code, safe message, and retryability. A
-  materializer failure terminalizes the UHP response and never enters provider
-  fallback.
+  project configuration root, and deadline. Source values come from an
+  owner-only runner secret mount or credential-store handle, never the
+  gateway/runner base environment. The runner resolves only the selected handle
+  and constructs the allowlisted materializer child environment. It refuses
+  agent launch if a configured secret name or value appears in the service or
+  agent environment. The typed result is `completed` with effective relative cwd
+  and bounded public metadata or `failed` with stable code, safe message, and
+  retryability. A materializer failure terminalizes the UHP response and never
+  enters provider fallback.
 - **R8.** Persist a CAS-protected session materialization state:
-  `unbound -> materializing -> ready` or `failed`. The runner validates successful
-  staging, publishes it with a recoverable same-filesystem rename protocol,
-  writes a descriptor/provenance marker, initializes the HarnessRouter root
-  checkpoint and nested-repository collection baselines, and returns
-  `published` with the checkpoint digest. Before provider dispatch, the gateway
-  stores that digest and public metadata and CASes the session to `ready`. On
-  restart in `materializing`, reconcile to `ready` only when the workspace
-  marker and durable checkpoint match the bound descriptor; otherwise mark the
-  session non-resumable, remove or quarantine the workspace, and never replay
-  acquisition. Provider fallback sees `ready` state only and cannot invoke the
-  hook. Ordinary input files are applied only afterward.
-  A validated logical cwd may be the root or a symlink-safe descendant; the
-  runner derives UID isolation from the session root and rejects cross-session
-  or escaping paths.
+  `unbound -> materializing -> ready` or `failed`, plus the resolved harness
+  target, auth mode, native-profile or proxy-connection identity, and canonical
+  binding-config digest. The runner validates successful staging, publishes it
+  with a recoverable same-filesystem rename protocol, writes a
+  descriptor/provenance marker, initializes the HarnessRouter root checkpoint
+  and nested-repository collection baselines, and returns `published` with the
+  checkpoint digest. Before provider dispatch, the gateway stores that digest
+  and public metadata and CASes the session to `ready`. On restart in
+  `materializing`, reconcile to `ready` only when the workspace marker and
+  durable checkpoint match the bound descriptor; otherwise mark the session
+  non-resumable, remove or quarantine the workspace, and never replay acquisition.
+  Every continuation resolves the persisted auth binding by identity and digest;
+  if unavailable or changed, it fails before runner work instead of selecting a
+  replacement. Provider fallback sees `ready` state only and cannot invoke the
+  hook. Ordinary input files are applied only afterward. A validated logical cwd
+  may be the root or a symlink-safe descendant; the runner derives UID isolation
+  from the session root and rejects cross-session or escaping paths.
 
 #### Source acquisition and provenance
 
@@ -280,19 +329,44 @@ caller responsible for acquisition. The temporary fork closes those seams.
   It never contains origins, physical paths, credentials, or unverified facts.
 - **R13.** The materializer resolves `${ENV_VAR}` references from its allowlisted
   child environment, uses hermetic Git/registry configuration, removes temporary
-  auth files before returning, and emits no secret. The fork removes every
-  configured materializer-only name from `_child_env` and every other agent
-  subprocess environment independent of name patterns. Prove with a deliberately
-  innocuous variable name that acquisition secrets and the long-lived
-  `codex-lb` key are absent from the agent environment, workspace, nested Git
-  remotes/config, generated CLI configuration, logs, checkpoints, and response
-  metadata. Provider OAuth remains only in `codex-lb`.
-- **R14.** Build one pinned custom HarnessRouter image. Record the upstream
-  commit, patch-series digest, AllAgents package/version, materializer-contract
-  version, Codex version, optional verified Pi version/format, image digest, and
-  supported architecture. Requests without the configured metadata key remain
-  stock-compatible. CI rebases selected upgrades and runs upstream plus
-  AllAgents integration tests.
+  auth files before returning, and emits no secret. Prove with a deliberately
+  innocuous variable name and value that source credentials and the HarnessRouter
+  caller API key are absent from the gateway/runner base environment, every agent
+  environment, workspace, nested Git remotes/config, generated CLI configuration,
+  logs, checkpoints, and response metadata. In native mode there is no
+  provider-route API key. The selected OAuth profile is intentionally readable by
+  the harness trust boundary; the gateway/runner never automatically copies it
+  into materialized source trees, checkpoints, produced-file records, passive
+  logs, materializer input, or public metadata. An active same-identity harness
+  or tool can exfiltrate it; that risk is explicit in owner-trust mode.
+
+  In proxy mode, the long-lived proxy client key and upstream provider
+  credentials stay in their owning services. The non-refreshable broker token is
+  bound to one proxy audience, harness target, model allowlist, response/turn ID,
+  and the UHP deadline plus minimal clock skew. It may authorize the bounded
+  provider requests, compaction, and retries required during that active turn;
+  cancellation or terminal completion revokes it. Passive persistence never
+  stores it. The HarnessRouter broker rejects wrong-audience, wrong-model,
+  wrong-turn, expired, or revoked tokens.
+- **R14.** Build and publish a pinned `linux/amd64` custom HarnessRouter image as
+  the public package `ghcr.io/allagentsdev/harnessrouter`. Replace or disable the
+  inherited Docker Hub release path. The Dockerfile pins every base image by
+  digest; runtime lockfiles and version-locked OS packages, Git/OCI tools, Codex,
+  and Pi define the remaining build inputs. The build fails on any unpinned
+  input. A no-write job builds, tests, and exports the identified image artifact
+  using commit-pinned third-party actions. A separate protected,
+  environment-approved publish job accepts only an approved release/tag ref and
+  uses `GITHUB_TOKEN` with `contents: read`, `packages: write`,
+  `attestations: write`, and `id-token: write`. It publishes unique version and
+  commit tags as mutable discovery labels, reads back the registry manifest, and
+  creates GitHub/Sigstore build-provenance and SBOM attestations whose subject is
+  the final manifest digest. Package visibility is public and verified with an
+  anonymous digest pull. Deployment fails unless both attestations verify the
+  expected owner, repository, workflow, approved ref, subject digest, predicates,
+  base-image digest, runtime lockfiles, OS package set, Git/OCI tool versions, and
+  Codex/Pi versions. Release E2E uses that digest, never `latest`. Requests
+  without the configured metadata key remain stock-compatible. CI rebases
+  selected upgrades and runs upstream plus AllAgents integration tests.
 - **R15.** AI Evals owns its Promptfoo provider. It sends the UHP request directly
   to HarnessRouter, maps Promptfoo variables to the closed extension, and maps
   terminal output, usage, artifacts, provenance, and failures to
@@ -304,31 +378,42 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 #### F1. Start the deployment
 
-1. Start `codex-lb` with provider OAuth, proxy API-key authentication enabled,
-   and an API key held only by the HarnessRouter gateway. Validate that the
-   key/model combination authorizes each configured Codex model.
-2. Run the AllAgents materializer's bounded `preflight` mode. It validates the
+1. Run the AllAgents materializer's bounded `preflight` mode. It validates the
    project catalog, snapshot and credential-reference schemas, referenced secret
    presence, required Git/OCI tools, hook contract version, and staging/workspace
    filesystem relationship without contacting sources.
-3. Start the pinned custom HarnessRouter image with durable `/data`, private
-   listener, HarnessRouter client key, broker mode, matching private
-   `HARNESS_PUBLIC_BASE_URL` and runner-reachable `HARNESS_GATEWAY_URL`, Codex
-   `openai`/OpenAI-auth provider fields, materializer command, project
-   configuration, and allowlisted source secret environment.
-4. From the exact container network, verify configured harness IDs/model
-   allowlists, broker credential minting, authenticated `codex-lb` `/responses`
-   and `/responses/compact`, a resumed Codex turn, safe roots, and materializer
-   version. Advertise Pi only if its separate live format/endpoint probe passed.
-   Any required preflight failure prevents readiness.
+2. In a controlled operator context, initialize each dedicated auth profile:
+   run Codex login with that target's `CODEX_HOME`, or run Pi `/login` with that
+   target's isolated Pi home and configured provider. Persist only the selected
+   harness profile; do not copy a general developer home into the service.
+3. If native OAuth cannot satisfy the deployment's trust or compatibility
+   requirement, deliberately select a separately configured `proxyApiKey`
+   deployment profile. Validate its closed proxy connection, start the tested
+   proxy, keep its client key and upstream credentials outside the runner, and
+   enable HarnessRouter broker mode. Never configure it as automatic failover
+   for a native target.
+4. Start the attestation-verified, digest-pinned custom HarnessRouter image with
+   durable session data, durable harness auth roots, a private listener,
+   HarnessRouter caller key, materializer command, project configuration,
+   owner-only source-secret mount/credential-store handle, and the configured
+   native or proxy trust mode.
+5. From the exact container network, verify each advertised harness ID and model
+   allowlist, safe roots, materializer version, selected auth binding, and a live
+   turn. Native targets exercise login status, atomic local refresh persistence,
+   stale-profile repair, same-binding continuation, and serialized overlapping
+   turns. An explicit proxy deployment exercises schema/TLS/model-map/endpoint
+   compatibility plus bounded in-turn use and wrong-scope/expired/revoked
+   rejection. Any required
+   preflight or auth failure prevents readiness.
 
 #### F2. Execute the first repository-backed turn
 
 1. Promptfoo sends one authenticated UHP request with `model`, stock
    `metadata.harness_id`, idempotency input, and the AllAgents workspace object.
-2. HarnessRouter validates UHP plus generic metadata bounds, creates the
-   response/session, CASes materialization from `unbound` to `materializing`, and
-   hydrates a fresh session workspace.
+2. HarnessRouter validates UHP plus generic metadata bounds, resolves and
+   persists the selected harness target and canonical auth-binding identity/
+   config digest, creates the response/session, CASes materialization from
+   `unbound` to `materializing`, and hydrates a fresh session workspace.
 3. Before provider selection, the gateway calls runner `/materialize`. The
    AllAgents child validates the descriptor and catalog, resolves exact commits
    and source credentials, writes and validates staging, removes credential
@@ -337,10 +422,12 @@ caller responsible for acquisition. The temporary fork closes those seams.
    writes its marker, initializes the root checkpoint plus each declared
    repository's collection cursor, and returns `published`. The gateway stores a
    durable checkpoint and CASes the session to `ready`.
-5. HarnessRouter applies ordinary input files, resolves the safe nested cwd, and
-   enters its provider loop. Codex receives only a turn broker credential and
-   reaches `codex-lb` through HarnessRouter; materialization cannot rerun during
-   provider fallback.
+5. HarnessRouter applies ordinary input files and resolves the safe nested cwd.
+   In `nativeOAuth`, it projects only the persisted Codex or Pi profile and the
+   harness calls its provider directly. In `proxyApiKey`, it projects no native
+   profile and supplies only the scoped turn credential and broker base URL for
+   the persisted proxy connection. Materialization cannot rerun during provider
+   retry/fallback, and failure never changes auth mode.
 6. Normal UHP events and every stored/retrieved terminal response include the
    same namespaced provenance. Produced-file collection walks the HarnessRouter
    root plus each declared nested repository without reporting initial source
@@ -351,12 +438,15 @@ caller responsible for acquisition. The temporary fork closes those seams.
 1. The caller sends `previous_response_id` and omits
    `metadata["allagents.workspace"]`.
 2. HarnessRouter resolves its current session state and writable workspace,
-   requires materialization `ready`, and does not invoke the hook again. An
+   requires materialization `ready`, and resolves the persisted auth-binding
+   identity and config digest. An unavailable or changed binding,
    extension-bearing continuation, concurrent active turn, or non-resumable
    session fails before runner work.
-3. HarnessRouter follows its stock predecessor/session semantics, resumes the
-   native conversation, and returns pinned provenance plus new output, usage,
-   and artifacts. AllAgents does not add a stricter head CAS.
+3. HarnessRouter follows its stock predecessor/session semantics. Native mode
+   projects the persisted profile; proxy mode mints a new scoped turn token for
+   the persisted connection. It resumes the native conversation and returns
+   pinned provenance plus new output, usage, and artifacts without changing auth
+   mode or binding.
 
 #### F4. Execute an OCI-backed first turn
 
@@ -386,9 +476,11 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 - **AE1.** A stock UHP request without the configured metadata key produces the
   same response and conformance result on upstream HarnessRouter and the fork.
-- **AE2.** An unauthenticated request is rejected. An authenticated Codex turn
-  reaches `codex-lb` while the literal HarnessRouter client key and long-lived
-  `codex-lb` key are absent from the agent environment and filesystem.
+- **AE2.** Every unauthenticated external create, continuation, GET, stream,
+  cancel, file, and artifact request fails before resource existence or metadata
+  is disclosed. An authenticated native Codex or Pi turn uses the selected OAuth
+  profile; the HarnessRouter caller key is absent from the agent environment and
+  filesystem, and no provider-route API key exists in that mode.
 - **AE3.** Repository mode resolves configured branch/default/HEAD refs to full
   commits, prepares every execution-eligible repository, preserves nested Git
   history, starts in a validated nested cwd, and returns path-free provenance.
@@ -413,17 +505,27 @@ caller responsible for acquisition. The temporary fork closes those seams.
   and whiteouts and rejects mutable tags, indexes, mismatched digests/sizes,
   traversal, escaping links, devices, sparse files, unknown media types, and
   declared-limit overflow.
-- **AE10.** Codex uses HarnessRouter's custom Responses integration and broker.
-  Pi is advertised only if its separate live custom-format probe passes. Failure
-  disables Pi without owner trust, direct-provider fallback, or another proxy.
-- **AE11.** Restart after a completed first turn preserves the session and allows
-  continuation. Restart during materialization recovers only from a matching
-  published marker and durable checkpoint; otherwise it fails without automatic
-  replay. Restart during an agent turn follows HarnessRouter's interrupted-turn
-  failure behavior.
-- **AE12.** The custom image records exact upstream, patch, materializer, Codex,
-  optional Pi, and image versions; rebuilding locked inputs produces equivalent
-  contract and conformance results.
+- **AE10.** Codex signs in and refreshes through Codex CLI; Pi signs in and
+  refreshes through Pi for its configured provider. Missing, revoked, expired,
+  unrefreshable, or locally stale-after-crash OAuth marks only that profile
+  unavailable or `repair-required`; it never selects another profile or proxy.
+  A second turn sharing a profile waits or fails before launch. A separately
+  configured `proxyApiKey` deployment's broker permits the bounded multi-request
+  provider flow during the active turn and rejects wrong-audience, wrong-model,
+  wrong-turn, expired, or revoked credentials.
+- **AE11.** Restart after a completed first turn preserves the session and exact
+  persisted auth binding. Removing or changing that binding makes continuation
+  fail before runner work; restoring the matching identity and config digest
+  restores eligibility. Restart during materialization recovers only from a
+  matching published marker and durable checkpoint; otherwise it fails without
+  automatic replay. Restart during an agent turn follows HarnessRouter's
+  interrupted-turn failure behavior.
+- **AE12.** The protected publish job releases the public `linux/amd64` GHCR
+  package without Docker Hub credentials. An anonymous client reads the manifest,
+  verifies the GitHub/Sigstore build-provenance and SBOM attestations' expected
+  owner, repository, workflow, approved ref, subject digest, and predicate, and
+  pulls that digest rather than `latest`. The evidence records upstream, patch,
+  materializer, Codex, and Pi inputs; mismatches fail closed.
 - **AE13.** Promptfoo maps one stable materializer failure and one HarnessRouter
   execution failure to failed `ProviderResponse` results with code, safe message,
   and metadata; neither becomes a successful empty response.
@@ -432,16 +534,18 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 **In scope**
 
-- HarnessRouter workspace-integration patch and generic materializer boundary.
+- HarnessRouter workspace-integration and harness-auth-state patches.
 - Versioned AllAgents workspace descriptor, hook request/result, and provenance.
 - Project workspace schema additions and catalog projection.
 - Deterministic Git and immutable OCI acquisition.
 - Root/nested-repository checkpoint and produced-file integration.
-- Source and provider credential containment with leak verification.
-- Custom image build and pinned release metadata.
-- HarnessRouter broker plus `codex-lb` Codex Responses configuration.
+- Source credential isolation and native-OAuth trust-boundary verification.
+- Native Codex and Pi auth-profile bootstrap, refresh, readiness, and continuity.
+- Explicit, separately validated API-key-authenticated proxy deployment mode.
+- Public GHCR image publishing, digest-pinned release metadata, SBOM, and
+  provenance.
 - Promptfoo contract examples and one-shot/two-turn success/failure E2E.
-- Upstream-ready generic hook patch and maintenance procedure.
+- Upstream-ready generic hook and auth-state patches plus maintenance procedure.
 
 **Out of scope**
 
@@ -449,7 +553,8 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - A separate AllAgents network gateway, process supervisor, provider adapter, or
   artifact service.
 - Promptfoo runtime code inside AllAgents.
-- Provider OAuth handling outside `codex-lb`.
+- A custom OAuth broker, token translation layer, or automatic native-to-proxy
+  credential fallback.
 - Caller-provided origins, credentials, commands, host paths, materializers, or
   Docker options.
 - Public multi-tenancy, per-caller authorization, Kubernetes workers, session
@@ -465,10 +570,10 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - [UHP sessions](https://github.com/HarnessRouter/harnessrouter/blob/main/protocol/versions/2026-09-12/sessions.md)
 - [UHP lifecycle](https://github.com/HarnessRouter/harnessrouter/blob/main/protocol/versions/2026-09-12/lifecycle.md)
 - [UHP files](https://github.com/HarnessRouter/harnessrouter/blob/main/protocol/versions/2026-09-12/files.md)
-- [`codex-lb` repository](https://github.com/Soju06/codex-lb)
-- [`codex-lb` client setup](https://github.com/Soju06/codex-lb/blob/main/docs/client-setup.md)
-- [`codex-lb` API keys](https://github.com/Soju06/codex-lb/blob/main/docs/api-keys.md)
-- [`codex-lb` routing](https://github.com/Soju06/codex-lb/blob/main/docs/routing.md)
+- [Codex authentication](https://developers.openai.com/codex/auth)
+- [Pi model providers and OAuth](https://pi.dev/docs/latest/providers)
+- [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [`codex-lb` optional proxy](https://github.com/Soju06/codex-lb)
 - [Harbor repository materialization lessons](../research/harbor-repository-materialization.md)
 - [Source credential broker precedents](../research/source-credential-broker-precedents.md)
 
@@ -486,18 +591,26 @@ flowchart TB
   MAT --> CFG[project workspace.yaml]
   MAT --> GIT[Git sources]
   MAT --> OCI[OCI registry]
-  RUN -->|turn broker credential| GW
-  GW -->|codex-lb API key| LB[codex-lb Responses API]
-  LB -->|OAuth + routing| MODEL[Model provider]
+  RUN --> HARNESS[Selected Codex or Pi harness]
+  AUTH[(dedicated durable OAuth profile)] -.->|native mode only| HARNESS
+  HARNESS -->|native mode| MODEL[Model provider]
+  HARNESS -.->|proxy mode: scoped turn credential| GW
+  GW -.->|long-lived proxy client key| PROXY[optional provider proxy]
+  PROXY -.-> MODEL
   GW --> DATA[(durable session checkpoints)]
 ```
 
 The gateway owns generic metadata bounds, session materialization state,
-provider-loop ordering, checkpoint persistence, and response metadata. The
-runner owns hook invocation, staged publication, checkpoint/collection setup,
-safe nested cwd, and agent launch. The materializer owns only AllAgents schema,
-catalog, acquisition, credential selection, staging validation, and provenance;
-it never speaks UHP or publishes the live workspace.
+persisted auth-binding identity, provider-loop ordering, checkpoint persistence,
+response metadata, and optional proxy brokering. The runner owns hook invocation,
+staged publication, checkpoint/collection setup, safe nested cwd, and agent
+launch. In native mode it projects the bound OAuth profile; in proxy mode it
+projects no native profile and supplies only the turn broker capability. The
+selected harness owns native provider OAuth login and refresh. Its durable auth
+root is outside session checkpoints; it is available to the harness trust
+boundary but never to the materializer. The materializer owns only AllAgents
+schema, catalog, acquisition, source-credential selection, staging validation,
+and provenance; it never speaks UHP or publishes the live workspace.
 
 ### Extension Contract
 
@@ -610,9 +723,12 @@ published.
   changes in touched gateway/runner/session code, run upstream tests and UHP
   conformance, run AllAgents hook/session E2E, rebuild the image, and record the
   new inputs and digest.
-- Prepare the upstream proposal as a generic command/plugin seam. Do not require
-  upstream to understand AllAgents metadata, Git catalogs, OCI manifests, or
-  Promptfoo.
+- Publish releases to `ghcr.io/allagentsdev/harnessrouter`, record the manifest
+  digest, and rehearse deployment from that digest rather than a local build or
+  mutable tag.
+- Prepare upstream proposals as generic command/plugin and harness-auth-state
+  seams. Do not require upstream to understand AllAgents metadata, Git catalogs,
+  OCI manifests, Promptfoo, or a specific OAuth provider.
 - If upstream accepts an equivalent seam, delete the patch rather than retaining
   a compatibility layer.
 
@@ -626,10 +742,21 @@ published.
 - **Nested Git versus HarnessRouter root Git:** Keep repository `.git` state,
   ignore declared roots in HarnessRouter's root index, and extend produced/list/
   file/ack/checkpoint/hydrate behavior to validate and walk every declared root.
-- **Provider fallback:** Run materialization before the provider candidate loop
-  and surface a typed non-provider failure; a ready marker prevents reruns.
-- **Credential leakage:** Broker the `codex-lb` key and use subprocess-only source
-  credentials, hermetic configuration, leak scans, and hostile fixtures.
+- **Provider retry/fallback:** Run materialization before the provider candidate
+  loop and surface a typed non-provider failure; a ready marker prevents reruns.
+- **Source credential leakage:** Use subprocess-only source credentials,
+  hermetic configuration, leak scans, and hostile fixtures.
+- **Native OAuth exposure:** Treat the selected profile as available to the
+  harness and same-identity tools. Mount no other profile and prevent passive
+  gateway/runner persistence from serializing the auth file. A malicious harness
+  or tool can still emit its contents; use explicit proxy mode when this
+  owner-trust boundary is unacceptable.
+- **OAuth refresh loss or races:** Hold one per-profile lock for every
+  refresh-capable turn and administrative mutation. Persist local writes through
+  same-filesystem temp-write, file `fsync`, atomic rename, parent `fsync`, and
+  validation. Fault process death around local persistence; if remote rotation
+  leaves the committed profile invalid, mark it `repair-required`. Never switch
+  profiles or auth mode, and never run shared-profile turns concurrently.
 - **Partial publication:** The materializer writes staging only. The runner
   validates and publishes with recovery markers; no agent runs until the gateway
   durably stores the resulting checkpoint and marks the session ready.
@@ -637,32 +764,41 @@ published.
   persist the hook's effective digest/provenance for every later response.
 - **OCI attack surface:** Use a closed media profile, streaming digest checks,
   fixed limits, strict path/link/type validation, and exact-host redirect policy.
-- **Pi incompatibility:** Keep Pi capability-gated; a failed format/endpoint probe
-  removes it from advertised harnesses without fallback.
+- **Harness auth drift:** Pin Codex and Pi versions and require non-secret login,
+  live-turn, refresh, and continuation probes before advertising each target.
 - **HarnessRouter restart semantics:** Claim persistence only for completed state
   on durable storage; interrupted work fails and is not replayed.
 - **Provider cache assumptions:** Report native cached-input usage when available;
   never promise a cache hit.
+- **Registry/tag or publisher compromise:** Use a protected, environment-approved
+  publish job with pinned actions and no write authority in build/test. Verify
+  the attested owner/repository/workflow/ref/subject digest before deployment.
 - **Upstream rejection:** The pinned fork remains supported; upstream delivery is
   maintenance reduction, not a launch dependency.
 
 ### Phased Delivery
 
 1. Red E2E against stock HarnessRouter: prove arbitrary metadata is neither
-   forwarded to Codex/Pi nor returned as workspace provenance.
+   forwarded to Codex/Pi nor returned as workspace provenance, and document the
+   stock separation between session and excluded auth files.
 2. Fork spike: prove a fake hook runs through a dedicated pre-provider operation,
    publishes/checkpoints once, survives two-turn reuse, supports a safe nested
    cwd, reports nested-repository files, and cannot rerun under provider fallback.
-3. Prove brokered Codex through `codex-lb`; probe Pi's separate supported format
-   and mark it available or unavailable without changing the architecture.
-4. Freeze generic hook envelope/state fixtures and AllAgents descriptor,
+   Prove one selected harness auth profile persists refresh without entering the
+   checkpoint or exposing another profile, and prove a second turn sharing that
+   profile waits or fails before launch.
+3. Prove native Codex and Pi login, refresh, live turn, continuation, and
+   failure behavior. Prove an explicit authenticated-proxy deployment separately;
+   no native auth failure may route to it.
+4. Freeze generic hook envelope/state/auth fixtures and AllAgents descriptor,
    configuration, provenance, and failure fixtures.
 5. Implement project schema projection, preflight, Git materialization,
    credential containment, and checkpoint/collection integration.
 6. Implement OCI materialization and its archive/registry security profile.
 7. Run Promptfoo one-shot, continuation, cancellation, restart, and failure
-   mappings; review both repositories; build the exact image; run green E2E and
-   conformance; document operations; prepare the generic upstream patch.
+   mappings; review both repositories; publish the exact GHCR image; deploy its
+   digest; run green E2E and conformance; document operations; prepare the
+   generic upstream patches.
 
 ---
 
@@ -679,15 +815,22 @@ published.
 - **Approach:** Pin upstream. Add configured opaque metadata extraction and
   bounds, generic result envelope, materialization CAS, dedicated runner
   operation before the provider loop, response-translator persistence, safe
-  nested cwd, staged publication, pre-agent checkpoint, and nested-repository
-  collection. Add startup preflight. Configure broker mode and probe Codex plus
-  optional Pi route separately.
+  nested cwd, staged publication, pre-agent checkpoint, nested-repository
+  collection, and durable auth-profile projection outside session state. Add
+  startup preflight. Probe Codex and Pi native auth separately.
 - **Verification:** Upstream UHP conformance stays green. Stock requests are
   unchanged. Faults at every state/publication/checkpoint boundary fail closed.
-  Provider fallback cannot rerun the hook. A second turn reuses workspace and
-  provenance without the extension. Root and nested repository files collect
-  correctly, escaping cwd fails, broker secrets stay outside the agent, and Pi
-  advertisement exactly matches its probe.
+  Provider fallback cannot rerun the hook. A continuation reuses workspace,
+  provenance, and the persisted auth binding without the extension. A changed or
+  unavailable binding fails before runner work; an overlapping turn on the same
+  native profile waits or fails before launch. Root and nested repository files
+  collect correctly, escaping cwd fails, and only the selected auth profile is
+  visible to the harness identity. Fault immediately before, during, and after
+  local refresh persistence; restart sees a complete locally committed file and
+  either validates it or marks the profile `repair-required`, never silently
+  changing profile or auth mode. An inert-agent probe confirms the gateway/runner
+  never automatically serializes the auth file into a checkpoint, produced-file
+  record, passive log, or response.
 
 ### U1. AllAgents workspace contracts and Git materializer
 
@@ -720,20 +863,31 @@ published.
 - **Repositories/files:** HarnessRouter session/response persistence and tests;
   AllAgents credential-selection/environment code and hostile fixtures.
 - **Approach:** Persist `unbound/materializing/ready/failed`, opaque request
-  digest, effective descriptor digest, public provenance, workspace marker, and
-  checkpoint digest through compare-and-set transitions. Extend every response
-  construction/retrieval/replay path with identical public metadata. Resolve
-  source `${ENV_VAR}` references only in the child, remove the complete
-  materializer-only name set from agent children, broker the provider key, and
-  scan workspace, nested Git, CLI state, checkpoint, logs, and responses.
+  digest, effective descriptor digest, public provenance, workspace marker,
+  checkpoint digest, and canonical auth-binding identity/digest through
+  compare-and-set transitions. Extend every response construction/retrieval/
+  replay path with identical public metadata. Resolve source `${ENV_VAR}`
+  references only when constructing the materializer child from an owner-only
+  runner secret source; reject configured names or values in the base service or
+  agent environment. In native mode, project only the selected harness OAuth
+  profile and exclude it from passive session persistence. In explicit proxy
+  mode, broker the proxy client key with the required audience, target, model,
+  turn, expiry, and revocation constraints. Scan workspace, nested Git, CLI
+  session state, checkpoints, logs, and responses.
 - **Verification:** Initial idempotent replay preserves one result; continuation
-  omits the extension and reuses ready state; extension-bearing continuation
-  fails. Crashes around hook/publication/checkpoint/CAS reconcile to ready only
-  when the bound descriptor, published marker, and durable checkpoint all match;
-  missing/corrupt markers, descriptor mismatch, and checkpoint mismatch become
-  failed/non-resumable. Acquisition secrets, including a non-secret-looking
-  configured variable name, and the long-lived `codex-lb` key are absent
-  everywhere the shell-enabled agent can read.
+  omits the extension and reuses ready state plus the exact auth binding;
+  extension-bearing continuation or changed/unavailable binding fails. Crashes
+  around hook/publication/checkpoint/CAS reconcile to ready only when the bound
+  descriptor, published marker, and durable checkpoint all match; missing or
+  mismatched evidence becomes failed/non-resumable. Source secrets and the
+  HarnessRouter caller key are absent from the base service and every
+  shell-enabled agent path. The selected OAuth profile is available only through
+  its harness home; other profiles are inaccessible. An inert-agent probe
+  confirms no gateway/runner path automatically serializes it into checkpoints,
+  produced-file records, passive logs, or public metadata; an active tool can
+  still exfiltrate it in owner-trust mode. Native mode has no provider-route API
+  key. Proxy tests allow bounded in-turn provider calls and reject every
+  out-of-scope, expired, or revoked broker token.
 
 ### U3. Immutable OCI workspace materialization
 
@@ -753,44 +907,68 @@ published.
   devices, sparse files, limit overflow, cancellation, cleanup, and no Git
   fallback.
 
-### U4. Codex, optional Pi, `codex-lb`, and Promptfoo E2E
+### U4. Harness-native OAuth, optional proxy, and Promptfoo E2E
 
-- **Goal:** Prove the real execution path, broker boundary, session continuity,
-  and consumer success/failure mapping.
-- **Repositories/files:** custom image/configuration, HarnessRouter integration
-  fixtures, AI Evals Promptfoo provider/configuration in its owning repository,
-  and deployment examples in AllAgents docs.
-- **Approach:** Configure Codex with HarnessRouter's custom Responses integration,
-  the `codex-lb` base, provider `name = "openai"`, and
-  `requires_openai_auth = true`. Enable private broker mode and `codex-lb` proxy
-  API-key authentication so only a turn credential enters the runner. Probe Pi
-  separately with a supported custom format and documented `codex-lb` endpoint;
-  advertise it only on success. Run Promptfoo Git/OCI one-shot and two-turn cases
-  plus materializer and agent failures.
-- **Verification:** Through the exact container network, `/responses`,
-  `/responses/compact`, and a resumed turn authenticate and use an allowed model.
-  Turn two sees turn one's conversation and file mutation; `codex-lb`
-  continuation affinity holds; cancellation terminates the real turn; hop keys
-  and OAuth stay in their owning services; Pi capability is truthful; Promptfoo
-  returns successful output/usage/artifacts/provenance and maps both failure
-  classes to failed, coded responses rather than empty success.
+- **Goal:** Prove both real harness-native auth paths, their explicit trust
+  boundary, session continuity, optional proxy isolation, and consumer
+  success/failure mapping.
+- **Repositories/files:** custom image/configuration, auth-profile setup and
+  projection, HarnessRouter integration fixtures, AI Evals Promptfoo
+  provider/configuration in its owning repository, and deployment examples in
+  AllAgents docs.
+- **Approach:** Configure dedicated Codex and Pi auth roots. Bootstrap them only
+  through each harness's login flow; do not inject a provider-route API key.
+  Exercise login status, live turns, atomic local refresh persistence,
+  stale-after-remote-rotation repair, same-binding continuation, serialized
+  overlapping turns, profile isolation, and missing/revoked credential failure.
+  In a separate explicit deployment profile, validate the closed proxy connection
+  and broker audience/target/model/turn/expiry/revocation contract. Run Promptfoo
+  Git/OCI one-shot and two-turn cases plus materializer, authentication, and
+  agent failures.
+- **Verification:** Through the exact container network, Codex and Pi authenticate
+  through their own OAuth sessions and use allowed models. Turn two sees turn
+  one's conversation and file mutation with the same persisted auth binding; an
+  overlapping turn sharing that profile waits or fails before launch. A config
+  change or unavailable binding fails before runner work. Cancellation terminates
+  the real turn. OAuth failure disables the target without selecting another
+  profile or proxy. Faults around local refresh persistence leave a complete file
+  that either validates or marks the profile `repair-required`; unselected
+  profiles remain inaccessible. The separately configured proxy permits bounded
+  multi-request use inside the active turn and rejects wrong-audience,
+  wrong-target, wrong-model, wrong-turn, expired, or revoked credentials.
+  Promptfoo returns successful output/usage/artifacts/provenance and maps all
+  failure classes to failed, coded responses rather than empty success.
 
 ### U5. Release, operations, review, and upstream preparation
 
-- **Goal:** Produce a reproducible supported image and an upstream-ready generic
-  hook proposal.
-- **Repositories/files:** image build/release workflow, dependency lock and
+- **Goal:** Produce a reproducible, registry-published supported image and
+  upstream-ready generic hook and auth-state proposals.
+- **Repositories/files:** GHCR image build/release workflow, dependency lock and
   provenance record, fork-maintenance guide, deployment/reference docs,
   changelog, PR descriptions, and upstream patch series.
-- **Approach:** Build from exact upstream/fork/AllAgents/agent inputs, emit image
-  digest and SBOM, run all conformance and E2E gates against that image, document
-  durable volumes, keys, private networking, upgrades, rollback, backup, failure
-  recovery, and the CE isolation boundary. Review both codebases before the final
-  green E2E. Split and explain the generic HarnessRouter patch for upstream.
-- **Verification:** A clean host can deploy the recorded image and reproduce Git,
-  OCI, one-shot, continuation, cancellation, restart, and failure scenarios from
-  documented commands. Rebase rehearsal against the selected next upstream
-  commit either passes or reports an explicit incompatibility before release.
+- **Approach:** Build from exact upstream/fork/AllAgents/agent inputs. Every base
+  image is digest-pinned; runtime lockfiles and version-locked OS packages,
+  Git/OCI tools, Codex, and Pi close the input set. The build fails on unpinned
+  input. Replace the inherited Docker Hub path with a no-write build/test job and
+  a separate protected, environment-approved GHCR publish job. Pin every
+  third-party action by commit. Publish the `linux/amd64` image to
+  `ghcr.io/allagentsdev/harnessrouter`, read back its manifest, create
+  build-provenance and SBOM attestations for the final digest, and run conformance
+  plus E2E only after verifying the expected repository, workflow, approved ref,
+  subject digest, predicates, complete build inputs, and anonymous pull. Document
+  durable session/auth volumes, native login/repair, optional proxy mode, private
+  networking, upgrades, rollback, secret-safe backup, and the CE owner-trust
+  boundary. Review both codebases before final green E2E. Split and explain the
+  generic HarnessRouter patches for upstream.
+- **Verification:** A clean `linux/amd64` host verifies both attestations and the
+  pinned base/runtime/OS/Git/OCI/harness input set, then anonymously pulls the
+  public package by subject digest and reproduces Git, OCI, native Codex/Pi,
+  optional proxy, one-shot, continuation, cancellation, restart, and failure
+  scenarios from documented commands. No Docker Hub credential is required. An
+  unapproved ref or mismatched owner, repository, workflow, digest, attestation,
+  predicate, or build input fails closed. Rebase rehearsal against the selected
+  next upstream commit either passes or reports an explicit incompatibility
+  before release.
 
 ---
 
@@ -799,37 +977,55 @@ published.
 | Gate | Required evidence |
 |---|---|
 | Stock compatibility | Upstream HarnessRouter tests and UHP conformance pass; requests without the configured metadata key are unchanged. |
+| Caller authentication | Every unauthenticated external create, continuation, retrieval, stream, cancellation, file, and artifact request fails before resource existence or metadata disclosure; runner operations are private and mutually authenticated. |
 | Hook ordering | Dedicated materialization finishes, publishes, and checkpoints before provider selection; fallback never reruns it. |
 | Durable state | Fault injection proves only sessions with matching bound descriptor, published marker, and durable checkpoint become ready; missing/corrupt/mismatched evidence fails non-resumable without replay. |
-| Session continuity | Two real turns share native conversation and writable workspace; continuation omits the extension and invocation count is one. |
+| Session continuity | Two real turns share native conversation, writable workspace, and the persisted auth-binding identity/digest; continuation omits the extension. A changed or unavailable binding fails before runner work. |
 | Workspace integration | Safe nested cwd, repository-mode root/nested Git checkpoints, snapshot private tree baselines, produced list/file/ack, hydrate, and initial-source suppression pass. |
 | Git acquisition | Closed transport/config policy, constrained revisions, exact commits, non-root destinations, catalog validation, and partial cleanup pass against local HTTPS remotes. |
 | OCI acquisition | Digest/media/path/link/type/limit matrix passes against a real local registry. |
-| Credential boundary | Every configured materializer-only environment name, all source secrets, and the long-lived `codex-lb` key are absent from every agent-readable environment/file/checkpoint and public output. |
-| Provider boundary | Private broker minting works with the configured private public-base/gateway URL; Codex uses authenticated brokered `/responses` and `/responses/compact` with required provider fields; Pi is advertised only after its separate route probe; OAuth remains solely in `codex-lb`. |
+| Credential boundary | Every configured source secret and the HarnessRouter caller key are absent from the base service and every agent-readable source/session path, checkpoint, log, and public output. The selected OAuth profile is available inside the documented harness owner-trust boundary; other profiles are inaccessible, and an inert-agent probe proves the gateway/runner never serializes the auth file automatically. |
+| Provider boundary | Codex and Pi login, live-turn, atomic local refresh, crash/stale-profile repair, bound continuation, serialized overlapping turns, and failure probes use harness-native OAuth without a provider-route API key. OAuth failure never changes profile or auth mode. A separate proxy broker permits bounded in-turn calls and rejects wrong-scope, expired, or revoked tokens. |
 | Lifecycle | Streaming, cancellation, idempotency, artifacts, usage, response metadata, completed restart, and interrupted-work failure match the contract. |
-| Packaging | Exact image digest records upstream commit, patch digest, materializer contract, agent versions, and SBOM. |
+| Packaging | The public `linux/amd64` GHCR manifest and GitHub/Sigstore build-provenance and SBOM attestations are verified for expected owner, repository, workflow, approved ref, subject digest, predicates, base-image digest, runtime lockfiles, OS packages, Git/OCI tools, and harness versions. Deployment uses that digest and publishing needs no Docker Hub credential. |
 | Consumer | Promptfoo one-shot/two-turn Git/OCI success and materializer/agent failure mappings pass. |
 | Review | Final review findings in both repositories are resolved before the final built-image E2E. |
 
 ## Definition of Done
 
 - ADR 0002, this plan, implementation, deployment topology, and request examples
-  agree on UHP, the fork, the behind-router materializer, and `codex-lb`.
+  agree on UHP, the fork, the behind-router materializer, harness-native OAuth,
+  explicit proxy fallback, and GHCR digest-pinned distribution.
 - No second execution protocol, parallel task/session control plane, separate
-  AllAgents gateway, direct provider adapter, or client-side workspace expansion
-  remains in implementation scope.
+  AllAgents gateway, direct provider adapter, custom OAuth broker, automatic
+  auth-mode fallback, or client-side workspace expansion remains in
+  implementation scope.
 - R1-R15 and AE1-AE13 are implemented and verified against the exact released
   image.
-- Stock UHP requests and upstream conformance remain green.
+- Stock UHP requests and upstream conformance remain green. Every external
+  create/read/control/file/artifact path requires the HarnessRouter caller key;
+  runner operations remain private and mutually authenticated.
 - Git and OCI materialization publish and checkpoint before provider dispatch and
   happen exactly once per extension-bearing session.
-- Continuation preserves native conversation/workspace state, omits the
-  extension, and follows HarnessRouter's predecessor semantics.
+- Continuation preserves native conversation/workspace state and the persisted
+  auth-binding identity/digest, omits the extension, and follows HarnessRouter's
+  predecessor semantics. A changed or unavailable binding fails before runner
+  work. Every native auth profile serializes refresh-capable turns. Local refresh
+  writes are atomic and validated; a stale credential after remote rotation
+  becomes `repair-required` rather than changing profile or auth mode.
 - Repository-mode roots preserve usable Git state. Every source mode preserves
   truthful root/nested produced files across checkpoint/hydrate.
-- Acquisition credentials and provider OAuth respect their separate boundaries.
-- The image, patch series, materializer contract, operational docs, and rollback
-  procedure are reproducible from pinned inputs.
+- Source credential values are read from an owner-only runner secret source and
+  injected only into the selected materializer child; they never enter the
+  gateway/runner base environment or harness. Provider OAuth is available inside
+  the explicitly accepted owner-trust boundary; the gateway/runner never
+  automatically persists the auth file in session state or public metadata.
+  Long-lived proxy client keys remain brokered, and turn tokens enforce audience,
+  target, model, turn, expiry, and revocation while permitting bounded in-turn
+  provider calls.
+- The public `linux/amd64` GHCR manifest, verified build-provenance and SBOM
+  attestations, pinned base/runtime/OS/Git/OCI/harness inputs, patch series,
+  materializer contract, operational docs, and rollback procedure are
+  reproducible from pinned inputs.
 - The generic HarnessRouter hook patch is ready to propose upstream, but the
   shipped system remains operable from the maintained fork if it is not accepted.

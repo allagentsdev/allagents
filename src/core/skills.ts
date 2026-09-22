@@ -198,7 +198,9 @@ export async function getAllSkillsFromPlugins(
 
   const skills: SkillInfo[] = [];
 
-  for (const pluginEntry of config.plugins) {
+  // `plugins` is optional in hand-written and profile-only configs; the schema
+  // defaults it to [], but this reader consumes the raw YAML.
+  for (const pluginEntry of config.plugins ?? []) {
     const pluginSource = getPluginSource(pluginEntry);
     const resolved = await resolvePluginPath(pluginSource, workspacePath);
     if (!resolved) continue;

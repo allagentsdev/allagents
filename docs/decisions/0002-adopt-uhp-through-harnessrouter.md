@@ -1,6 +1,6 @@
 # ADR 0002: Adopt UHP through HarnessRouter with an AllAgents workspace materializer
 
-- Status: Accepted; implementation pending
+- Status: Accepted; implementation gated on native-auth feasibility
 - Date: 2026-09-21
 
 ## Decision
@@ -199,6 +199,41 @@ free of unrelated changes. The intended upstream contributions are the generic
 materializer boundary and secure harness-auth state separation, not the
 AllAgents-specific descriptor schema.
 
+## Phase-zero feasibility gate
+
+The harness-native auth adapter is a blocking phase-zero spike. Production
+workspace-materializer implementation must not begin until a minimal pinned image
+using the release's HarnessRouter, base-image, and Codex/Pi inputs proves the
+adapter with real provider traffic. The spike does not need the AllAgents
+materializer, Git acquisition, or OCI acquisition.
+
+The gate evidence records the HarnessRouter commit, base-image digest, Codex
+version, Pi version, and auth-adapter patch digest. Those inputs are frozen for
+dependent work. Changing any of them invalidates the gate: dependent work must
+stop until both native targets pass again on the new input set.
+
+Each required native target must prove:
+
+1. operator-controlled native login in its dedicated profile root;
+2. a real first turn and continuation without a provider-route API key;
+3. persisted auth-binding identity across restart and fail-closed behavior when
+   that binding is changed or unavailable;
+4. session-specific conversation state with only the selected auth profile
+   visible to the harness identity;
+5. serialized overlapping turns for one profile;
+6. complete local credential files after termination before, during, and after
+   refresh persistence, with invalid post-rotation state becoming
+   `repair-required`;
+7. no automatic gateway/runner serialization of the auth file into checkpoints,
+   produced-file records, passive logs, or response metadata; and
+8. explicit acknowledgement that same-identity harness tools can read or emit
+   the selected credential.
+
+The proxy route cannot satisfy this gate on behalf of a native target. If either
+required native target fails, dependent implementation stops. Continuing with a
+proxy-only target or narrower harness scope requires an explicit decision change;
+the implementation must not introduce an implicit fallback or credential shim.
+
 ## Source authority and credentials
 
 The project `workspace.yaml` remains the source of truth for logical repository
@@ -363,6 +398,7 @@ source-mode fallback, or guaranteed provider prompt-cache hits.
 
 Revisit this decision when:
 
+- either required harness-native OAuth target cannot pass the phase-zero gate;
 - upstream HarnessRouter accepts the generic materializer hook or exposes an
   equivalent supported extension;
 - the maintained patch grows beyond the narrow integration boundary;

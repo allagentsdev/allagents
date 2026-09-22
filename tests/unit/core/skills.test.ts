@@ -50,6 +50,18 @@ describe('getAllSkillsFromPlugins', () => {
     expect(skills.every((s) => s.disabled === false)).toBe(true);
   });
 
+  it('treats a config without a plugins key as declaring no plugins', async () => {
+    // Hand-written and profile-only workspace configs omit `plugins`. The
+    // schema defaults it to [], but this reader consumes the raw YAML, so the
+    // absent key must not crash enumeration.
+    await writeFile(
+      join(tmpDir, '.allagents/workspace.yaml'),
+      dump({ repositories: [], clients: ['claude'] }),
+    );
+
+    expect(await getAllSkillsFromPlugins(tmpDir)).toEqual([]);
+  });
+
   it('marks disabled skills correctly', async () => {
     const config = {
       repositories: [],

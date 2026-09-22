@@ -2,29 +2,24 @@
 
 ## Decision
 
-The execution gateway does **not** need a standalone Git credential broker for
-the initial trusted-network deployment. It supports two in-process trusted
-providers for `github.com`: a configured GitHub App and a configured,
-account-pinned `gh auth token --hostname github.com --user <account>` fallback.
+The initial trusted-network deployment uses deployment-supplied source
+credentials referenced from the project `workspace.yaml` as `${ENV_VAR}` values.
+The AllAgents materializer receives only the configured credential variables in
+its allowlisted child environment. HarnessRouter removes every
+materializer-only variable from agent child environments regardless of its name.
 
-The App is preferred whenever an App-authenticated repository-coverage check
-proves an installation eligible. `gh` is considered only when the App is absent
-or coverage is positively ineligible; unknown discovery, authentication,
-permission, rate-limit, or service failures fail closed. Ambient `GH_TOKEN`,
-`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` are removed
-from the CLI helper environment.
+Git credentials are exposed only to the acquisition process through a
+short-lived, materializer-owned credential helper or registry-auth channel.
+The materializer uses hermetic Git and registry configuration, removes temporary
+auth state before returning, and emits no secret in logs, provenance, checkpoints,
+or response metadata. It never consults arbitrary ambient credential helpers and
+never falls through to a different credential identity after a failure.
 
-Either token is exposed only to the one-shot acquisition process through an
-invocation-scoped Git credential helper. The helper, token, and acquisition
-process are gone before adapter preparation or provider execution. Git
-credential helpers and Git Credential Manager establish the process-boundary
-precedent, but arbitrary configured helpers are not part of the selected
-implementation. A local helper is a broker in the security sense; it is not a
-separately deployed network service.
-
-Central token minters, authenticated delivery leases, remote workers, and
-multi-tenant credential policy are deferred until ADR 0002's deployment
-boundary is reconsidered.
+Git credential helpers, GitHub App installation tokens, and BuildKit secret
+mounts establish the process- and phase-boundary precedents. The deployment does
+not require a standalone network credential broker. Central token minting,
+delivery leases, remote workers, and multi-tenant credential policy require a
+separate decision if the deployment boundary changes.
 
 ## Precedents
 
@@ -62,16 +57,13 @@ by default or sooner if the daemon dies
 [options](https://git-scm.com/docs/git-credential-cache#_options)). This is a
 local process/socket boundary, not a remotely reachable credential service.
 
-**Relevance.** Git helpers and GCM prove that a local credential provider can
-be an on-demand process rather than a network service. AllAgents does not,
-however, inherit or invoke an arbitrary configured helper chain. Its closed
-provider registry permits only the selected GitHub App token or an explicit
-GitHub CLI provider pinned to a configured non-secret account when App
-eligibility is positively absent. The CLI invokes
-`gh auth token --hostname github.com --user <account>` without ambient GitHub
-token variables. Its output reaches only the one-shot acquisition child;
-adapter preparation and the coding runtime inherit neither helper configuration
-nor token.
+**Relevance.** Git helpers and GCM prove that a local credential provider can be
+an on-demand process rather than a network service. The AllAgents materializer
+does not inherit or invoke the host's configured helper chain. It creates a
+closed helper for the selected deployment credential, invokes Git with an
+isolated home and system/global configuration disabled, and removes the helper
+before returning. The coding-agent runtime inherits neither the helper
+configuration nor its credential.
 
 ### SSH agent forwarding
 
@@ -136,12 +128,12 @@ Checkout's credential file is a convenience capability inside that job, not a
 long-term credential store, and its post-job deletion is defense in depth rather
 than the token's revocation mechanism.
 
-**Relevance.** This is the closest production precedent for AllAgents: keep the
-App private key in the trusted gateway process, issue one fresh least-privilege
-token for a particular repository acquisition, expose it only during that
-phase, and remove its local material afterward. GitHub enforces repository,
-read-only contents permission, and expiry; the gateway separately binds the
-acquisition to the retained Task and effective configuration digest.
+**Relevance.** GitHub App installation tokens are useful deployment inputs
+because repository scope, read-only contents permission, and expiry are enforced
+by GitHub. Token minting remains outside the materializer contract. If an
+operator supplies such a token through the configured environment reference,
+the materializer still treats it as a phase-scoped acquisition secret and binds
+the resulting source identity to the session's effective descriptor digest.
 
 ### BuildKit secret and SSH mounts
 
@@ -172,47 +164,44 @@ When an agent socket is supplied, SSH access is available for the mounted
 instruction without adding the private key to the image
 ([Dockerfile SSH mount](https://docs.docker.com/reference/dockerfile/#run---mounttypessh)).
 
-**Relevance.** AllAgents should copy the phase-scoping pattern, not necessarily
-BuildKit itself: inject a token or agent capability only into the trusted source
-acquisition operation, then tear down the mount/socket/environment before setup
-or agent execution. Like BuildKit, this delivery mechanism does not mint
-credentials and does not eliminate the need for a central issuer in production.
+**Relevance.** AllAgents uses the same phase-scoping pattern: inject a token only
+into the trusted source-acquisition operation, then remove the
+mount/socket/environment before agent execution. Like BuildKit, this delivery
+mechanism does not mint credentials and does not make code with access to the
+secret trustworthy.
 
 ## Recommendation for AllAgents
 
-### Initial trusted-network gateway
+### Initial trusted-network deployment
 
-1. Resolve only canonical `github.com` HTTPS origins in the initial delivery.
-2. Determine App applicability through an App-authenticated GitHub API client,
-   or verify an explicitly configured installation ID against the repository.
-   Model the result as `eligible`, `ineligible`, or `unknown`.
-3. For `eligible`, use focused
-   [`@octokit/auth-app`](https://github.com/octokit/auth-app.js) authentication
-   and mint a fresh token narrowed to the repository and read-only contents.
-   Require remaining lifetime greater than the gateway's at-most-900-second
-   acquisition sub-budget plus a 60-second clock-skew margin.
-4. For a missing App or proven `ineligible`, a trusted local deployment may use
-   the configured `gh auth token --hostname github.com --user <account>`
-   provider. Include the account in the acquisition-policy digest and strip
-   ambient token variables. An `unknown` App result never falls through.
-5. Treat provider order as eligibility, not retry. Once App is selected,
-   configuration, authentication, minting, authorization, repository coverage,
-   rate-limit, or service failure terminates acquisition.
-6. Give the resolved token only to the dedicated acquisition subprocess through
-   a temporary helper channel. Remove the channel and terminate the process
-   before atomically publishing the credential-free verified workspace.
-7. Do not require or auto-start a network credential service. Keep App issuer
-   material and GitHub/OCI auth stores inaccessible to the adapter process and
-   model-invoked tools.
+1. Store only `${ENV_VAR}` references in the project workspace configuration;
+   reject literal credentials and caller-supplied credential identifiers.
+2. Supply secret values through the deployment environment and validate required
+   names during materializer preflight without contacting sources.
+3. Pass only the referenced, allowlisted names to the materializer child. Remove
+   the complete allowlist from every coding-agent child independent of
+   secret-looking name patterns.
+4. Select one configured credential identity before acquisition. Authentication,
+   authorization, rate-limit, or service failure terminates acquisition and
+   never falls through to another identity or source mode.
+5. Give the credential only to the dedicated acquisition subprocess through a
+   temporary helper or registry-auth channel. Invoke helpers directly without a
+   shell and bound their input, output, stderr, and lifetime.
+6. Use isolated Git/registry configuration. Prevent credentials from entering
+   remote URLs, Git config, generated CLI config, workspace files, nested
+   repositories, checkpoints, logs, provenance, or response metadata.
+7. Remove helper files, auth configuration, and the credential-bearing process
+   before returning the validated staging tree to HarnessRouter.
+8. Verify containment with a deliberately non-secret-looking environment name,
+   because name-based secret filters are not the security boundary.
 
-### Deferred remote or multi-tenant deployment
+### Remote or multi-tenant deployment
 
 A future deployment may require a central token minter, authenticated single-use
 delivery leases, entitlement generations, revocation reconciliation, worker
-identity, fencing, and a snapshot-delivery protocol. Those mechanisms are not
-part of the selected single-process architecture. They require a separate
-decision when remote workers or tenant isolation become product requirements.
+identity, fencing, and a snapshot-delivery protocol. Those mechanisms require a
+separate decision when remote workers or tenant isolation become product
+requirements.
 
-The resulting initial rule is: **credential reuse is acquisition-subprocess-
-mediated and ends before provider execution.** Remote or multi-tenant issuance
-policy remains deferred; a standalone credential service is not required now.
+The resulting rule is: **source credentials exist only during the materializer's
+acquisition phase and never enter the coding-agent environment.**

@@ -2,21 +2,21 @@
 
 ## Decision
 
-Borrow Harbor's content-addressed package cache, sparse Git reads, staged publication,
-and prebuilt-environment option. Do not copy its task model as the execution gateway's
-workspace contract.
+Use Harbor's content-addressed package cache, sparse Git reads, staged
+publication, and prebuilt-environment model as inputs to the AllAgents workspace
+materializer. Keep source selection and provenance in the AllAgents contract
+rather than adopting Harbor's task-owned workspace model.
 
-Harbor does not expose a first-class, general-purpose "repositories in a workspace"
-layer. It first downloads a Harbor **task package**. The task then defines an execution
-environment with a Dockerfile, Compose file, or prebuilt image. Acquisition of the
-repository the agent edits is therefore benchmark- and task-owned: it may be baked into
-an image, cloned by a Dockerfile, copied as task content, or otherwise prepared by the
-task author.
+Harbor does not expose a first-class, general-purpose “repositories in a
+workspace” layer. It first downloads a Harbor **task package**. The task then
+defines an execution environment with a Dockerfile, Compose file, or prebuilt
+image. Acquisition of the repository the agent edits may be baked into an image,
+cloned by a Dockerfile, copied as task content, or prepared by the task author.
 
-For AllAgents, repository and workspace provenance must remain explicit in the
-public execution request and terminal evidence. The initial gateway supports
-only declared Git repositories and named digest-pinned OCI workspace snapshots;
-custom materializers remain deferred.
+AllAgents keeps repository and workspace provenance explicit in the initial
+workspace descriptor and response metadata. The materializer accepts only
+declared Git repositories and named digest-pinned OCI workspace snapshots;
+custom materializers are outside the version-one contract.
 
 ## What Harbor fetches
 
@@ -37,8 +37,8 @@ workspace.
 Harbor also accepts an omitted commit or a mutable ref and resolves it to a
 commit. AllAgents permits a caller to override a declared repository with a
 branch, tag, or commit for developer convenience, but resolves and records the
-full commit before provider execution. Reproducibility-sensitive callers use a
-full commit; OCI snapshots remain digest-pinned at admission.
+full commit before agent execution. Reproducibility-sensitive callers use a full
+commit; OCI snapshots remain digest-pinned at admission.
 
 ### Task packages from the package registry
 
@@ -73,7 +73,7 @@ an upstream `mswebench/...:pr-...` base image that already contains the reposito
 `/home/{repo_name}`. Its Dockerfile creates `/workspace/{repo_name}` as a symlink and
 sets that as `WORKDIR`; Harbor itself never clones that application repository.
 
-## Lessons for the AllAgents execution gateway
+## Lessons for the AllAgents workspace materializer
 
 ### Adopt
 
@@ -110,7 +110,7 @@ Use exactly two initial source modes:
 
 1. **Direct declared Git repositories** for the normal case. A request selects
    configured repository names and may override only their revisions. The
-   gateway resolves and records full commits and enforces collision-free
+   materializer resolves and records full commits and enforces collision-free
    destinations.
 2. **Named OCI workspace snapshots** for large, preassembled workspaces. The
    project workspace declares the repository; the request supplies immutable
@@ -122,48 +122,50 @@ through to the other after admission.
 ### Do not copy
 
 - Unresolved mutable Git refs as terminal execution identities. Branch and tag
-  overrides are valid only when the gateway resolves and records a full commit
-  before provider execution.
+  overrides are valid only when the materializer resolves and records a full
+  commit before agent execution.
 - Mutable OCI tags or package `latest` as accepted snapshot identities.
 - Harbor's broad Git transport set (`http`, `ssh`, and `git` as well as HTTPS) at
-  a service boundary. The gateway keeps canonical credential-free HTTPS,
-  destination-policy revalidation, disabled redirects/helpers/filters/hooks/
+  the materializer boundary. AllAgents permits only canonical credential-free
+  HTTPS with configured hosts, disabled redirects/helpers/filters/hooks/
   submodules, and full-commit verification.
 - A non-fatal Git LFS miss. If declared workspace content cannot be materialized,
-  preparation must fail before provider execution.
-- Hashing a prebuilt image reference string as environment identity. Resolve and pin
-  the OCI manifest digest.
-- Arbitrary task-authored Dockerfiles, Compose files, or public-network setup as caller
-  input. Harbor runs benchmark definitions trusted by the evaluator; the gateway
-  accepts remote service requests and has a different threat boundary.
+  preparation fails before agent execution.
+- Hashing a prebuilt image reference string as environment identity. Resolve and
+  pin the OCI manifest digest.
+- Arbitrary task-authored Dockerfiles, Compose files, or public-network setup as
+  caller input. Harbor runs benchmark definitions trusted by the evaluator;
+  AllAgents accepts authenticated service requests with a different trust
+  boundary.
 - Treating a container image alone as sufficient provenance. An image can carry the
   correct files while obscuring which repositories, commits, generator, and setup
   produced them.
 
 ## Recommended boundary
 
-The gateway supervisor executes a dedicated acquisition phase before any
-provider starts:
+The HarnessRouter runner invokes the AllAgents materializer before provider
+selection:
 
-1. Validate the normalized source request and its declared repository or
-   snapshot identities before any network access.
-2. Resolve phase-scoped source credentials without exposing them to typed
-   provider preparation, the model, or later evidence collection.
-3. Populate a gateway-owned staging directory on the final publication
-   filesystem, or pull and unpack a digest-pinned workspace snapshot there.
-4. Verify repository commits, paths, limits, content, the expected manifest
-   digest, and the standard workspace manifest; distinguish gateway-verified
-   identities from snapshot-attested claims.
-5. Stop acquisition processes, revoke credentials, remove helpers and mounts,
-   and retain only the validated credential-free staging tree.
-6. Atomically rename that tree into the final workspace, record provenance, run
-   adapter-owned typed preparation, record the baseline, and only then launch
-   the provider runtime. Project or user `setup` shell commands are not run.
+1. HarnessRouter validates generic metadata bounds, creates the session, and
+   enters the durable materialization state.
+2. The materializer validates the workspace descriptor and configured repository
+   or snapshot identities before source network access.
+3. The materializer resolves phase-scoped source credentials without exposing
+   them to the coding agent or later evidence collection.
+4. The materializer populates a fixed staging directory on the publication
+   filesystem, or pulls and unpacks a digest-pinned workspace snapshot there.
+5. The materializer verifies commits, paths, limits, content, the expected
+   manifest digest, and the standard workspace manifest; snapshot-attested claims
+   remain distinct from independently verified identities.
+6. The materializer stops acquisition processes, removes credentials, helpers,
+   and mounts, and returns only the validated credential-free staging tree plus
+   bounded provenance.
+7. The runner independently validates staging, publishes it, creates checkpoint
+   and collection baselines, applies UHP input files, and only then launches the
+   coding agent. Project or user `setup` shell commands are not run.
 
-Operator-registered materializers, custom builders, and third source variants
-are deferred until direct Git and OCI snapshots cannot satisfy a demonstrated
-deployment need. Adding one requires a new decision for trust, configuration,
-credential, provenance, and isolation boundaries.
+Operator-selected builders and additional source variants require a new decision
+for trust, configuration, credential, provenance, and isolation boundaries.
 
 The practical conclusion is narrow: Harbor is strong evidence for content-
 addressed input bundles and staged publication. It is not evidence for making

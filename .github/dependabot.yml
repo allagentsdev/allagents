@@ -20,6 +20,13 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # @types/node must stay on the major declared by `engines.node` (>=22).
+      # Types newer than the runtime floor let `tsc` accept APIs that do not
+      # exist on the oldest supported Node release. Bump both together.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: bun
     directory: /docs

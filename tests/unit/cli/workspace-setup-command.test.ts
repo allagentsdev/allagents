@@ -11,6 +11,13 @@ import { join } from 'node:path';
 
 const cliEntry = join(import.meta.dir, '..', '..', '..', 'src', 'cli', 'index.ts');
 
+/**
+ * Every test in this file spawns the CLI, which spawns one fixture process per
+ * setup command. A cold CI runner (Windows especially) needs well over bun's
+ * 5s default budget, which produced intermittent `exitCode: null` failures.
+ */
+const CLI_TIMEOUT_MS = 30_000;
+
 type SetupFixture =
   | string
   | {
@@ -136,7 +143,7 @@ describe('workspace setup command', () => {
     expect(readFileSync(join(testDir, 'setup.log'), 'utf8')).toBe(
       'first-second',
     );
-  });
+  }, CLI_TIMEOUT_MS);
 
   test('shows each command before execution in normal mode', () => {
     const command = fixtureCommand(
@@ -152,7 +159,7 @@ describe('workspace setup command', () => {
     expect(normalizeLines(proc.stdout.toString())).toBe(
       `$ ${command}\ncommand-output\nSetup complete. 1 command(s) ran; 0 skipped.\n`,
     );
-  });
+  }, CLI_TIMEOUT_MS);
 
   test('keeps JSON stdout deterministic when a command writes output', () => {
     const command = fixtureCommand(
@@ -183,7 +190,7 @@ describe('workspace setup command', () => {
         ],
       },
     });
-  });
+  }, CLI_TIMEOUT_MS);
 
   test('stops after the first nonzero exit', () => {
     const commands = [
@@ -228,7 +235,7 @@ describe('workspace setup command', () => {
       error: `Setup command failed with exit code 7: ${commands[1]}`,
     });
     expect(readFileSync(join(testDir, 'setup.log'), 'utf8')).toBe('first');
-  });
+  }, CLI_TIMEOUT_MS);
 
   test.skipIf(process.platform === 'win32')(
     'preserves partial results when a command is terminated by a signal',
@@ -280,6 +287,7 @@ describe('workspace setup command', () => {
       });
       expect(readFileSync(join(testDir, 'setup.log'), 'utf8')).toBe('first');
     },
+    CLI_TIMEOUT_MS,
   );
 
   test('runs only commands matching the current platform and architecture', () => {
@@ -341,7 +349,7 @@ describe('workspace setup command', () => {
         reason: `architecture ${process.arch} does not match ${otherArchitecture}`,
       },
     ]);
-  });
+  }, CLI_TIMEOUT_MS);
 
   test('does not run setup commands during init or update', () => {
     const templateDir = join(testDir, 'template');
@@ -371,5 +379,5 @@ describe('workspace setup command', () => {
     const update = runCli(workspaceDir, ['update'], testDir);
     expect(update.exitCode).toBe(0);
     expect(existsSync(markerPath)).toBe(false);
-  });
+  }, CLI_TIMEOUT_MS);
 });

@@ -23,9 +23,10 @@ HarnessRouter owns caller authentication, UHP request and response semantics,
 streaming, cancellation, idempotency, session continuity, workspace-generation
 publication, session attachments, retention, quotas, garbage collection, agent
 execution, usage, and artifacts. AllAgents owns the
-`metadata["allagents.workspace"]` JSON descriptor, its resolution against the
-project `workspace.yaml`, deterministic Git/OCI generation construction, and
-provenance returned through the HarnessRouter response.
+`metadata["allagents.workspace"]` JSON descriptor, including caller-supplied
+HTTPS Git repository URLs, deterministic Git/OCI generation construction, and
+provenance returned through the HarnessRouter response. Project
+`workspace.yaml` is not the authority for caller-requested Git origins.
 
 The initial deployment will use a narrow AllAgents-maintained HarnessRouter fork.
 Its generic pre-turn workspace hook resolves a verified immutable source
@@ -114,9 +115,14 @@ AllAgents adds one namespaced JSON request extension:
       "retention": "session",
       "source": {
         "kind": "repositories",
-        "revisions": {
-          "api": "main"
-        }
+        "repositories": [
+          {
+            "name": "api",
+            "url": "https://github.com/acme/api.git",
+            "revision": "main",
+            "destination": "api"
+          }
+        ]
       },
       "workingDirectory": {
         "kind": "repository",
@@ -129,11 +135,12 @@ AllAgents adds one namespaced JSON request extension:
 ```
 
 `metadata["allagents.workspace"]` is the first-response session descriptor, not
-the project configuration file. It selects sources by logical name from the
-server-owned project `workspace.yaml` and requests an attachment policy. It
-cannot add or override repository or registry origins, destinations,
-credentials, host paths, commands, environment variables, materializer
-executables, or Docker options.
+the project configuration file. Promptfoo supplies each repository's logical
+name, HTTPS Git URL, optional revision, and destination. The pre-turn
+materializer resolves and loads those repositories before the harness starts, so
+the harness receives the populated workspace; this is not a model-directed
+in-agent `git clone`. The descriptor cannot supply credentials, host paths,
+commands, environment variables, materializer executables, or Docker options.
 
 `access` is required and is exactly `readOnly` or `editable`. `retention` is
 optional and defaults to `session`; `persistent` is accepted only when enabled
@@ -141,15 +148,21 @@ by deployment policy and within persistent-workspace quotas. Access and
 retention are independent: either access mode may use either retention class.
 
 Namespaced response metadata contains the effective descriptor digest, resolved
-source and generation identity, logical working directory, workspace-manifest
-digest, access mode, retention class, and effective expiry. Active turns and
-`persistent` sessions report `expiresAt: null`; a `session` terminal
-acknowledgement sets the timestamp returned by terminal, retrieval, and replay
-paths. Failures before attachment `ready` omit workspace metadata entirely;
-terminal failures after `ready` include the same complete public object.
-Metadata never exposes the raw request digest, configured origins, physical
-paths, credentials, internal generation-epoch/lease/attachment identifiers, or
-other sessions' quota state.
+source provenance, public `generationId`, logical working directory, workspace-
+manifest digest, access mode, retention class, and effective expiry.
+`generationId` is the SHA-256 digest of versioned RFC 8785 bytes containing only
+the returned normalized source provenance, normalized destinations, and
+workspace-manifest digest; it is never an internal cache, authorization,
+attachment, or lookup key. Active turns and `persistent` sessions report
+`expiresAt: null`; a `session` terminal acknowledgement sets the timestamp
+returned by terminal, retrieval, and replay paths. Failures before attachment
+`ready` omit workspace metadata entirely; terminal failures after `ready` include
+the same complete public object. Metadata never exposes the private generation
+key, raw request digest, URL credentials (which requests cannot contain),
+credential-scope mappings or selected references/values, redirect-chain URLs,
+resolved network addresses, physical paths, internal generation-epoch/lease/
+attachment identifiers, or other sessions' quota state. Normalized caller-
+supplied repository URLs and resolved commits are returned as source provenance.
 
 Ordinary UHP input files remain supported for `editable` sessions and are
 applied to the private workspace after generation attachment. A `readOnly`
@@ -421,49 +434,75 @@ the implementation must not introduce an implicit fallback or credential shim.
 
 ## Source authority and credentials
 
-The project `workspace.yaml` remains the source of truth for logical repository
-names, origins, non-root destinations, default revisions, snapshot catalog, and
-environment-variable credential references. Repository execution names are
-explicit `name` values or the portable basename of `path`; duplicate names,
-duplicate or ancestor/descendant destinations, root destinations, and
-local/originless entries make execution preflight fail. Secret values remain
-deployment-only.
+Project `workspace.yaml` remains the source of truth for the ordinary local
+AllAgents workspace and the optional operator-owned OCI snapshot catalog. It is
+not a Git origin allowlist and is not consulted to translate repository names in
+a UHP request. HarnessRouter deployment configuration owns harness/model/provider
+targets, persistence authorization, idle TTLs, quotas, garbage-collection policy,
+outbound network policy, and optional source-credential scope mappings.
 
-The UHP `metadata["allagents.workspace"]` JSON object only selects from that
-catalog and requests session access and retention. It is not parsed as, merged
-with, or persisted as a replacement for `workspace.yaml`. HarnessRouter
-deployment configuration owns harness/model/provider targets, persistence
-authorization, idle TTLs, quotas, and garbage-collection policy. No
-`gateway.yaml` or caller-controlled source registry is introduced.
+For repository mode, the UHP JSON descriptor supplies one through 128 repository
+objects containing required `name`, `url`, and `destination` fields plus an
+optional `revision`. `workingDirectory.repository` references `name`;
+`destination` is a non-empty, non-root relative path. Names and destinations are
+unique, and destinations are pairwise non-overlapping. The descriptor is session
+input, not parsed as, merged with, or persisted as a replacement for
+`workspace.yaml`.
 
-The materializer `preflight` receives no secret values. It validates hook/catalog
-versions, reference syntax, and required source tools and returns a bounded set of
-configured credential-reference names or opaque IDs. The runner, not the hook,
-checks those store handles and all actual staging/result/generation filesystem
-relationships. Source-free `validate` returns the bounded selected subset; the
-runner injects values for only that set into `resolve` or `materialize`.
+An authenticated caller may request any repository reachable through the
+deployment's HTTPS egress boundary. Before parsing, validation rejects ASCII
+controls, whitespace, and backslashes. It parses once with the WHATWG URL
+Standard and requires the input bytes to equal the serialized URL exactly. That
+serialization must use `https`, an ASCII lowercase IDNA A-label DNS hostname
+without a trailing dot, no userinfo/query/fragment or IP literal, no explicit
+default port, a non-empty repository path, and no percent-encoded control, slash,
+backslash, or dot segment. The same serialization and structured `(scheme, host,
+effectivePort)` origin drive policy, credentials, redirects, DNS, provenance,
+generation identity, and the exact Git/libcurl request. Local paths and `file`,
+`ssh`, `git`, and extension transports are rejected.
 
-Repository mode acquires the complete declared repository set, with optional
-revision overrides by logical name. It accepts only a bounded ref-name grammar,
-rejects option-like or refspec-shaped values, resolves advertised refs to full
-commits before agent execution, fetches by verified object ID, and records those
-commits in provenance. It preserves `.git` for coding tools but hermetically
-normalizes the allowed detached-HEAD configuration/ref set and removes reflogs,
-`FETCH_HEAD`, locks, hooks, worktree links, alternates, shallow/replace/graft
-state, extra refs, extra objects, and credential-bearing configuration. The
-runner independently verifies HEAD, an index exactly matching the resolved commit
-tree, its canonical object-set digest, and exactly the transitive required object
-closure with no extras. It then proves the source-visible manifest equals exactly
-the union of each resolved commit tree prefixed by its pairwise non-overlapping
-destination plus only necessary destination ancestor directories. Undeclared
-paths outside that union fail integrity validation.
+The acquisition child cannot bypass the deployment connector through direct
+network access or inherited proxy configuration. Resolution and each connection
+or redirect reject the entire DNS answer set if any address is loopback, link-
+local, private, reserved, metadata, or otherwise non-public; the connector pins
+one approved address for each connection. At most five redirects are accepted.
+Each is parsed and serialized by the same rules, re-resolved, and rechecked.
+Deployment policy may further restrict egress but does not require every
+repository to be predeclared.
+
+The materializer `preflight` receives no repository URL or secret value. It
+validates hook/policy versions, credential-scope mapping syntax, and source tools,
+then returns bounded configured credential-reference names or opaque IDs. A
+credential scope is either an exact structured origin or that origin plus a
+canonical repository-path segment prefix; a prefix matches complete segments,
+never raw strings. Source-free `validate` selects the matching rule with the most
+path segments for each normalized URL. The runner, not the hook, verifies those
+store handles and actual filesystem relationships and injects values only into
+`resolve` or `materialize`.
+
+Repository mode acquires exactly the caller-declared repository set. It accepts
+only a bounded ref-name grammar, rejects option-like or refspec-shaped values,
+resolves the requested revision—or the remote symbolic HEAD when omitted—to a
+full commit before agent execution, fetches by verified object ID, and records
+the normalized URL, requested revision, and commit in provenance. It preserves
+`.git` for coding tools but hermetically normalizes the allowed detached-HEAD
+configuration/ref set and removes reflogs, `FETCH_HEAD`, locks, hooks, worktree
+links, alternates, shallow/replace/graft state, extra refs, extra objects, and
+credential-bearing configuration. The runner independently verifies HEAD, an
+index exactly matching the resolved commit tree, its canonical object-set digest,
+and exactly the transitive required object closure with no extras. It then proves
+the source-visible manifest equals exactly the union of each resolved commit tree
+prefixed by its pairwise non-overlapping destination plus only necessary
+destination ancestor directories. Undeclared paths outside that union fail
+integrity validation.
 
 Snapshot mode accepts only a configured OCI repository plus immutable image-
 manifest and workspace-manifest digests. It verifies the image manifest,
 canonical workspace-manifest bytes, layer sizes and digests, applies OCI
 whiteouts, validates the resulting declared workspace layout against the
 manifest, rejects `.git` administrative subtrees, and records the ordered layer
-digests. Snapshots requiring Git history use repository mode.
+digests. Version-one snapshot requests use `workspaceRoot`; snapshots requiring
+Git history or repository-relative working directories use repository mode.
 
 Both source modes produce the same versioned canonical workspace manifest. Its
 RFC 8785 bytes enumerate every source-visible directory, regular file, and
@@ -481,15 +520,17 @@ places the manifest in source content.
 Before materialization, resolution computes a canonical generation key from every
 input that can affect source-visible bytes, declared agent-visible filesystem
 semantics, or sharing authorization: descriptor and hook contract versions,
-deployment authorization scope, bounded selected credential-reference identities,
-resolved commits or immutable OCI digests, normalized destinations, applicable
-catalog identity, and acquisition policy. Physical paths, access, retention,
-working directory, harness/profile identity, credential values, and volatile Git
-administrative representation are excluded. Publication binds that key and one
+deployment authorization scope, normalized caller Git URLs, bounded selected
+credential-reference identities, resolved commits or immutable OCI digests,
+normalized destinations, snapshot identity when applicable, and acquisition/
+egress policy version. Logical repository names, physical paths, access,
+retention, working directory, harness/profile identity, credential values, and
+volatile Git administrative representation are excluded. Publication binds that
+key and one
 internal epoch to one verified workspace-manifest digest and, in repository mode,
 one semantic Git-state record. Materialize receives the exact private source-only
-resolved-plan bytes/digest and selected reference set returned by resolve; it
-never re-resolves source.
+plan bytes/digest and selected reference set returned by resolve; it never
+re-resolves source.
 
 The generation backing store is owner-writable and never exposed writable to a
 session. Publication is a recoverable same-filesystem atomic transition.
@@ -498,15 +539,21 @@ mutable inodes with the generation. Corrupt, partial, quarantined, or deleting
 generations are not attachable.
 
 Source credentials are selected server-side from an owner-only secret mount or
-credential-store handle available to the runner, not from the long-lived service
-environment. After preflight declaration and validate selection, the runner
-resolves only the exact selected values when it constructs a source-access hook
-child environment; the gateway/runner base environment and every agent child
-remain credential-free. The materializer must use hermetic Git/registry
-configuration, prevent credentials from being persisted in Git configuration or
-remote URLs, remove temporary credential state before returning, and emit no
-secret value. If a configured source secret appears in the service or agent
-environment, the runner refuses to launch the agent.
+credential-store handle available to the runner, not from request JSON or the
+long-lived service environment. Anonymous access is used when no configured
+credential scope matches. Otherwise the runner resolves only the selected value
+when constructing a source-access child environment. That child has an isolated
+HOME, no inherited proxy variables, no direct network path, hermetic Git/
+registry configuration, `credential.useHttpPath=true`, and an ephemeral helper
+that independently rejects any protocol, host, effective port, or canonical
+repository path outside the selected structured scope. Each redirect is checked
+against the originally selected scope; credentials are stripped whenever it
+leaves that scope, including a same-origin path-prefix escape, and a redirect
+never selects a new credential. Credentials are never encoded in the URL,
+persisted in Git configuration or remote URLs, or emitted. Temporary credential
+state is removed before return. The gateway/runner base environment and every
+agent child remain credential-free; if a configured source secret appears there,
+the runner refuses to launch the agent.
 
 ## Trust and deployment
 
@@ -601,8 +648,8 @@ automatically.
 ## Failure behavior
 
 - **Invalid extension:** the source-free hook validation rejects unknown or
-  malformed source, access, retention, or logical-working-directory fields
-  before source resolution.
+  malformed repository names, URLs, revisions, destinations, source, access,
+  retention, or logical-working-directory fields before source resolution.
 - **Unauthorized persistence:** after response allocation but before source
   resolution or byte acquisition, the runner rejects
   `retention: "persistent"` when deployment policy does not authorize it; the
@@ -647,11 +694,15 @@ automatically.
   reserved byte or inode allowance; the runner returns
   `allagents_workspace_private_quota_exceeded`. Persistent sessions cannot exceed
   the same fixed envelope; retries never change mode or retention.
-- **Source authentication or acquisition failure:** remove only unpublished
-  staging, publish no generation, and start no agent or provider fallback. An
-  existing verified generation is not poisoned by a failed competing build.
-  Cancelling one build waiter detaches only it; other live waiters keep the
-  runner-owned build alive.
+- **Source policy, authentication, or acquisition failure:** reject any
+  destination that resolves or redirects outside the permitted public HTTPS
+  egress boundary before source bytes reach staging. Strip credentials whenever
+  a redirect leaves the originally selected structured scope, including a same-
+  origin path-prefix escape. For authentication or transport failure, remove only
+  unpublished staging, publish no generation, and start no agent or provider
+  fallback. An existing verified generation is not poisoned by a failed
+  competing build. Cancelling one build waiter detaches only it; other live
+  waiters keep the runner-owned build alive.
 - **Generation, attachment, or private-copy failure:** quarantine corrupt or
   incomplete state, release reservations and provisional pins exactly once,
   acquire no live attachment, and fail closed. A session never substitutes
@@ -747,9 +798,10 @@ accepted or equivalent supported extensions exist.
 
 Version one does not add evaluation datasets, scoring, assertions, automatic
 retries, session branching, concurrent turns within one session, simultaneous
-refresh-capable turns sharing one auth profile, caller-supplied origins, public
-multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent
-source-mode fallback, or guaranteed provider prompt-cache hits.
+refresh-capable turns sharing one auth profile, caller-supplied credentials,
+non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary
+materializer commands, mutable OCI tags, transparent source-mode fallback, or
+guaranteed provider prompt-cache hits.
 
 Read-only attachments never copy up or become editable. Editable workspaces never
 share mutations across sessions. Callers cannot choose arbitrary TTLs, bypass
@@ -776,6 +828,8 @@ Revisit this decision when:
 - the maintained patch grows beyond the narrow integration boundary;
 - HarnessRouter changes or removes required UHP/session/provider behavior;
 - exact per-turn workspace rollback becomes a product requirement;
+- the host cannot enforce public-address egress validation, connection address
+  pinning, bounded redirect revalidation, and out-of-scope credential stripping;
 - source acquisition must run in a stronger isolation boundary;
 - callers require a public multi-tenant authorization model; or
 - a second independent UHP implementation offers a materially smaller and more

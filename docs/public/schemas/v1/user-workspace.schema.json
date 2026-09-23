@@ -154,8 +154,12 @@
                   }
                 ]
               },
-              "branch": {
+              "ref": {
                 "type": "string"
+              },
+              "branch": {
+                "description": "Renamed to 'ref'",
+                "not": {}
               }
             },
             "required": [

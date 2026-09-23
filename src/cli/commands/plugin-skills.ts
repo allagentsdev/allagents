@@ -956,7 +956,6 @@ async function ensureMarketplaceRegistrationForScope(opts: {
     from,
     opts.marketplaceName,
     parsed?.branch ?? undefined,
-    undefined,
     scopeOptions,
   );
   if (!result.success || !result.marketplace?.name) {

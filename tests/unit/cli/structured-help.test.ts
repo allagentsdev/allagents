@@ -136,6 +136,20 @@ describe('agent command metadata', () => {
     );
   });
 
+  test('plugin marketplace add metadata exposes only supported options', () => {
+    const addCmd = allCommands.find(
+      (command) => command.command === 'plugin marketplace add',
+    )!;
+    expect(addCmd.options).toEqual([
+      expect.objectContaining({ flag: '--name', short: '-n', type: 'string' }),
+      expect.objectContaining({ flag: '--branch', short: '-b', type: 'string' }),
+      expect.objectContaining({ flag: '--scope', short: '-s', type: 'string' }),
+    ]);
+    expect(addCmd.options?.some((option) => option.flag === '--force')).toBe(
+      false,
+    );
+  });
+
   test('skill add metadata exposes install target options', () => {
     const addCmd = allCommands.find((command) => command.command === 'skill add')!;
     expect(addCmd.options).toEqual(

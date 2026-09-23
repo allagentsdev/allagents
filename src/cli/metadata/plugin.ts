@@ -24,19 +24,20 @@ export const marketplaceAddMeta: AgentCommandMeta = {
     'allagents plugin marketplace add user/marketplace --name custom',
     'allagents plugin marketplace add ../local-marketplace',
     'allagents plugin marketplace add owner/repo --branch feat/v2 --name custom',
+    'allagents plugin marketplace add owner/repo --scope project',
   ],
   expectedOutput:
-    'Confirms the marketplace was added with its name and local path. Exit 1 if the source is invalid or unreachable.',
+    'Confirms the marketplace was added with its name and local path. Re-registering an existing marketplace replaces its source. Exit 1 if the source is invalid or unreachable.',
   positionals: [
     { name: 'source', type: 'string', required: true, description: 'GitHub URL, owner/repo, local path, or well-known marketplace name' },
   ],
   options: [
     { flag: '--name', short: '-n', type: 'string', description: 'Custom name for the marketplace' },
     { flag: '--branch', short: '-b', type: 'string', description: 'Branch to checkout after cloning (requires --name)' },
-    { flag: '--force', short: '-f', type: 'boolean', description: 'Replace marketplace if it already exists' },
+    { flag: '--scope', short: '-s', type: 'string', description: 'Scope: user (default) or project' },
   ],
   outputSchema: {
-    marketplace: { name: 'string', path: 'string' },
+    marketplace: { name: 'string', path: 'string', replaced: 'boolean | undefined' },
   },
 };
 

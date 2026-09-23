@@ -757,14 +757,12 @@ function getMarketplaceCloneError(location: string, error: unknown): string {
  * @param source - Marketplace source (URL, path, or name)
  * @param customName - Optional custom name for the marketplace
  * @param branch - Optional branch for GitHub marketplaces
- * @param _force - Deprecated, marketplace add now always replaces existing entries
  * @param scopeOptions - Optional scope options (user or project)
  */
 export async function addMarketplace(
   source: string,
   customName?: string,
   branch?: string,
-  _force?: boolean,
   scopeOptions?: MarketplaceScopeOptions,
 ): Promise<MarketplaceResult> {
   const parsed = parseMarketplaceSource(source);

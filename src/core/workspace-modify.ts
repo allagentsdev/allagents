@@ -47,7 +47,7 @@ export interface ModifyResult {
   error?: string;
   autoRegistered?: string; // marketplace name if auto-registered
   normalizedPlugin?: string; // plugin spec after normalization (e.g., plugin@manifest-name)
-  replaced?: boolean; // true if an existing plugin was replaced with --force
+  replaced?: boolean; // true if an existing plugin declaration was replaced
 }
 
 export interface PluginInstallTarget {

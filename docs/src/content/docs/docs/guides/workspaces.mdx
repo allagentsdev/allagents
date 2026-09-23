@@ -143,7 +143,7 @@ Set `managed` when AllAgents should materialize the repository too:
 | `"clone"` | Clones when the path is missing, never pulls |
 | `true` or `"sync"` | Clones when the path is missing, pulls on every sync |
 
-This matters most when something else populates the directory. A CI job that checks out a pinned commit before calling `allagents update` should leave `managed` unset — or pass `--no-managed` to that run — so AllAgents cannot move the checkout to upstream HEAD. Pulls are skipped rather than forced when the working tree is dirty or is not on the declared `branch`.
+This matters most when something else populates the directory. A CI job that checks out a pinned commit before calling `allagents update` should leave `managed` unset — or pass `--no-managed` to that run — so AllAgents cannot move the checkout to upstream HEAD. Pulls are skipped rather than forced when the working tree is dirty or is not on the declared `ref`.
 
 See [Managed Repositories](/docs/reference/configuration/#managed-repositories) in the configuration reference for the full field semantics.
 

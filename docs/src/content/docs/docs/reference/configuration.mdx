@@ -546,14 +546,24 @@ repositories:
   - path: ../pinned-lib
     source: github
     repo: myorg/pinned-lib
-    branch: release-1.x    # Pull only when this branch is checked out
+    ref: release-1.x       # Pull only when this ref is checked out
     managed: "clone"       # Clone when missing, never pull
   - path: ../vendored      # No managed field: AllAgents never clones or pulls
 ```
 
-Pulling never discards work. AllAgents skips the pull and reports a warning when the working tree has uncommitted changes, or when `branch` is set and the checkout is on a different branch.
+`ref` names a branch or tag, matching the `ref` field on plugin entries. A tag
+still clones, but the checkout is detached, so a later pull is skipped rather
+than run against the wrong revision.
+
+Pulling never discards work. AllAgents skips the pull and reports a warning when the working tree has uncommitted changes, or when `ref` is set and the checkout is on a different ref.
 
 Managed operations run before plugin sync, so a repository cloned in a run is available to skill discovery in that same run. They are skipped entirely by `--offline`, `--dry-run`, and [`--no-managed`](/docs/reference/cli/#update); `--dry-run` does not preview them.
+
+:::note
+This field was named `branch` before it was documented. A config that still uses
+`branch` fails validation with `has been renamed to 'ref'` rather than being
+silently ignored; rename the key to `ref`.
+:::
 
 ## MCP Servers
 

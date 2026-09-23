@@ -57,7 +57,18 @@ export const RepositorySchema = z.object({
   description: z.string().optional(),
   skills: z.union([z.boolean(), z.array(z.string())]).optional(),
   managed: ManagedModeSchema.optional(),
-  branch: z.string().optional(),
+  /** Git ref (branch or tag) used when `managed` clones or pulls this repo. */
+  ref: z.string().optional(),
+  /**
+   * Removed: renamed to `ref`. Declared as `never` so a stale key fails
+   * validation with a migration message. This object is not strict, so leaving
+   * the key undeclared would silently strip it and quietly move a pinned
+   * checkout back to the default branch.
+   */
+  branch: z
+    .never({ error: "has been renamed to 'ref'" })
+    .optional()
+    .describe("Renamed to 'ref'"),
 });
 
 export type Repository = z.infer<typeof RepositorySchema>;

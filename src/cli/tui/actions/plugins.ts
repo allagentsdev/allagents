@@ -436,7 +436,7 @@ async function runUpdateAllPluginsWithContext(
           updateContext,
           skillPrecheckDependencies,
         ),
-        onUnitStart: (unit) =>
+        onUnitCheckStart: (unit) =>
           s.message(`Updating ${terminalSafe(unitDisplayName(unit))}...`),
       },
     );

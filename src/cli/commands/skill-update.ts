@@ -7,7 +7,12 @@ import {
   restPositionals,
   string,
 } from 'cmd-ts';
-import type { SkillUpdateUnitExecution } from '../../core/skill-update.js';
+import type {
+  SkillUpdateSkillImpact,
+  SkillUpdateUnit,
+  SkillUpdateUnitExecution,
+} from '../../core/skill-update.js';
+import { formatPluginSource } from '../../utils/plugin-path.js';
 import { buildDescription } from '../help.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
 import { skillsUpdateMeta } from '../metadata/plugin-skills.js';
@@ -22,6 +27,7 @@ import {
   skillUpdateExitCode,
   skillUpdateSummary,
   unitDisplayName,
+  unitSourceDisplayName,
 } from '../skill-update.js';
 import { terminalSafe } from '../terminal-output.js';
 
@@ -58,6 +64,81 @@ function renderSkillUpdateResult(
       );
       break;
   }
+}
+
+type SkillDisplayLabels = ReadonlyMap<SkillUpdateSkillImpact, string>;
+
+function buildSkillDisplayLabels(
+  units: SkillUpdateUnit[],
+): SkillDisplayLabels {
+  const counts = new Map<string, number>();
+  for (const unit of units) {
+    for (const skill of [...unit.survivors, ...unit.deleted]) {
+      counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+    }
+  }
+
+  const labels = new Map<SkillUpdateSkillImpact, string>();
+  for (const unit of units) {
+    for (const skill of [...unit.survivors, ...unit.deleted]) {
+      const label =
+        counts.get(skill.name) === 1
+          ? skill.name
+          : `${skill.name} (${skill.scope}, ${formatPluginSource(skill.source)}:${skill.subpath})`;
+      labels.set(skill, terminalSafe(label));
+    }
+  }
+  return labels;
+}
+
+function skillDisplayName(
+  skill: SkillUpdateSkillImpact,
+  labels: SkillDisplayLabels,
+): string {
+  return labels.get(skill) ?? terminalSafe(skill.name);
+}
+
+function renderSkillApplyStart(
+  unit: SkillUpdateUnit,
+  labels: SkillDisplayLabels,
+): void {
+  for (const skill of unit.survivors) {
+    console.log(`Updating ${skillDisplayName(skill, labels)}…`);
+  }
+  for (const skill of unit.deleted) {
+    console.log(`Removing ${skillDisplayName(skill, labels)}…`);
+  }
+}
+
+function renderProgressiveSkillUpdateResult(
+  unitResult: SkillUpdateUnitExecution,
+  unit: SkillUpdateUnit | undefined,
+  labels: SkillDisplayLabels,
+): void {
+  if (unitResult.status === 'updated' || unitResult.status === 'removed') {
+    for (const skill of unit?.survivors ?? []) {
+      console.log(
+        `  ${chalk.green('✓')} Updated ${skillDisplayName(skill, labels)}`,
+      );
+    }
+    if (unitResult.status === 'removed') {
+      for (const skill of unit?.deleted ?? []) {
+        console.log(
+          `  ${chalk.green('✓')} Removed ${skillDisplayName(skill, labels)}`,
+        );
+      }
+    }
+    if (
+      (unit?.survivors.length ?? 0) + (unit?.deleted.length ?? 0) > 0
+    ) {
+      return;
+    }
+  }
+
+  renderSkillUpdateResult(
+    unitResult,
+    unit ? unitSourceDisplayName(unit) : unitResult.id,
+  );
 }
 
 export const skillUpdateCmd = command({
@@ -142,8 +223,10 @@ export const skillUpdateCmd = command({
           scopes,
           ...(skills.length > 0 && { filters: skills }),
           ...(progressiveOutput && {
-            onUnitStart: (unit) =>
-              console.log(`Updating ${terminalSafe(unitDisplayName(unit))}...`),
+            onUnitCheckStart: (unit) =>
+              console.log(
+                `Checking skills from source: ${terminalSafe(unitSourceDisplayName(unit))}`,
+              ),
           }),
         },
         inventory,
@@ -191,17 +274,28 @@ export const skillUpdateCmd = command({
         }
       }
 
+      const planById = new Map<string, SkillUpdateUnit>();
+      let found = 0;
+      for (const unit of prepared.plan.units) {
+        planById.set(unit.id, unit);
+        if (progressiveOutput) {
+          found += unit.survivors.length + unit.deleted.length;
+        }
+      }
+      const skillLabels = progressiveOutput
+        ? buildSkillDisplayLabels(prepared.plan.units)
+        : new Map<SkillUpdateSkillImpact, string>();
       if (progressiveOutput) {
         for (const local of prepared.inventory.skippedLocalSources) {
           console.log(
             `${chalk.dim('–')} Skipped local source ${terminalSafe(local)}`,
           );
         }
+        if (found > 0) {
+          console.log(`Found ${found} skill update${found === 1 ? '' : 's'}.`);
+          console.log();
+        }
       }
-
-      const planById = new Map(
-        prepared.plan.units.map((unit) => [unit.id, unit]),
-      );
       const sourceForResult = (unitResult: SkillUpdateUnitExecution): string => {
         const planned = planById.get(unitResult.id);
         return planned ? unitDisplayName(planned) : unitResult.id;
@@ -212,10 +306,13 @@ export const skillUpdateCmd = command({
         workspacePath,
         progressiveOutput
           ? {
+              onUnitApplyStart: (unit) =>
+                renderSkillApplyStart(unit, skillLabels),
               onUnitResult: (unitResult) =>
-                renderSkillUpdateResult(
+                renderProgressiveSkillUpdateResult(
                   unitResult,
-                  sourceForResult(unitResult),
+                  planById.get(unitResult.id),
+                  skillLabels,
                 ),
             }
           : {},

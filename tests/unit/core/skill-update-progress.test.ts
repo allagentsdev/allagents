@@ -85,18 +85,18 @@ async function twoUnitPlan(
 }
 
 describe('skill update progress observers', () => {
-  it('reports deferred preflight starts and typed execution results in sequential unit order', async () => {
+  it('reports check, apply, and result observers in sequential unit order', async () => {
     const entries = installations();
     const events: string[] = [];
     const firstInspection = Promise.withResolvers<UnitInspection>();
     const secondInspection = Promise.withResolvers<UnitInspection>();
-    const secondPreflightStarted = Promise.withResolvers<void>();
+    const secondCheckStarted = Promise.withResolvers<void>();
     const preflight = buildSkillUpdatePreflight(
       { installations: entries, selectedScopes: ['project'] },
       {
-        onUnitStart: (unit) => {
-          events.push(`start:${unit.id}`);
-          if (unit.id === nodes[1]!.id) secondPreflightStarted.resolve();
+        onUnitCheckStart: (unit) => {
+          events.push(`check:${unit.id}`);
+          if (unit.id === nodes[1]!.id) secondCheckStarted.resolve();
         },
         inspectUnit: (unit) => {
           events.push(`inspect:${unit.id}`);
@@ -108,17 +108,17 @@ describe('skill update progress observers', () => {
     );
 
     expect(events).toEqual([
-      `start:${nodes[0]!.id}`,
+      `check:${nodes[0]!.id}`,
       `inspect:${nodes[0]!.id}`,
     ]);
     firstInspection.resolve(
       inspectionFor({ nodes: [nodes[0]!], installations: [entries[0]!] }),
     );
-    await secondPreflightStarted.promise;
+    await secondCheckStarted.promise;
     expect(events).toEqual([
-      `start:${nodes[0]!.id}`,
+      `check:${nodes[0]!.id}`,
       `inspect:${nodes[0]!.id}`,
-      `start:${nodes[1]!.id}`,
+      `check:${nodes[1]!.id}`,
       `inspect:${nodes[1]!.id}`,
     ]);
     secondInspection.resolve(
@@ -143,31 +143,39 @@ describe('skill update progress observers', () => {
       advanceNode: async () => {},
       restoreNode: async () => {},
       syncScope: async () => ({ success: true }),
+      onUnitApplyStart: (unit) => events.push(`apply:${unit.id}`),
       onUnitResult: (result) =>
         events.push(`result:${result.id}:${result.status}`),
     });
 
     await firstExecutionStarted.promise;
-    expect(events.slice(4)).toEqual([`execute:${nodes[0]!.id}`]);
+    expect(events.slice(4)).toEqual([
+      `apply:${nodes[0]!.id}`,
+      `execute:${nodes[0]!.id}`,
+    ]);
     releaseFirstExecution.resolve();
     await secondExecutionStarted.promise;
     expect(events.slice(4)).toEqual([
+      `apply:${nodes[0]!.id}`,
       `execute:${nodes[0]!.id}`,
       `result:${nodes[0]!.id}:updated`,
+      `apply:${nodes[1]!.id}`,
       `execute:${nodes[1]!.id}`,
     ]);
     releaseSecondExecution.resolve();
     await execution;
     expect(events.slice(4)).toEqual([
+      `apply:${nodes[0]!.id}`,
       `execute:${nodes[0]!.id}`,
       `result:${nodes[0]!.id}:updated`,
+      `apply:${nodes[1]!.id}`,
       `execute:${nodes[1]!.id}`,
       `result:${nodes[1]!.id}:updated`,
     ]);
   });
 
-  it('does not start or inspect remote preflight for unmatched filters', async () => {
-    const onUnitStart = mock(() => {});
+  it('does not check or inspect remote preflight for unmatched filters', async () => {
+    const onUnitCheckStart = mock(() => {});
     const inspectUnit = mock(async (unit) => inspectionFor(unit));
 
     const result = await buildSkillUpdatePreflight(
@@ -176,21 +184,21 @@ describe('skill update progress observers', () => {
         selectedScopes: ['project'],
         filters: ['missing'],
       },
-      { inspectUnit, onUnitStart },
+      { inspectUnit, onUnitCheckStart },
     );
 
     expect(result.units).toEqual([]);
-    expect(onUnitStart).not.toHaveBeenCalled();
+    expect(onUnitCheckStart).not.toHaveBeenCalled();
     expect(inspectUnit).not.toHaveBeenCalled();
   });
 
-  it('continues preflight when a start observer throws', async () => {
+  it('continues preflight when a check observer throws', async () => {
     const inspected: string[] = [];
 
     const result = await buildSkillUpdatePreflight(
       { installations: installations(), selectedScopes: ['project'] },
       {
-        onUnitStart: () => {
+        onUnitCheckStart: () => {
           throw new Error('observer failed');
         },
         inspectUnit: async (unit) => {
@@ -205,6 +213,45 @@ describe('skill update progress observers', () => {
       nodes.map((node) => node.id),
     );
     expect(result.units.every((unit) => unit.outcome === 'resolved')).toBe(true);
+  });
+
+  it('does not announce apply work for a retained deletion', async () => {
+    const entry = installations().slice(0, 1);
+    const plan = await buildSkillUpdatePreflight(
+      { installations: entry, selectedScopes: ['project'] },
+      {
+        inspectUnit: async (unit) => ({
+          outcome: 'resolved',
+          nodes: [{ nodeId: unit.nodes[0]!.id, sha: 'new-sha' }],
+          installations: [
+            {
+              installationId: unit.installations[0]!.id,
+              outcome: 'resolved',
+              skills: [],
+            },
+          ],
+        }),
+      },
+    );
+    const onUnitApplyStart = mock(() => {});
+
+    const result = await executeSkillUpdatePlan(
+      plan,
+      { [plan.units[0]!.id]: 'retain' },
+      {
+        reconcileUnit: async () => ({
+          commit: async () => {},
+          rollback: async () => {},
+        }),
+        advanceNode: async () => {},
+        restoreNode: async () => {},
+        syncScope: async () => ({ success: true }),
+        onUnitApplyStart,
+      },
+    );
+
+    expect(onUnitApplyStart).not.toHaveBeenCalled();
+    expect(result.units[0]?.status).toBe('retained');
   });
 
   it('does not roll back a committed unit or stop later units when a result observer throws', async () => {

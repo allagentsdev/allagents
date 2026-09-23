@@ -2,7 +2,7 @@
 
 - Status: Accepted; implementation gated on native-auth feasibility
 - Date: 2026-09-21
-- Updated: 2026-09-23
+- Updated: 2026-09-24
 
 ## Decision
 
@@ -17,7 +17,7 @@ authenticated provider proxy remains an explicitly configured last resort.
 Native-auth failure must never activate the proxy automatically. Version one
 still implements and verifies proxy mode even when a deployment does not use it.
 
-Project `workspace.yaml` will remain ordinary local AllAgents configuration plus an optional operator-owned OCI snapshot catalog. It will not control which Git repositories a UHP caller may request.
+Project `workspace.yaml` will remain ordinary local AllAgents configuration plus an optional operator-owned OCI snapshot catalog. Its local repository entries use `path` for the checkout location and one canonical `url` for remote identity; the provider-specific `source` plus `repo` pair is removed as a clean schema cutover. It will not control which Git repositories a UHP caller may request.
 
 The fork is delivery machinery, not a second protocol. We will keep the changes narrow and suitable for upstreaming, but delivery will not depend on upstream acceptance.
 
@@ -159,7 +159,7 @@ Each repository entry has this shape:
 | `ref` | no | Full ref name, unambiguous branch or tag shorthand, or full 40-hex commit ID; omission means remote symbolic HEAD |
 | `destination` | yes | Unique, non-root relative directory; destinations must not overlap or collide with a runner-owned control namespace |
 
-A workspace snapshot source instead names one configured snapshot plus immutable image and workspace-manifest digests.
+A workspace snapshot source instead has the exact shape `{ "kind": "workspaceSnapshot", "snapshotName": ConfigName, "imageManifestDigest": Digest, "workspaceManifestDigest": Digest }`. `snapshotName` selects an operator-owned catalog entry; `imageManifestDigest` identifies the accepted direct OCI image manifest; `workspaceManifestDigest` identifies the canonical source-visible manifest.
 
 Reserved control namespaces include HarnessRouter's root checkpoint repository.
 Source-free validation rejects a destination that equals, contains, or is
@@ -196,6 +196,26 @@ The descriptor is session input, not project configuration. Promptfoo supplies t
 The descriptor cannot supply credentials, host paths, commands, environment variables, materializer executables, or Docker options.
 
 A continuation supplies `previous_response_id` and must omit the extension. It reuses the original descriptor, attachment, access, retention, working directory, harness, and authentication binding.
+
+### Contract vocabulary and benchmark compatibility
+
+The JSON descriptor uses one canonical vocabulary rather than aliases for benchmark-specific names. `url`, optional `ref`, and `destination` describe requested Git materialization; `workingDirectory` describes the logical workspace-relative command directory. Public provenance preserves `requestedRef` separately from `resolvedCommit`. The contract does not also accept Harbor `git_url` or `workdir`, SWE-bench `repo` or `base_commit`, or Devfile `revision` or `clonePath`.
+
+The local `workspace.yaml` contract represents a different boundary:
+
+```yaml
+repositories:
+  - path: ../api
+    url: https://github.com/acme/api.git
+    managed: sync
+    branch: main
+```
+
+`path` remains the existing or managed local checkout location. `url` replaces the lossy `source` plus `repo` pair. `branch` remains branch-specific because managed synchronization performs branch checkout and pull; it does not claim arbitrary detached-ref semantics. Path-only unmanaged entries may omit `url`; a managed entry requires it. The schema, CLI, generated schemas, examples, and tests cut over together without accepting both shapes indefinitely.
+
+Harbor and SWE-bench/Hugging Face are benchmark-ingestion precedents, not alternate workspace field vocabularies. Harbor clones a task repository and materializes its Dockerfile, Compose definition, or prebuilt `environment.docker_image`; SWE-bench records `repo` and `base_commit` and builds or pulls layered instance images. A future adapter may compile those records into the canonical AllAgents workspace and deployment inputs while preserving their upstream identity.
+
+A runnable Harbor or SWE-bench image is not automatically an AllAgents `workspaceSnapshot`. The former may combine source, tools, services, verifier assumptions, and runtime configuration; the latter is a source-only OCI artifact with a separately verified workspace manifest. Caller-selected task packages, runtime images, and verifiers require a separate versioned task/environment boundary rather than overloading `source`.
 
 ### Access and retention
 
@@ -243,8 +263,8 @@ Public metadata never exposes the private generation key, raw request digest, UR
 
 | Source | Authority |
 |---|---|
-| Caller-requested Git | The UHP JSON descriptor supplies URL, optional ref, and destination |
-| OCI snapshot | Operator-owned `workspace.yaml` snapshot catalog plus caller-supplied immutable digests |
+| Caller-requested Git | The UHP JSON descriptor supplies `url`, optional `ref`, and `destination` |
+| OCI snapshot | Operator-owned `workspace.yaml` snapshot catalog plus caller-supplied `snapshotName`, `imageManifestDigest`, and `workspaceManifestDigest` |
 | Harness, model, persistence, quota, and egress policy | HarnessRouter deployment configuration |
 | Source credentials | Operator-owned secret store and credential-scope mappings |
 
@@ -323,11 +343,11 @@ Any undeclared path fails integrity validation.
 
 ### OCI snapshots
 
-Snapshot mode accepts only a direct OCI image manifest from the configured
-repository, selected by immutable image-manifest and workspace-manifest digests.
-Redirects may not change registry authority. The config descriptor must use the
-snapshot's configured workspace-manifest media type and address the canonical
-workspace-manifest bytes.
+Snapshot mode accepts only the direct OCI image manifest selected by
+`imageManifestDigest` from the repository owned by the `snapshotName` catalog
+entry. Redirects may not change registry authority. The config descriptor must
+use that entry's configured workspace-manifest media type and address the
+canonical bytes selected by `workspaceManifestDigest`.
 
 | Limit | Maximum |
 |---|---:|
@@ -347,10 +367,11 @@ declared size. It rejects devices, sockets, traversal, escaping links, sparse
 files, unknown or foreign layers, mutable tags, and undeclared output. The runner
 independently rejects a 129th repository root.
 
-The materializer verifies the image manifest, workspace manifest, and every layer
-size and digest before use, then applies OCI whiteouts. It recomputes the canonical
-manifest from staging and requires it to match both the fetched manifest bytes and
-the caller-provided digest. Snapshot mode rejects `.git` administrative subtrees.
+The materializer verifies `imageManifestDigest`, `workspaceManifestDigest`, and
+every layer size and digest before use, then applies OCI whiteouts. It recomputes
+the canonical manifest from staging and requires it to match both the fetched
+manifest bytes and the caller-provided `workspaceManifestDigest`. Snapshot mode
+rejects `.git` administrative subtrees.
 Snapshots that require Git history use repository mode.
 
 ### Canonical workspace manifest
@@ -702,7 +723,7 @@ The maintained fork must be rebased and tested against selected upstream release
 
 ## Deliberate limits
 
-Version one does not add evaluation datasets, scoring, assertions, automatic retries, session branching, concurrent turns within one session, simultaneous refresh-capable turns for one native profile, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
+Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, simultaneous refresh-capable turns for one native profile, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
 
 Read-only attachments never copy up or become editable. Editable sessions never share mutations. Callers cannot choose arbitrary TTLs, bypass persistence quotas, or change retention on continuation. Leased, referenced, or pinned state is never evicted. Default retention is always bounded.
 

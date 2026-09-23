@@ -38,6 +38,7 @@ Temporary implementation plans may live under `.claude/plans/`. Delete stale pla
 Use conventional titles such as `fix(cli): simplify update status` or `docs(workflow): document TUI evidence`.
 
 - Use the most relevant scope: `cli`, `sync`, `plugin`, `workspace`, `docs`, or `mcp`.
+- Do not hand-edit `CHANGELOG.md`. Release Please builds each release entry from the merged commit subjects, so the commit type and the PR title are what decide whether a change appears in the changelog.
 - Do not prefix PR titles with `[codex]` unless requested.
 - Do not add `Co-Authored-By` attribution unless requested.
 - Stage explicit paths and keep unrelated user changes out of commits.

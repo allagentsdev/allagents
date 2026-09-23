@@ -55,7 +55,9 @@ jobs:
   preview:
     name: Publish next preview
     needs: release-please
-    if: needs.release-please.outputs.release_created != 'true'
+    if: |
+      needs.release-please.outputs.release_created != 'true' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

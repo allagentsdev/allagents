@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.16.7](https://github.com/allagentsdev/allagents/compare/v1.16.6...v1.16.7) (2026-09-23)
+
+
+### Fixed
+
+* **cli:** check plugin sources before applying updates ([#516](https://github.com/allagentsdev/allagents/issues/516)) ([b1bcc45](https://github.com/allagentsdev/allagents/commit/b1bcc4509a72933d6f1397b8ba9a5af810a56dd0))
+* **cli:** separate skill check and apply progress ([#515](https://github.com/allagentsdev/allagents/issues/515)) ([b4af16b](https://github.com/allagentsdev/allagents/commit/b4af16b258f3843945aa16b03baefadbb41f2890))
+* **plugin:** remove the unused --force flag from marketplace add ([#518](https://github.com/allagentsdev/allagents/issues/518)) ([e9f4c52](https://github.com/allagentsdev/allagents/commit/e9f4c52f0d85b0465fdbdbea43250aa1bc656100))
+
 ## [1.16.6] - 2026-09-22
 
 ### Fixed

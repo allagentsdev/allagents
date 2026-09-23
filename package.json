@@ -33,7 +33,6 @@
     "check": "biome check src",
     "check:fix": "biome check --write src",
     "prepare": "bun run build",
-    "binary:build": "bun run scripts/build-binary.ts",
     "prepublishOnly": "test \"$ALLOW_PUBLISH\" = '1' || (echo 'ERROR: Use the GitHub Actions Publish workflow' && exit 1)",
     "publish:latest": "bun run build && bun scripts/publish.ts latest",
     "publish:next": "bun run build && bun scripts/publish.ts next",

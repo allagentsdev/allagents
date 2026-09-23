@@ -87,14 +87,12 @@ major version. Release Please keeps a release pull request open with that
 version, the `package.json` bump, and the `CHANGELOG.md` entry.
 
 Merging the release pull request finalizes the release. It creates the tag and
-GitHub release, publishes the package to npm, and attaches standalone CLI
-binaries with a `SHA256SUMS` file to the release. There is no manual next-tag,
+GitHub release and publishes the package to npm. There is no manual next-tag,
 bump, or promote step.
 
 - Never bump `package.json`, edit the version manifest, or create a release tag by hand.
 - Never run `npm publish` directly.
-- Recovery: dispatch the `Publish` workflow with the release tag, and the
-  `Release Please` workflow with `tag` to rebuild the release binaries.
+- Recovery: dispatch the `Publish` workflow with the release tag.
 - npm channels: `latest` is the newest stable release, and `next` tracks `main`
   — every push with an open release pull request previews the pending version
   as `<pending>-next.<run>`, so `npx allagents@next` runs what main has now.

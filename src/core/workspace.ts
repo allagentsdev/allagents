@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, resolve, dirname, relative, sep, isAbsolute } from 'node:path';
+import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump } from 'js-yaml';
 import { syncWorkspace, type SyncResult } from './sync.js';
@@ -58,13 +58,15 @@ export async function initWorkspace(
     );
   }
 
-  // Get template path for default template
-  const currentFilePath = fileURLToPath(import.meta.url);
-  const currentFileDir = dirname(currentFilePath);
-  const isProduction = currentFilePath.includes(`${sep}dist${sep}`);
-  const defaultTemplatePath = isProduction
-    ? join(currentFileDir, 'templates', 'default')
-    : join(currentFileDir, '..', 'templates', 'default');
+  // Get template path for default template. The published bundle and compiled
+  // standalone binaries keep templates beside the entrypoint; source runs keep
+  // them in src/templates.
+  const currentFileDir = dirname(fileURLToPath(import.meta.url));
+  const installedTemplatePath = join(currentFileDir, 'templates', 'default');
+  const sourceTemplatePath = join(currentFileDir, '..', 'templates', 'default');
+  const defaultTemplatePath = existsSync(installedTemplatePath)
+    ? installedTemplatePath
+    : sourceTemplatePath;
 
   // Temp dir from GitHub clone — must be cleaned up at the end
   let githubTempDir: string | undefined;

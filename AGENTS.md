@@ -23,7 +23,7 @@ AllAgents is a CLI for managing AI coding-assistant plugins, workspaces, and cli
 - Update user documentation and durable agent guidance when behavior or the development workflow changes.
 - Push feature work through a branch and pull request. Never implement or push directly on `main`.
 - Use conventional commit and PR titles, omit automated co-author attribution unless requested, and squash-merge to `main`.
-- Use the GitHub Actions `Publish` workflow for releases. Never run `npm publish` directly.
+- Release Please owns versions, tags, and `CHANGELOG.md`: merge the generated release pull request to finalize a release, never bump the version or tag by hand, and never run `npm publish` directly.
 
 ## Repository map
 

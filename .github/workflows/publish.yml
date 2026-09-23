@@ -3,278 +3,102 @@ name: Publish
 on:
   workflow_dispatch:
     inputs:
-      channel:
-        description: "Release channel, or publish an existing tag/ref"
-        required: true
-        type: choice
-        options:
-          - next
-          - finalize
-          - stable
-          - existing
-        default: next
-      bump:
-        description: "Version bump (next and stable only)"
-        required: false
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-        default: patch
-      prerelease_tag:
-        description: "Prerelease tag to finalize (defaults to latest v*-next.* tag)"
-        required: false
-        type: string
       ref:
-        description: "Existing release tag/ref to publish (required when channel=existing)"
-        required: false
+        description: "Release tag to publish to npm (for example v1.16.7)"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        description: "Release tag to publish to npm"
+        required: true
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.channel }}-${{ inputs.ref || inputs.prerelease_tag || inputs.bump || github.ref }}
+  group: publish-${{ inputs.ref }}
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
-  prepare:
-    name: Prepare release
+  publish:
+    name: Publish npm package
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
-    outputs:
-      publish_action: ${{ steps.context.outputs.publish_action }}
-      release_tag: ${{ steps.context.outputs.release_tag }}
-      version: ${{ steps.context.outputs.version }}
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
           fetch-tags: true
-          ref: ${{ inputs.channel == 'existing' && inputs.ref || github.ref }}
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ "${{ inputs.channel }}" != "existing" ]; then
-            git checkout -B main origin/main
-          fi
-
-      - name: Validate existing ref input
-        if: inputs.channel == 'existing' && inputs.ref == ''
-        run: |
-          echo "::error::ref is required when channel=existing"
-          exit 1
-
-      - name: Resolve finalize ref
-        if: inputs.channel == 'finalize'
-        id: finalize_ref
+      - name: Validate release tag
+        id: release
         env:
-          PRERELEASE_TAG: ${{ inputs.prerelease_tag }}
-        run: |
-          set -euo pipefail
-
-          if [ -n "$PRERELEASE_TAG" ]; then
-            TAG="$PRERELEASE_TAG"
-          else
-            TAG=$(git tag --list 'v*-next.*' --sort=-version:refname | head -n 1)
-          fi
-
-          if [ -z "$TAG" ]; then
-            echo "::error::No prerelease tag found to finalize"
-            exit 1
-          fi
-
-          case "$TAG" in
-            v*) ;;
-            *) TAG="v$TAG" ;;
-          esac
-
-          git rev-parse --verify "$TAG^{commit}" >/dev/null
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Bump version, commit, and tag
-        if: inputs.channel != 'existing'
-        env:
-          CHANNEL: ${{ inputs.channel }}
-          BUMP: ${{ inputs.bump }}
-          FINALIZE_TAG: ${{ steps.finalize_ref.outputs.tag }}
-        run: |
-          set -euo pipefail
-
-          if [ "$CHANNEL" = "next" ]; then
-            bun run release next "$BUMP"
-          elif [ "$CHANNEL" = "finalize" ]; then
-            bun run release finalize "$FINALIZE_TAG"
-          else
-            bun run release "$BUMP"
-          fi
-
-      - name: Resolve publish context
-        id: context
+          REQUESTED_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
 
           VERSION=$(node -p "require('./package.json').version")
           RELEASE_TAG="v${VERSION}"
-          CHECKOUT_TAG=$(git tag --points-at HEAD | grep -Fx "$RELEASE_TAG" | head -n 1 || true)
 
-          if [ -z "$CHECKOUT_TAG" ]; then
-            echo "::error::Publish checkout must point at $RELEASE_TAG; tags at HEAD are:"
+          if [ "$REQUESTED_REF" != "$RELEASE_TAG" ]; then
+            echo "::error::Ref '$REQUESTED_REF' does not match the package version $RELEASE_TAG at that ref"
+            exit 1
+          fi
+
+          if ! git tag --points-at HEAD | grep -Fx "$RELEASE_TAG" >/dev/null; then
+            echo "::error::$RELEASE_TAG is not a tag at the checked-out commit; tags at HEAD:"
             git tag --points-at HEAD || true
             exit 1
           fi
 
-          if [[ "$VERSION" == *"-next."* ]]; then
-            PUBLISH_ACTION="publish-next"
+          if [[ "$VERSION" == *"-"* ]]; then
+            NPM_TAG="next"
           else
-            PUBLISH_ACTION="publish-latest"
+            NPM_TAG="latest"
           fi
 
-          echo "Publishing $RELEASE_TAG with $PUBLISH_ACTION"
+          echo "Publishing $RELEASE_TAG with npm dist-tag $NPM_TAG"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "publish_action=$PUBLISH_ACTION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Ensure GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          NPM_TAG: ${{ steps.release.outputs.npm_tag }}
         run: |
           set -euo pipefail
 
-          VERSION="${{ steps.context.outputs.version }}"
-          RELEASE_TAG="${{ steps.context.outputs.release_tag }}"
+          RELEASE_TAG="v${VERSION}"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "GitHub Release $RELEASE_TAG already exists"
             exit 0
           fi
 
-          if [[ "$VERSION" == *"-next."* ]]; then
+          if [ "$NPM_TAG" = "next" ]; then
             gh release create "$RELEASE_TAG" --generate-notes --prerelease
           else
             gh release create "$RELEASE_TAG" --generate-notes
           fi
-
-  publish:
-    name: Publish npm package
-    needs: prepare
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          ref: ${{ needs.prepare.outputs.release_tag }}
 
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Validate publish checkout
-        run: |
-          set -euo pipefail
-
-          VERSION=$(node -p "require('./package.json').version")
-          RELEASE_TAG="v${VERSION}"
-          CHECKOUT_TAG=$(git tag --points-at HEAD | grep -Fx "$RELEASE_TAG" | head -n 1 || true)
-
-          if [ -z "$CHECKOUT_TAG" ]; then
-            echo "::error::Publish checkout must point at $RELEASE_TAG; tags at HEAD are:"
-            git tag --points-at HEAD || true
-            exit 1
-          fi
-
-          if [[ "$VERSION" == *"-next."* ]]; then
-            if [ "${{ needs.prepare.outputs.publish_action }}" != "publish-next" ]; then
-              echo "::error::Cannot publish prerelease $VERSION with ${{ needs.prepare.outputs.publish_action }}"
-              exit 1
-            fi
-          else
-            if [ "${{ needs.prepare.outputs.publish_action }}" != "publish-latest" ]; then
-              echo "::error::Cannot publish stable version $VERSION with ${{ needs.prepare.outputs.publish_action }}"
-              exit 1
-            fi
-          fi
-
-          echo "Publishing $RELEASE_TAG with ${{ needs.prepare.outputs.publish_action }}"
-
-      - name: Check npm package state
-        id: npm_state
-        env:
-          NPM_TAG: ${{ needs.prepare.outputs.publish_action == 'publish-next' && 'next' || 'latest' }}
-        run: |
-          set -euo pipefail
-
-          NAME=$(node -p "require('./package.json').name")
-          VERSION=$(node -p "require('./package.json').version")
-          VERSION_ERROR=$(mktemp)
-          TAG_ERROR=$(mktemp)
-          trap 'rm -f "$VERSION_ERROR" "$TAG_ERROR"' EXIT
-
-          if ! PUBLISHED_VERSION=$(npm view "${NAME}@${VERSION}" version 2>"$VERSION_ERROR"); then
-            if grep -q "E404" "$VERSION_ERROR"; then
-              PUBLISHED_VERSION=""
-            else
-              cat "$VERSION_ERROR" >&2
-              exit 1
-            fi
-          fi
-
-          if ! CURRENT_TAG=$(npm view "$NAME" "dist-tags.${NPM_TAG}" 2>"$TAG_ERROR"); then
-            if grep -q "E404" "$TAG_ERROR"; then
-              CURRENT_TAG=""
-            else
-              cat "$TAG_ERROR" >&2
-              exit 1
-            fi
-          fi
-
-          if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
-            if [ "$CURRENT_TAG" != "$VERSION" ]; then
-              echo "::error::${NAME}@${VERSION} is already published, but ${NPM_TAG} points to ${CURRENT_TAG:-nothing}. Publish a newer version or update the npm dist-tag manually."
-              exit 1
-            fi
-
-            echo "${NAME}@${VERSION} is already published and ${NPM_TAG} points to it"
-            echo "already_done=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "${NAME}@${VERSION} has not been published; continuing with npm publish --tag ${NPM_TAG}"
-          echo "already_done=false" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Bun
-        if: steps.npm_state.outputs.already_done != 'true'
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
 
-      - name: Install dependencies
-        if: steps.npm_state.outputs.already_done != 'true'
-        run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Publish to npm
-        if: steps.npm_state.outputs.already_done != 'true'
         env:
           NPM_CONFIG_PROVENANCE: true
-        run: |
-          if [ "${{ needs.prepare.outputs.publish_action }}" = "publish-next" ]; then
-            bun run publish:next
-          else
-            bun run publish:latest
-          fi
+        run: bun run publish:${{ steps.release.outputs.npm_tag }}

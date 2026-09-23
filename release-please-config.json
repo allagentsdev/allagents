@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "packages": {
+    ".": {
+      "package-name": "allagents",
+      "changelog-path": "CHANGELOG.md"
+    }
+  },
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": false,
+  "bump-patch-for-minor-pre-major": false,
+  "draft": false,
+  "prerelease": false,
+  "skip-github-release": false,
+  "pull-request-title-pattern": "chore(release): release ${version}",
+  "pull-request-header": "Release Please opened this release pull request from the conventional commits merged since the last release. Merging it finalizes the release: the version in `package.json` and `CHANGELOG.md` become permanent, the release is tagged, the package is published to npm, and standalone binaries are attached to the GitHub release. Edit the changelog section in this PR before merging if a commit needs better wording.",
+  "changelog-sections": [
+    { "type": "feat", "section": "Added" },
+    { "type": "fix", "section": "Fixed" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "revert", "section": "Reverts", "hidden": true },
+    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "style", "section": "Styles", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous Chores", "hidden": true },
+    { "type": "refactor", "section": "Code Refactoring", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "build", "section": "Build System", "hidden": true },
+    { "type": "ci", "section": "Continuous Integration", "hidden": true },
+    { "type": "deps", "section": "Dependencies", "hidden": true }
+  ]
+}

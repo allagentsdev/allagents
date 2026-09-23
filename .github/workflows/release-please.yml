@@ -1,0 +1,126 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to rebuild binaries for (leave empty for a normal run)"
+        required: false
+        type: string
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # Release Please computes the next version from the conventional
+          # commits on main and maintains a release pull request that updates
+          # package.json and CHANGELOG.md. Merging that pull request creates the
+          # tag and GitHub release. Set RELEASE_PLEASE_TOKEN (a personal access
+          # token) to let CI checks run on the release pull request; the default
+          # token cannot trigger other workflows.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish-npm:
+    name: Publish npm package
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag_name }}
+
+  binary-targets:
+    name: Resolve binary targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: List targets
+        id: targets
+        run: echo "targets=$(bun run scripts/build-binary.ts --list)" >> "$GITHUB_OUTPUT"
+
+  binaries:
+    name: Build ${{ matrix.target }} binary
+    needs: [release-please, binary-targets]
+    if: needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.binary-targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build standalone executable
+        run: bun run scripts/build-binary.ts ${{ matrix.target }} dist-binaries
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" dist-binaries/*.tar.gz --clobber
+
+  checksums:
+    name: Attach checksums
+    needs: [release-please, binaries]
+    if: needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download published binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --pattern '*.tar.gz' --dir assets
+      - name: Write and attach SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          sha256sum ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber

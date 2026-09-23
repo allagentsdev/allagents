@@ -33,6 +33,26 @@ package cache after the first launch.
 bun install -g allagents
 ```
 
+## Standalone binaries
+
+Every [release](https://github.com/allagentsdev/allagents/releases/latest)
+attaches a self-contained executable per platform, so AllAgents can run without
+Node.js or Bun. Download the archive for your platform — `linux-x64`,
+`linux-arm64`, `darwin-x64`, `darwin-arm64`, or `windows-x64` — and check it
+against the `SHA256SUMS` file attached to the same release.
+
+```bash
+# Linux x64, replacing <version> with the release version
+curl -LO https://github.com/allagentsdev/allagents/releases/download/v<version>/allagents-<version>-linux-x64.tar.gz
+tar -xzf allagents-<version>-linux-x64.tar.gz
+./allagents --version
+```
+
+Each archive contains the `allagents` executable (or `allagents.exe` on
+Windows) and `THIRD_PARTY_NOTICES.txt`. `allagents self update` manages npm and
+bun installations; to update a standalone binary, extract a newer archive over
+it.
+
 ## Verify Installation
 
 After installation, verify it's working:

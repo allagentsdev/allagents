@@ -2,9 +2,14 @@
 
 This guide expands [`AGENTS.md`](../AGENTS.md) for package releases and recovery.
 
-- Publish releases through the GitHub Actions `Publish` workflow.
-- Never run `npm publish` directly.
-- Keep `prepublishOnly` intact; it prevents untested direct publication outside the workflow.
-- For release recovery, dispatch `Publish` with `channel=existing` and the existing release tag or ref.
-- Before dispatch, verify the target commit, version, tag, and channel agree.
-- After dispatch, verify the workflow result, GitHub release/tag, and npm package version before reporting success.
+Releases are automated with [Release Please](https://github.com/googleapis/release-please):
+
+- Conventional commits on `main` feed a release pull request that Release Please keeps up to date. The pull request carries the version computed from the commits (`feat` → minor, `fix`/`perf` → patch, `!` or `BREAKING CHANGE:` → major), the `package.json` bump, and the `CHANGELOG.md` entry.
+- Merging that pull request is the finalize step. The `Release Please` workflow then publishes the new tag to npm through the `Publish` workflow and attaches standalone binaries plus `SHA256SUMS` to the GitHub release.
+- There is no manual next-tag, bump, or promote step. Never bump `package.json`, edit the version manifest, or create a release tag by hand.
+- Never run `npm publish` directly. Keep `prepublishOnly` intact; it prevents untested direct publication outside the workflow.
+- Write conventional commit subjects: the release pull request's changelog section is generated from them, and hidden types (`chore`, `docs`, `refactor`, `test`, `ci`, `build`, `style`) do not appear.
+- For npm recovery, dispatch `Publish` with the release tag (`ref`). It validates that the tag matches `package.json` at that commit, ensures the GitHub release exists, and publishes idempotently.
+- To rebuild binaries for an existing release, dispatch `Release Please` with `tag` set to the release tag.
+- Before dispatch, verify the target commit, version, and tag agree.
+- After dispatch, verify the workflow result, GitHub release assets, and npm package version before reporting success.

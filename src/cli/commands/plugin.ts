@@ -46,7 +46,12 @@ import {
   addUserEnabledSkill,
   type InstalledPluginInfo,
 } from '../../core/user-workspace.js';
-import { updatePlugin, type InstalledPluginUpdateResult } from '../../core/plugin.js';
+import {
+  applyPluginUpdate,
+  checkPluginUpdate,
+  type InstalledPluginUpdateResult,
+  type PluginUpdateCheck,
+} from '../../core/plugin.js';
 import { UpdateContext } from '../../core/update-context.js';
 import { getAllSkillsFromPlugins } from '../../core/skills.js';
 import {
@@ -1704,27 +1709,13 @@ const pluginUpdateCmd = command({
           ? `${label} (${entry.scope})`
           : label;
       };
-      const soleHeaderEntry =
-        plugin && toUpdate.length === 1 ? toUpdate[0] : undefined;
       const printUpdateHeader = () => {
-        if (plugin) {
-          const label =
-            progressiveOutput && soleHeaderEntry
-              ? declarationLabel(soleHeaderEntry)
-              : plugin;
-          console.log(
-            `${progressiveOutput ? 'Updating' : 'Updating plugin:'} ${label}...`,
-          );
-        } else {
-          console.log('Updating plugins...');
-        }
+        console.log(
+          plugin ? `Updating plugin: ${plugin}...` : 'Updating plugins...',
+        );
         console.log();
       };
       const announcedDeclarations = new Set<string>();
-      if (progressiveOutput && soleHeaderEntry) {
-        printUpdateHeader();
-        announcedDeclarations.add(declarationKey(soleHeaderEntry));
-      }
       const announceDeclaration = (entry: PluginUpdateEntry) => {
         if (!progressiveOutput) return;
         const key = declarationKey(entry);
@@ -1733,58 +1724,6 @@ const pluginUpdateCmd = command({
         console.log(`Updating ${declarationLabel(entry)}...`);
       };
 
-      const nativeTargets = {
-        project: [] as string[],
-        user: [] as string[],
-      };
-      const nativeOnly = new Set<string>();
-      for (const entry of toUpdate) {
-        const config = configs[entry.scope];
-        if (!config) continue;
-        const declaration =
-          config.plugins.find(
-            (candidate) => getPluginSource(candidate) === entry.spec,
-          ) ?? entry.spec;
-        const plan = buildPluginSyncPlans(
-          [declaration],
-          config.clients,
-          entry.scope,
-        ).plans[0];
-        if ((plan?.nativeClients.length ?? 0) > 0) {
-          announceDeclaration(entry);
-        }
-        const preflightErrors = await preflightNativePluginDeclaration(
-          declaration,
-          config.clients,
-          entry.scope,
-          process.cwd(),
-        );
-        if (preflightErrors.length > 0) {
-          throw new Error(
-            `Native preflight failed before update: ${preflightErrors.join('; ')}`,
-          );
-        }
-        if ((plan?.nativeClients.length ?? 0) > 0) {
-          nativeTargets[entry.scope].push(entry.spec);
-          if (plan?.clients.length === 0) {
-            nativeOnly.add(declarationKey(entry));
-          }
-        }
-      }
-
-      if (!jsonMode && !progressiveOutput) printUpdateHeader();
-
-      // Update each plugin
-      const results: InstalledPluginUpdateResult[] = [];
-      const renderUpdateResult = (result: InstalledPluginUpdateResult) => {
-        const icon = result.success
-          ? result.action === 'updated'
-            ? '\u2713'
-            : '-'
-          : '\u2717';
-        console.log(`${icon} ${result.plugin} (${result.action})`);
-        if (result.error) console.log(`  Error: ${result.error}`);
-      };
       const createUpdateDeps = (pluginScope: 'project' | 'user') => {
         const workspacePath =
           pluginScope === 'project' ? process.cwd() : undefined;
@@ -1803,11 +1742,109 @@ const pluginUpdateCmd = command({
         user: createUpdateDeps('user'),
       };
 
-      const updatedScopes = new Set<'project' | 'user'>();
+      // Non-mutating discovery: classify every declaration before applying.
+      const nativeTargets = {
+        project: [] as string[],
+        user: [] as string[],
+      };
+      const nativeOnly = new Set<string>();
+      const checks = new Map<string, PluginUpdateCheck>();
+      for (const entry of toUpdate) {
+        const key = declarationKey(entry);
+        if (progressiveOutput) {
+          console.log(`Checking plugin source: ${declarationLabel(entry)}`);
+        }
+        const config = configs[entry.scope];
+        if (config) {
+          const declaration =
+            config.plugins.find(
+              (candidate) => getPluginSource(candidate) === entry.spec,
+            ) ?? entry.spec;
+          const plan = buildPluginSyncPlans(
+            [declaration],
+            config.clients,
+            entry.scope,
+          ).plans[0];
+          const preflightErrors = await preflightNativePluginDeclaration(
+            declaration,
+            config.clients,
+            entry.scope,
+            process.cwd(),
+          );
+          if (preflightErrors.length > 0) {
+            throw new Error(
+              `Native preflight failed before update: ${preflightErrors.join('; ')}`,
+            );
+          }
+          if ((plan?.nativeClients.length ?? 0) > 0) {
+            nativeTargets[entry.scope].push(entry.spec);
+            // Native state is outside a Git checkout, so a current checkout can
+            // still need native reconciliation. Keep these available.
+            checks.set(key, { plugin: entry.spec, status: 'available' });
+            if (plan?.clients.length === 0) {
+              nativeOnly.add(key);
+            }
+            continue;
+          }
+        }
+        checks.set(
+          key,
+          await checkPluginUpdate(
+            entry.spec,
+            depsByScope[entry.scope],
+            updateContext,
+          ),
+        );
+      }
+
+      const found = toUpdate.filter(
+        (entry) => checks.get(declarationKey(entry))?.status === 'available',
+      ).length;
+      if (progressiveOutput && found > 0) {
+        console.log(`Found ${found} plugin update${found === 1 ? '' : 's'}.`);
+        console.log();
+      }
+
+      if (!jsonMode && !progressiveOutput) printUpdateHeader();
+
+      // Update each plugin
+      const results: InstalledPluginUpdateResult[] = [];
+      const renderUpdateResult = (result: InstalledPluginUpdateResult) => {
+        const icon = result.success
+          ? result.action === 'updated'
+            ? '\u2713'
+            : '-'
+          : '\u2717';
+        console.log(`${icon} ${result.plugin} (${result.action})`);
+        if (result.error) console.log(`  Error: ${result.error}`);
+      };
+
+      const syncedScopes = new Set<'project' | 'user'>();
       for (const entry of toUpdate) {
         const { spec: pluginSpec, scope: pluginScope } = entry;
+        const key = declarationKey(entry);
+        const check = checks.get(key);
         let result: InstalledPluginUpdateResult;
-        if (nativeOnly.has(declarationKey(entry))) {
+        if (check?.status === 'failed') {
+          result = {
+            plugin: pluginSpec,
+            success: false,
+            action: 'failed',
+            ...(check.error && { error: check.error }),
+          };
+          if (progressiveOutput) renderUpdateResult(result);
+        } else if (check?.status === 'up-to-date') {
+          result = {
+            plugin: pluginSpec,
+            success: true,
+            action: 'skipped',
+          };
+          // A current checkout still re-materializes client artifacts and
+          // retries an earlier sync failure, matching the pre-check contract.
+          syncedScopes.add(pluginScope);
+          if (progressiveOutput) renderUpdateResult(result);
+        } else if (nativeOnly.has(key)) {
+          announceDeclaration(entry);
           result = {
             plugin: pluginSpec,
             success: true,
@@ -1815,14 +1852,14 @@ const pluginUpdateCmd = command({
           };
         } else {
           announceDeclaration(entry);
-          result = await updatePlugin(
+          result = await applyPluginUpdate(
             pluginSpec,
             depsByScope[pluginScope],
             updateContext,
           );
           if (progressiveOutput) renderUpdateResult(result);
         }
-        if (result.action === 'updated') updatedScopes.add(pluginScope);
+        if (result.action === 'updated') syncedScopes.add(pluginScope);
         results.push(result);
       }
 
@@ -1843,7 +1880,7 @@ const pluginUpdateCmd = command({
       };
       if (
         targetsByScope.project.length > 0 &&
-        (updatedScopes.has('project') || nativeTargets.project.length > 0)
+        (syncedScopes.has('project') || nativeTargets.project.length > 0)
       ) {
         const { ok, syncData } = await runSyncAndPrint(
           {
@@ -1864,7 +1901,7 @@ const pluginUpdateCmd = command({
       }
       if (
         targetsByScope.user.length > 0 &&
-        (updatedScopes.has('user') || nativeTargets.user.length > 0)
+        (syncedScopes.has('user') || nativeTargets.user.length > 0)
       ) {
         const { ok, syncData } = await runUserSyncAndPrint(
           {

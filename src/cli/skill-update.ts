@@ -10,9 +10,9 @@ import {
   type MarketplaceEntry,
   findMarketplace,
   getMarketplacesDir,
-  parseLocation,
   parsePluginSpec,
 } from '../core/marketplace.js';
+import { parseMarketplaceLocation } from '../utils/plugin-path.js';
 import {
   checkRepositoryHealth,
   resolveRemoteRevision,
@@ -352,7 +352,7 @@ function nodeForMarketplace(entry: MarketplaceEntry): CheckoutNode | null {
     );
   }
   if (entry.source.type === 'github') {
-    const parsed = parseLocation(entry.source.location);
+    const parsed = parseMarketplaceLocation(entry.source.location);
     return {
       id: managedPath,
       cachePath: managedPath,

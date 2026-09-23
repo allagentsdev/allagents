@@ -239,7 +239,7 @@ export const pluginUpdateMeta: AgentCommandMeta = {
     'allagents plugin update --scope all',
   ],
   expectedOutput:
-    'On a TTY, prints a persistent source line before each update and its result as it settles; JSON and redirected output remain one-shot and batched. Reports per-scope sync/native outcomes and exits 1 if any pass fails.',
+    'On a TTY, checks each source without mutating it, reports the found update count, then prints a persistent source line before each applied update and its result as it settles; a source already current is reported as skipped. JSON and redirected output remain one-shot and batched. Reports per-scope sync/native outcomes and exits 1 if any pass fails.',
   positionals: [
     { name: 'plugin', type: 'string', required: false, description: 'Specific plugin to update (updates all if omitted)' },
   ],

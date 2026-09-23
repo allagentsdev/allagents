@@ -326,9 +326,13 @@ allagents plugin update --scope all
 | `[plugin]` | Update one declared plugin; omit it to update all selected-scope plugins. |
 | `-s, --scope <scope>` | Installation scope: `project` (default), `user`, or `all`. |
 
-When the direct command writes to a TTY, it appends one `Updating ...` line for
-each source and leaves that line and the settled result visible. Internal
-preflight and client synchronization do not introduce separate status phases.
+When the direct command writes to a TTY, it first names each source as it is
+checked without mutating it, reports how many plugin updates were found, then
+appends one `Updating ...` line for each source as it applies the update and
+leaves that line and the settled result visible. A source whose backing
+checkout already matches its remote is reported as skipped and is not
+re-applied; the existing client synchronization for its scope still runs.
+Internal client synchronization does not introduce a separate status phase.
 JSON and redirected human output stay one-shot: JSON remains one document, and
 human results remain batched until the update finishes.
 Successful client synchronization is folded into the source result; warnings

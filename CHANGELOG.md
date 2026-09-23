@@ -29,16 +29,20 @@
   through an abortable masked prompt, and failed reauthentication restores the
   previous working credentials.
 - `plugin install --yes` and source-backed `skill add --yes` now use configured
-  or default scope and clients without opening interactive prompts.
+  or default scopes and clients without opening interactive prompts.
+- `plugin update` now classifies an already-current plugin as skipped instead
+  of updated: it is not re-applied and its marketplace registry timestamp is
+  left untouched. Client synchronization for its scope still runs.
 
 ### Added
 
 - Plugin and skill updates now expose truthful live progress. Direct plugin
-  updates keep one persistent `Updating ...` line per source. Direct skill
-  updates check each source first, report the number of discovered skill
-  updates, then name each skill as it is applied. **Plugins → Update all** keeps
-  the current source on its existing spinner. Warnings and failures remain
-  detailed; JSON and redirected direct output remain one-shot and batched.
+  updates check each source without mutating it, report how many plugin updates
+  were found, then name each source as it is applied. Direct skill updates
+  check each source first, report the number of discovered skill updates, then
+  name each skill as it is applied. **Plugins → Update all** keeps the current
+  source on its existing spinner. Warnings and failures remain detailed; JSON
+  and redirected direct output remain one-shot and batched.
 
 - Added a thin first-party AllAgents skill that treats the installed CLI as
   authoritative and follows its progressive `--help --json` indexes and leaf

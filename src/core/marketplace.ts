@@ -26,6 +26,7 @@ import {
   getPluginCachePath,
   isFilesystemRoot,
   parseGitHubUrl,
+  parseMarketplaceLocation,
 } from '../utils/plugin-path.js';
 import {
   checkRepositoryHealth,
@@ -41,20 +42,6 @@ import {
 import type { UpdateContext } from './update-context.js';
 import { fetchPlugin } from './plugin.js';
 import type { FetchResult, UpdateResult } from './plugin.js';
-
-/**
- * Parse a marketplace location string into owner, repo, and optional branch.
- * Location format: "owner/repo" or "owner/repo/branch" (branch can contain slashes).
- */
-export function parseLocation(location: string): {
-  owner: string;
-  repo: string;
-  branch?: string;
-} {
-  const [owner = '', repo = '', ...rest] = location.split('/');
-  const branch = rest.length > 0 ? rest.join('/') : undefined;
-  return { owner, repo, ...(branch !== undefined && { branch }) };
-}
 
 /**
  * Source types for marketplaces
@@ -306,7 +293,7 @@ function classifyManagedMarketplacePath(
 
   const sourceName =
     marketplace.source.type === 'github'
-      ? parseLocation(marketplace.source.location).repo
+      ? parseMarketplaceLocation(marketplace.source.location).repo
       : parseMarketplaceSource(marketplace.source.location)?.name;
   const allowedNames = [
     ...new Set([registryKey, marketplace.name, sourceName]),
@@ -833,7 +820,7 @@ export async function addMarketplace(
   // For branch-specific registrations, effectiveBranch overrides parsed.location.
   const sourceLocation = (() => {
     if (parsed.type === 'github') {
-      const { owner, repo } = parseLocation(parsed.location);
+      const { owner, repo } = parseMarketplaceLocation(parsed.location);
       return effectiveBranch
         ? `${owner}/${repo}/${effectiveBranch}`
         : `${owner}/${repo}`;
@@ -869,7 +856,7 @@ export async function addMarketplace(
     const repoUrl =
       parsed.type === 'github'
         ? (() => {
-            const { owner, repo } = parseLocation(parsed.location);
+            const { owner, repo } = parseMarketplaceLocation(parsed.location);
             return gitHubUrl(owner, repo);
           })()
         : parsed.location;
@@ -1486,7 +1473,7 @@ export async function updateMarketplace(
           // Check if location includes a branch (only for github type; git type has no branch in location)
           const parsedLocation =
             marketplace.source.type === 'github'
-              ? parseLocation(marketplace.source.location)
+              ? parseMarketplaceLocation(marketplace.source.location)
               : undefined;
           const storedBranch = parsedLocation?.branch;
           const remoteSource = parsedLocation
@@ -2120,7 +2107,7 @@ async function refreshMarketplace(
   let cloneUrl: string;
   let branch: string | undefined;
   if (marketplace.source.type === 'github') {
-    const parsed = parseLocation(marketplace.source.location);
+    const parsed = parseMarketplaceLocation(marketplace.source.location);
     cloneUrl = gitHubUrl(parsed.owner, parsed.repo);
     branch = parsed.branch;
   } else {

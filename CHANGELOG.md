@@ -31,8 +31,8 @@
 - `plugin install --yes` and source-backed `skill add --yes` now use configured
   or default scopes and clients without opening interactive prompts.
 - `plugin update` now classifies an already-current plugin as skipped instead
-  of updated: it is neither re-applied nor re-synchronized, and its marketplace
-  registry timestamp is left untouched.
+  of updated: it is not re-applied and its marketplace registry timestamp is
+  left untouched. Client synchronization for its scope still runs.
 
 ### Added
 

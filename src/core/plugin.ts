@@ -466,9 +466,15 @@ export interface UpdatePluginDeps extends PluginUpdateCheckDeps {
  *   current), so the caller should apply it.
  * - `up-to-date`: the backing checkout matches its remote and is healthy, so
  *   applying would be a no-op.
+ * - `not-remote`: the declaration has no remote source to inspect, so it can
+ *   never contribute a found update.
  * - `failed`: the declaration cannot be resolved at all.
  */
-export type PluginUpdateCheckStatus = 'available' | 'up-to-date' | 'failed';
+export type PluginUpdateCheckStatus =
+  | 'available'
+  | 'up-to-date'
+  | 'not-remote'
+  | 'failed';
 
 export interface PluginUpdateCheck {
   plugin: string;
@@ -592,7 +598,7 @@ export async function checkPluginUpdate(
   const parsed = deps.parsePluginSpec(pluginSpec);
   if (!parsed) {
     if (!pluginSpec.startsWith('https://github.com/')) {
-      return { plugin: pluginSpec, status: 'available' };
+      return { plugin: pluginSpec, status: 'not-remote' };
     }
     return { plugin: pluginSpec, ...(await directUrlUpdateCheck(pluginSpec, deps, context)) };
   }

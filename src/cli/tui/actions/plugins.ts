@@ -292,29 +292,28 @@ async function runUpdatePlugin(
       updateContext,
     );
 
-    if (!result.success) {
+    // Preserve the action-driven sync contract, including no-op updates and
+    // later-invocation retries after a sync failure.
+    if (!result.success || result.action === 'failed') {
       s.stop('Update failed');
       p.note(result.error ?? 'Unknown error', 'Error');
       return;
     }
 
-    if (result.action !== 'updated') {
-      s.stop('Already up to date');
-      p.note(`- ${pluginSource} (${result.action})`, 'Update');
-      return;
-    }
-
-    // Preserve the action-driven sync contract, including no-op updates and
-    // later-invocation retries after a sync failure.
     if (scope === 'project' && context.workspacePath) {
       await syncWorkspace(context.workspacePath);
     } else {
       await syncUserWorkspace();
     }
-    s.stop('Updated');
     cache?.invalidate();
+    s.stop(result.action === 'updated' ? 'Updated' : 'Already up to date');
 
-    p.note(`\u2713 ${pluginSource} (${result.action})`, 'Update');
+    p.note(
+      result.action === 'updated'
+        ? `\u2713 ${pluginSource} (${result.action})`
+        : `- ${pluginSource} (${result.action})`,
+      'Update',
+    );
   } finally {
     updateContext.dispose();
   }
@@ -476,7 +475,9 @@ async function runUpdateAllPluginsWithContext(
     };
     if (result.error) entry.error = result.error;
     results.push(entry);
-    if (result.action === 'updated') {
+    if (result.action === 'updated' || result.action === 'skipped') {
+      // A current checkout still re-materializes client artifacts and retries
+      // an earlier sync failure.
       if (scope === 'project') needsProjectSync = true;
       else needsUserSync = true;
     }

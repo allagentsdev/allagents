@@ -1778,11 +1778,13 @@ const pluginUpdateCmd = command({
           }
           if ((plan?.nativeClients.length ?? 0) > 0) {
             nativeTargets[entry.scope].push(entry.spec);
+            // Native state is outside a Git checkout, so a current checkout can
+            // still need native reconciliation. Keep these available.
+            checks.set(key, { plugin: entry.spec, status: 'available' });
             if (plan?.clients.length === 0) {
               nativeOnly.add(key);
-              checks.set(key, { plugin: entry.spec, status: 'available' });
-              continue;
             }
+            continue;
           }
         }
         checks.set(
@@ -1817,7 +1819,7 @@ const pluginUpdateCmd = command({
         if (result.error) console.log(`  Error: ${result.error}`);
       };
 
-      const updatedScopes = new Set<'project' | 'user'>();
+      const syncedScopes = new Set<'project' | 'user'>();
       for (const entry of toUpdate) {
         const { spec: pluginSpec, scope: pluginScope } = entry;
         const key = declarationKey(entry);
@@ -1837,6 +1839,9 @@ const pluginUpdateCmd = command({
             success: true,
             action: 'skipped',
           };
+          // A current checkout still re-materializes client artifacts and
+          // retries an earlier sync failure, matching the pre-check contract.
+          syncedScopes.add(pluginScope);
           if (progressiveOutput) renderUpdateResult(result);
         } else if (nativeOnly.has(key)) {
           announceDeclaration(entry);
@@ -1854,7 +1859,7 @@ const pluginUpdateCmd = command({
           );
           if (progressiveOutput) renderUpdateResult(result);
         }
-        if (result.action === 'updated') updatedScopes.add(pluginScope);
+        if (result.action === 'updated') syncedScopes.add(pluginScope);
         results.push(result);
       }
 
@@ -1875,7 +1880,7 @@ const pluginUpdateCmd = command({
       };
       if (
         targetsByScope.project.length > 0 &&
-        (updatedScopes.has('project') || nativeTargets.project.length > 0)
+        (syncedScopes.has('project') || nativeTargets.project.length > 0)
       ) {
         const { ok, syncData } = await runSyncAndPrint(
           {
@@ -1896,7 +1901,7 @@ const pluginUpdateCmd = command({
       }
       if (
         targetsByScope.user.length > 0 &&
-        (updatedScopes.has('user') || nativeTargets.user.length > 0)
+        (syncedScopes.has('user') || nativeTargets.user.length > 0)
       ) {
         const { ok, syncData } = await runUserSyncAndPrint(
           {

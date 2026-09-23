@@ -573,6 +573,7 @@ describe('plugin update e2e', () => {
       'Updating uat/plugin-marketplace (project)...',
       'Updating uat/plugin-marketplace (user)...',
     ]);
+    expect(result.stdout).not.toContain('Found ');
   });
 
   test('keeps direct marketplace update JSON free of internal fields', () => {
@@ -783,9 +784,12 @@ describe('plugin update e2e', () => {
           updated: 0,
           skipped: 2,
           failed: 0,
+          syncResults: {
+            project: { failed: 0 },
+            user: { failed: 0 },
+          },
         },
       });
-      expect(payload.data.syncResults).toBeUndefined();
       expect(
         countGitCommands(
           tracePath,
@@ -793,8 +797,8 @@ describe('plugin update e2e', () => {
           'https://github.com/uat/plugin-marketplace.git',
         ),
       ).toBe(1);
-      expect(countGitCommands(tracePath, 'pull')).toBe(0);
-      expect(countGitCommands(tracePath, 'fetch')).toBe(0);
+      // The classification itself never clones or rewrites the registry; the
+      // restored client sync owns any marketplace pull.
       expect(countGitCommands(tracePath, 'clone')).toBe(0);
 
       const afterRegistry = JSON.parse(readFileSync(registryPath, 'utf8'));
@@ -1139,6 +1143,83 @@ describe('plugin update e2e', () => {
         'Updating demo@remote-marketplace...',
         '✓ demo@remote-marketplace (updated)',
       ]);
+    },
+    20_000,
+  );
+
+  test(
+    'keeps a current checkout with native clients out of the skipped path',
+    async () => {
+      const remote = createRemoteMarketplace(rootDir);
+      const addResult = runCli(
+        workspaceDir,
+        homeDir,
+        ['plugin', 'marketplace', 'add', remote.source, '--scope', 'user'],
+        { gitConfig: remote.gitConfig },
+      );
+      expect(addResult.exitCode).toBe(0);
+      const installResult = runCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'install',
+          'demo@remote-marketplace',
+          '--scope',
+          'project',
+        ],
+        { gitConfig: remote.gitConfig },
+      );
+      expect(installResult.exitCode).toBe(0);
+      writeFileSync(
+        join(workspaceDir, '.allagents', 'workspace.yaml'),
+        [
+          'repositories: []',
+          'plugins:',
+          '  - demo@remote-marketplace',
+          'clients:',
+          '  - codex',
+          '  - name: claude',
+          '    install: native',
+          'version: 2',
+          '',
+        ].join('\n'),
+      );
+
+      const wrapperDir = createBlockingClaudeWrapper(
+        rootDir,
+        'demo@remote-marketplace',
+      );
+      const nativeEntered = join(rootDir, 'mixed-current-entered');
+      const nativeRelease = join(rootDir, 'mixed-current-release');
+      writeFileSync(nativeRelease, '');
+      const result = await runInteractiveCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'update',
+          'demo@remote-marketplace',
+          '--scope',
+          'project',
+        ],
+        {
+          gitConfig: remote.gitConfig,
+          gitWrapperDir: remote.gitWrapperDir,
+          extraEnv: {
+            PATH: `${wrapperDir}:${remote.gitWrapperDir}:${process.env.PATH ?? ''}`,
+            ALLAGENTS_TEST_NATIVE_BLOCK_ENTERED: nativeEntered,
+            ALLAGENTS_TEST_NATIVE_BLOCK_RELEASE: nativeRelease,
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const lines = result.stdout.replaceAll('\r', '').split('\n');
+      expect(lines).toContain('Updating demo@remote-marketplace...');
+      expect(lines).toContain('✓ demo@remote-marketplace (updated)');
+      expect(lines).not.toContain('- demo@remote-marketplace (skipped)');
     },
     20_000,
   );

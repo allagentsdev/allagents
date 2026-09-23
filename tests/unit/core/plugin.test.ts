@@ -728,6 +728,15 @@ describe('checkPluginUpdate', () => {
     expect(stale.status).toBe('available');
   });
 
+  it('reports a declaration with no remote source as not-remote', async () => {
+    const result = await checkPluginUpdate('./local/plugin', checkDeps());
+
+    expect(result).toEqual({
+      plugin: './local/plugin',
+      status: 'not-remote',
+    });
+  });
+
   it('reports an unresolvable marketplace as failed', async () => {
     const result = await checkPluginUpdate(
       'plugin@unknown-marketplace',

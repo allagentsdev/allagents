@@ -1,7 +1,7 @@
 ---
 title: "UHP Coding-Agent Execution through HarnessRouter - Plan"
 date: 2026-09-18
-updated: 2026-09-22
+updated: 2026-09-24
 type: feat
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -189,6 +189,18 @@ caller responsible for acquisition. The temporary fork closes those seams.
   more than once at different refs or destinations. The service accepts any
   repository reachable through safe public egress; callers cannot supply
   credentials, non-HTTPS transports, host paths, commands, or Docker options.
+- **Use one canonical workspace vocabulary.** The execution descriptor keeps
+  `url`, optional `ref`, `destination`, and logical `workingDirectory`; response
+  provenance keeps `requestedRef` separate from `resolvedCommit`. Local
+  `workspace.yaml` repository entries keep `path` and replace the provider-
+  specific `source` plus `repo` pair with one canonical `url`. Benchmark-specific
+  aliases are accepted only by future adapters, never by the canonical schema.
+- **Keep benchmark task/environment identity separate from workspace source.**
+  Harbor task repositories and `environment.docker_image`, and SWE-bench/Hugging
+  Face `repo`, `base_commit`, and instance images, are adapter inputs. A runnable
+  benchmark image is not an AllAgents source-only `workspaceSnapshot`; direct
+  task packages, environment images, and verifiers need a separate versioned
+  boundary if added later.
 - **Prefer harness-native OAuth.** Promptfoo's HarnessRouter API key authenticates
   the UHP caller only. Codex and Pi use their own login, token storage, refresh,
   and provider request path; native mode has no provider-route API key.
@@ -326,8 +338,8 @@ caller responsible for acquisition. The temporary fork closes those seams.
   `source` is exactly one of:
   - `{ kind: "repositories", repositories: NonEmptyArray<{
     url: HttpsGitUrl, ref?: RefText, destination: RelativeDirectory }> }`; or
-  - `{ kind: "workspaceSnapshot", snapshot: ConfigName, digest: Digest,
-    workspaceManifestDigest: Digest }`.
+  - `{ kind: "workspaceSnapshot", snapshotName: ConfigName,
+    imageManifestDigest: Digest, workspaceManifestDigest: Digest }`.
 
   `workingDirectory` is exactly `{ kind: "workspaceRoot" }` or
   `{ kind: "workspacePath", path: RelativeDirectory }`. The workspace path is
@@ -346,7 +358,8 @@ caller responsible for acquisition. The temporary fork closes those seams.
   visible bytes, declared agent-visible filesystem semantics, or sharing
   authorization: hook/schema versions, deployment authorization scope, normalized
   caller Git URLs, bounded selected credential-reference identities, resolved
-  commits or OCI digests, normalized destinations, snapshot identity when
+  commits or the exact OCI `imageManifestDigest` and
+  `workspaceManifestDigest`, normalized destinations, `snapshotName` when
   applicable, and acquisition/egress policy version. Access, retention, logical
   cwd, harness/profile, session identity, physical paths, credential values, and
   volatile Git administrative representation do not fragment that key.
@@ -522,13 +535,28 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 #### Source acquisition and provenance
 
-- **R9.** Parse the project `workspace.yaml` through its authoritative schema
-  only for the optional strict project-owned `workspaceSnapshots` entries:
+- **R9.** Make one clean public `workspace.yaml` repository-schema cutover:
+  retain `repositories[].path` as the existing or managed local checkout
+  location; replace the provider-specific `source` plus `repo` pair with one
+  optional canonical credential-free HTTPS `url`; retain `branch` because
+  managed synchronization implements branch checkout and pull rather than
+  arbitrary detached refs. Path-only unmanaged entries may omit `url`; any
+  truthy `managed` entry requires it. `workspace repo add` records a normalized
+  URL, converting recognized SSH provider remotes to canonical HTTPS without
+  persisting userinfo. An explicit one-time migration rewrites unambiguous
+  legacy provider/identifier pairs and rejects unknown or credential-bearing
+  forms with repair guidance. The normal parser and generated v2 schema accept
+  only the new shape; there is no dual-field compatibility path.
+
+  The execution materializer parses the project `workspace.yaml` through that
+  authoritative schema only for optional strict project-owned
+  `workspaceSnapshots` entries:
   `{ name: ConfigName, repository: OciRepository,
   workspaceManifestMediaType: MediaType, executionCredential?: "${ENV_VAR}" }`.
   Reject unknown fields, literal secrets, and duplicate snapshot names; snapshot
-  entries do not merge with user configuration. Git repository URLs do not come
-  from `workspace.yaml`.
+  entries do not merge with user configuration. Local `repositories[].url`
+  entries never form an execution allowlist and are not copied into a UHP
+  request.
 
   Repository mode takes one through 128 request entries. Each has a canonical
   absolute `https` `url`, optional `ref`, and unique, pairwise non-overlapping
@@ -615,12 +643,13 @@ caller responsible for acquisition. The temporary fork closes those seams.
   before that budget returns failed `timeout`. Every outcome proves the cgroup
   empty before removing staging and starts no provider.
 - **R11.** Snapshot mode constructs a server-side immutable OCI reference from
-  the selected snapshot's configured repository and caller-provided digest.
-  Accept only a direct OCI image manifest with at most 64 distributable
-  tar/gzip/zstd layers. Its config descriptor must use the entry's configured
-  workspace-manifest media type and address canonical workspace-manifest bytes;
-  redirects may not change registry authority. Verify the image manifest,
-  workspace manifest, layer size, and digest before use; apply OCI whiteouts;
+  the repository configured by `snapshotName` and the caller-provided
+  `imageManifestDigest`. Accept only a direct OCI image manifest with at most 64
+  distributable tar/gzip/zstd layers. Its config descriptor must use the catalog
+  entry's configured workspace-manifest media type and address the canonical
+  bytes selected by `workspaceManifestDigest`; redirects may not change registry
+  authority. Verify both named manifests plus every layer size and digest before
+  use; apply OCI whiteouts;
   limit the image manifest to 4 MiB, the workspace-manifest blob to 128 MiB,
   its `repositories` array to 128 items, total compressed layers to 8 GiB,
   expanded bytes to 32 GiB, entries to 500,000, one regular file to 4 GiB, paths
@@ -630,7 +659,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
   sockets, traversal, escaping links, sparse files, unknown or foreign layers,
   mutable tags, and undeclared output. Recompute the canonical workspace
   manifest from staging and require it to match both the fetched manifest bytes
-  and caller-provided digest. Snapshot mode rejects `.git` administrative
+  and `workspaceManifestDigest`. Snapshot mode rejects `.git` administrative
   subtrees; snapshots that require Git history use repository mode. After
   publication the runner creates private collection baselines from the verified
   trees so later produced-file reporting remains truthful.
@@ -1162,6 +1191,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
   credential fallback.
 - Caller-provided credentials, non-HTTPS/private-network origins, commands, host
   paths, materializers, or Docker options.
+- Direct Harbor task-package ingestion, SWE-bench/Hugging Face dataset ingestion,
+  caller-selected runtime images, benchmark verifiers, or compatibility aliases
+  inside `allagents.workspace`.
 - Public multi-tenancy, per-caller authorization, Kubernetes workers, session
   branching, concurrent turns in one session, or guaranteed prompt-cache hits.
 - Exact rollback of workspace mutations between successful session turns.
@@ -1180,6 +1212,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 - [`codex-lb` optional proxy](https://github.com/Soju06/codex-lb)
 - [Harbor repository materialization lessons](../research/harbor-repository-materialization.md)
+- [Workspace contract incumbent comparison](../research/workspace-contract-incumbents.md)
 - [Source credential broker precedents](../research/source-credential-broker-precedents.md)
 
 ---
@@ -1262,6 +1295,17 @@ Initial UHP request fragment:
 }
 ```
 
+Workspace-snapshot source fragment:
+
+```json
+{
+  "kind": "workspaceSnapshot",
+  "snapshotName": "benchmark-fixture",
+  "imageManifestDigest": "sha256:...",
+  "workspaceManifestDigest": "sha256:..."
+}
+```
+
 Continuation fragment:
 
 ```json
@@ -1320,22 +1364,23 @@ The hook supports four operations:
   IDs. The runner verifies the corresponding store handles and all staging/result
   filesystem relationships itself;
 - `validate`: validate and default the opaque JSON descriptor, caller repository
-  URLs/refs/destinations, snapshot name when applicable, and the syntax and
-  lexical safety of the workspace-relative working directory without source
-  access; select the bounded credential-reference subset from deployment
-  credential-scope mappings; then return a
-  private normalized-descriptor path/digest, effective descriptor digest,
-  effective access, requested retention, logical cwd, and that selected set;
+  URLs/refs/destinations, `snapshotName`, `imageManifestDigest`, and
+  `workspaceManifestDigest` when applicable, and the syntax and lexical safety
+  of the workspace-relative working directory without source access; select the
+  bounded credential-reference subset from deployment credential-scope mappings;
+  then return a private normalized-descriptor path/digest, effective descriptor
+  digest, effective access, requested retention, logical cwd, and that selected
+  set;
 - `resolve`: consume that exact normalized descriptor and selected reference set,
   safely resolve immutable source identity, and return a private canonical
   source-only resolved-plan path/digest, generation key, effective cwd, and
   bounded request provenance without writing source bytes. The plan contains
-  only generation-key inputs—normalized caller URLs, resolved commits or OCI
-  digests/layers, normalized destinations, snapshot/acquisition/egress and
-  sharing-authorization identity, and selected credential-reference identities—
-  and omits credential values, access, retention, cwd, requested-ref spelling,
-  harness/profile, and session; equal generation keys
-  therefore require identical plan bytes; and
+  only generation-key inputs—normalized caller URLs, resolved commits or exact
+  OCI image/workspace-manifest digests and layers, normalized destinations,
+  snapshot/acquisition/egress and sharing-authorization identity, and selected
+  credential-reference identities—and omits credential values, access,
+  retention, cwd, requested-ref spelling, harness/profile, and session; equal
+  generation keys therefore require identical plan bytes; and
 - `materialize`: consume those exact resolved-plan bytes and selected reference
   set at the supplied private path, verify their supplied digest, write source
   content only to supplied generation staging, write the canonical manifest only
@@ -1766,23 +1811,28 @@ into successful empty output and performs no automatic retry.
 
 ### U2. AllAgents workspace contracts and Git materializer
 
-- **Goal:** Implement the caller-repository JSON descriptor, optional
-  `workspace.yaml` snapshot catalog, canonical generation identity, deterministic
-  Git construction, logical cwd, and provenance.
+- **Goal:** Implement the caller-repository JSON descriptor, the clean
+  `workspace.yaml` repository-URL migration and optional snapshot catalog,
+  canonical generation identity, deterministic Git construction, logical cwd,
+  and provenance.
 - **Files:** `src/models/workspace-config.ts`,
   `src/models/execution-workspace.ts`, `src/core/execution-workspace.ts`,
-  `src/core/workspace-repo.ts`, acquisition egress integration, one narrow CLI
-  entrypoint, generated schemas, build packaging, configuration docs, and Git E2E
-  fixtures.
+  `src/core/workspace-repo.ts`, `src/core/managed-repos.ts`, workspace CLI and
+  migration metadata, acquisition egress integration, generated v2 schemas,
+  build packaging, configuration docs, and Git E2E fixtures.
 - **Approach:** Reuse authoritative URL/path normalization and workspace snapshot
-  parsing. Keep caller Git URLs plus access/retention in the JSON execution
-  descriptor; keep only operator-owned snapshot catalog entries in
-  `workspace.yaml`. Generate the manifest schema and add descriptor/preflight/
-  validate/resolve/materialize/result schemas, defaults, canonicalization,
-  generation-key construction, credential-scope selection, and public-egress
-  enforcement. Preflight returns configured reference identities without request
-  URLs or values; validate checks URLs/refs/destinations and the syntax and
-  lexical safety of the workspace path, then selects a bounded mapped subset
+  parsing. Cut local repository configuration from `source` plus `repo` to
+  `url`, preserving `path` and branch-specific managed semantics; provide the
+  explicit one-time migration and remove legacy fields from ordinary parsing,
+  output, docs, and schemas. Keep caller Git URLs plus access/retention in the
+  JSON execution descriptor; keep only operator-owned snapshot catalog entries
+  relevant to execution in `workspace.yaml`. Generate the manifest schema and
+  add descriptor/preflight/validate/resolve/materialize/result schemas, defaults,
+  canonicalization, generation-key construction, credential-scope selection,
+  and public-egress enforcement. Preflight returns configured reference
+  identities without request URLs or values; validate checks URLs, refs,
+  destinations, and the syntax and lexical safety of the workspace path, then
+  selects a bounded mapped subset
   without source access. The runner verifies their handles and injects only that
   selected set into source-access children. Resolve exactly the caller-declared
   repositories to commits without writing source bytes, and materialize only the
@@ -1793,16 +1843,21 @@ into successful empty output and performs no automatic retry.
   necessary ancestor directories. Validate destinations, compute the manifest,
   and return without publishing. The runner validates each waiter's logical cwd
   against that verified manifest before attachment.
-- **Verification:** Local public-address HTTPS fixtures cover caller URLs,
-  refs/defaults/HEAD, the same URL at different refs/destinations, multiple
-  repositories, duplicate and ancestor/descendant destinations, undeclared root/
-  side files, ref grammar, helpers, submodules/LFS/file/ext/ssh protocols, bounded
-  safe redirects, cancellation, partial cleanup, descriptor defaults, access/
-  retention validation, `workspaceRoot` and valid/invalid `workspacePath` for Git
-  and snapshots, anonymous and scope-mapped credential identity, private
-  generation-key/public generation-ID separation, exact URL provenance, schema
-  fixtures, commit-tree/manifest reconstruction, concurrent identical resolve
-  identity, and repository/entry/byte/deadline boundaries. Network fixtures
+- **Verification:** Schema/CLI fixtures migrate every supported legacy provider
+  pair to a credential-free canonical URL, preserve `path`, `branch`, skills,
+  descriptions, and managed mode, require `url` for managed entries, retain
+  path-only unmanaged entries, and reject ambiguous, credential-bearing, mixed
+  old/new, or legacy shapes in the normal parser and v2 schema. Local public-
+  address HTTPS fixtures cover caller URLs, refs/defaults/HEAD, the same URL at
+  different refs/destinations, multiple repositories, duplicate and ancestor/
+  descendant destinations, undeclared root/side files, ref grammar, helpers,
+  submodules/LFS/file/ext/ssh protocols, bounded safe redirects, cancellation,
+  partial cleanup, descriptor defaults, access/retention validation,
+  `workspaceRoot` and valid/invalid `workspacePath` for Git and snapshots,
+  anonymous and scope-mapped credential identity, private generation-key/public
+  generation-ID separation, exact URL provenance, schema fixtures, commit-tree/
+  manifest reconstruction, concurrent identical resolve identity, and
+  repository/entry/byte/deadline boundaries. Network fixtures
   reject userinfo, IP literals, controls, whitespace, backslashes, noncanonical
   IDNA, explicit-default-port, and trailing-dot forms, encoded separators/dot
   segments, loopback, link-local,
@@ -1881,20 +1936,25 @@ into successful empty output and performs no automatic retry.
 - **Files:** AllAgents OCI client, manifest/archive validator,
   workspace-manifest types, deterministic producer fixture, local registry E2E,
   generation fixtures, and security fixtures.
-- **Approach:** Resolve only configured registries; implement bounded
-  Basic/Bearer auth and exact-host redirects; compute the immutable resolved plan;
-  on a generation miss verify manifest/config/workspace-manifest/layers while
+- **Approach:** Resolve only configured registries; treat `snapshotName` as the
+  operator catalog selector and `imageManifestDigest` as the required direct OCI
+  image-manifest identity; implement bounded Basic/Bearer auth and exact-host
+  redirects; compute the immutable resolved plan; on a generation miss verify
+  the image manifest, config, `workspaceManifestDigest`, and layers while
   streaming; reject `.git` administrative subtrees; apply staging changesets;
   validate paths/types/limits/catalog; and return through the same envelope as
-  Git. The runner remains the sole publisher/resource preparer and the gateway
-  the sole session-attachment writer.
-- **Verification:** Distribution fixtures cover auth, private CA, compression,
-  whiteouts, redirects, rebinding, indexes, foreign media, traversal, links,
-  devices, sparse files, cancellation, cleanup, no Git fallback, and exact error
-  precedence. Concurrent identical OCI requests produce one publication;
-  read-only sessions share it; editable sessions get private copies; access,
-  retention, cwd, harness/profile, and session do not fragment its generation
-  key.
+  Git. A runnable Harbor or SWE-bench instance image requires an explicit
+  adapter/transform and is never relabeled as a source-only snapshot. The runner
+  remains the sole publisher/resource preparer and the gateway the sole session-
+  attachment writer.
+- **Verification:** Distribution fixtures cover exact request-field naming,
+  `snapshotName` lookup, direct `imageManifestDigest` enforcement, workspace-
+  manifest equality, auth, private CA, compression, whiteouts, redirects,
+  rebinding, indexes, foreign media, traversal, links, devices, sparse files,
+  cancellation, cleanup, no Git fallback, and exact error precedence.
+  Concurrent identical OCI requests produce one publication; read-only sessions
+  share it; editable sessions get private copies; access, retention, cwd,
+  harness/profile, and session do not fragment its generation key.
 
 ### U5. Harness-native OAuth, optional proxy, and Promptfoo E2E
 
@@ -1996,11 +2056,15 @@ into successful empty output and performs no automatic retry.
 
 ## Definition of Done
 
-- ADR 0002, this plan, implementation, topology, and request examples agree on
-  caller-supplied HTTPS Git repositories in the UHP JSON descriptor, the optional
-  project `workspace.yaml` OCI snapshot catalog, immutable generations, read-only
-  and editable attachments, bounded retention, native OAuth, explicit proxy mode,
-  and GHCR digest-pinned distribution.
+- ADR 0002, this plan, implementation, generated schemas, configuration docs,
+  topology, and request examples agree on canonical `url` vocabulary; local
+  `workspace.yaml` uses `path` plus optional `url` with no ordinary
+  `source`/`repo` compatibility fields; the UHP descriptor uses `url`, optional
+  `ref`, and `destination`; snapshot requests use `snapshotName`,
+  `imageManifestDigest`, and `workspaceManifestDigest`; runtime environment and
+  benchmark task identity remain separate; and immutable generations, read-only
+  and editable attachments, bounded retention, native OAuth, explicit proxy
+  mode, and GHCR digest-pinned distribution remain consistent.
 - The U0 evidence predates U1-U6 and both native targets pass on the recorded
   inputs; changed inputs have replacement evidence before dependent work resumes.
 - No second execution protocol/control plane, separate AllAgents gateway, direct

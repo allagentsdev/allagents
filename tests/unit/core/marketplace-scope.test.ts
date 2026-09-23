@@ -460,7 +460,7 @@ describe('addMarketplace with scope', () => {
     const localMarketplace = join(tmpProject, 'my-local-marketplace');
     mkdirSync(localMarketplace, { recursive: true });
 
-    const result = await addMarketplace(localMarketplace, undefined, undefined, false, {
+    const result = await addMarketplace(localMarketplace, undefined, undefined, {
       scope: 'project',
       workspacePath: tmpProject,
     });
@@ -484,14 +484,12 @@ describe('addMarketplace with scope', () => {
       'owner/source-a',
       'shared',
       undefined,
-      false,
       { scope: 'user', workspacePath: tmpProject },
     );
     const projectResult = await addMarketplace(
       'owner/source-b',
       'shared',
       undefined,
-      false,
       { scope: 'project', workspacePath: tmpProject },
     );
 
@@ -538,7 +536,7 @@ describe('addMarketplace with scope', () => {
     writeFileSync(projectRegistryPath, corruptContent);
 
     await expect(
-      addMarketplace(localMarketplace, undefined, undefined, false, {
+      addMarketplace(localMarketplace, undefined, undefined, {
         scope: 'project',
         workspacePath: tmpProject,
       }),

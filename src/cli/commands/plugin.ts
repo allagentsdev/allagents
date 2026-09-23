@@ -467,10 +467,9 @@ const marketplaceAddCmd = command({
     source: positional({ type: string, displayName: 'source' }),
     name: option({ type: optional(string), long: 'name', short: 'n', description: 'Custom name for the marketplace' }),
     branch: option({ type: optional(string), long: 'branch', short: 'b', description: 'Branch to checkout after cloning' }),
-    force: flag({ long: 'force', short: 'f', description: 'Replace marketplace if it already exists' }),
     scope: option({ type: optional(string), long: 'scope', short: 's', description: 'Scope: user (default) or project' }),
   },
-  handler: async ({ source, name, branch, force, scope }) => {
+  handler: async ({ source, name, branch, scope }) => {
     try {
       const effectiveScope = (scope ?? 'user') as import('../../core/marketplace.js').MarketplaceScope;
       if (effectiveScope !== 'user' && effectiveScope !== 'project') {
@@ -499,7 +498,7 @@ const marketplaceAddCmd = command({
         console.log(`Adding marketplace: ${source}...`);
       }
 
-      const result = await addMarketplace(source, name, branch, force, {
+      const result = await addMarketplace(source, name, branch, {
         scope: effectiveScope,
         workspacePath: process.cwd(),
       });

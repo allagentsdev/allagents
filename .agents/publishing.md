@@ -10,7 +10,7 @@ Releases are automated with [Release Please](https://github.com/googleapis/relea
 - Never run `npm publish` directly. Keep `prepublishOnly` intact; it prevents untested direct publication outside the workflow.
 - Write conventional commit subjects: the release pull request's changelog section is generated from them, and hidden types (`chore`, `docs`, `refactor`, `test`, `ci`, `build`, `style`) do not appear.
 - The npm `latest` dist-tag is the latest stable release and only moves when a release pull request is merged.
-- The npm `next` dist-tag tracks `main`: every push that has an open release pull request publishes the pending version as `<pending>-next.<run>` to `next`. Nothing to preview means `main` already matches the last release.
+- The npm `next` dist-tag tracks `main`: every push that has an open release pull request publishes the pending version as `<pending>-next.<run>` to `next`, and tags that commit as `v<pending>-next.<run>` with a GitHub prerelease. Nothing to preview means `main` already matches the last release.
 - `bun scripts/tag-channel.ts next|latest [version]` moves a dist-tag by hand; it needs a locally authenticated npm session, because trusted publishing covers only `npm publish`.
 - For npm recovery, dispatch `Publish` with the release tag (`ref`). It validates that the tag matches `package.json` at that commit, ensures the GitHub release exists, and publishes idempotently.
 - To rebuild binaries for an existing release, dispatch `Release Please` with `tag` set to the release tag.

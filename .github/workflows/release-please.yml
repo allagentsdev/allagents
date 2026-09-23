@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -120,6 +120,25 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: true
         run: bun run publish:next
+
+      - name: Tag and release the preview
+        if: steps.pending.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.pending.outputs.version }}-next.${{ github.run_number }}
+        run: |
+          set -euo pipefail
+
+          # Preview channels of comparable CLIs are addressable as a git ref and
+          # visible as a GitHub prerelease, which is what makes a preview
+          # reproducible. The tagged commit keeps the last released version in
+          # package.json; the preview version exists only in the published
+          # artifact.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "preview build of ${{ github.sha }}"
+          git push origin "$TAG"
+          gh release create "$TAG" --prerelease --generate-notes
 
   binary-targets:
     name: Resolve binary targets

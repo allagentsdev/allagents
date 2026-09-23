@@ -282,6 +282,8 @@ function createRemoteMarketplace(rootDir: string): {
   gitConfig: string;
   gitWrapperDir: string;
   source: string;
+  worktree: string;
+  remote: string;
 } {
   const worktree = join(rootDir, 'remote-marketplace-work');
   const remote = join(rootDir, 'remote-marketplace.git');
@@ -333,7 +335,24 @@ function createRemoteMarketplace(rootDir: string): {
     gitConfig,
     gitWrapperDir,
     source: 'https://github.com/uat/plugin-marketplace',
+    worktree,
+    remote,
   };
+}
+
+/** Push a new commit to the fixture marketplace so an update is available. */
+function advanceRemoteMarketplace(
+  worktree: string,
+  message: string,
+): string {
+  writeFileSync(
+    join(worktree, 'plugins', 'demo', 'skills', 'demo', 'SKILL.md'),
+    `---\nname: demo\ndescription: Demo skill\n---\n# Remote demo ${message}\n`,
+  );
+  runGit(worktree, ['add', '.']);
+  runGit(worktree, ['commit', '-m', message]);
+  runGit(worktree, ['push', 'origin', 'main']);
+  return runGit(worktree, ['rev-parse', 'HEAD']);
 }
 
 function createBlockingClaudeWrapper(
@@ -681,8 +700,8 @@ describe('plugin update e2e', () => {
   );
 
   test(
-    'deduplicates embedded marketplace checks across plugin update scopes',
-    () => {
+    'does not count or apply an already current remote plugin',
+    async () => {
       const remote = createRemoteMarketplace(rootDir);
       const addResult = runCli(
         workspaceDir,
@@ -730,7 +749,7 @@ describe('plugin update e2e', () => {
         'https://github.com/uat/plugin-marketplace.git',
       ]);
       const cacheHead = runGit(entry.path, ['rev-parse', 'HEAD']);
-      const tracePath = join(rootDir, 'plugin-update-all-noop-trace.jsonl');
+      const tracePath = join(rootDir, 'plugin-update-current-trace.jsonl');
 
       const updateResult = runCli(
         workspaceDir,
@@ -742,9 +761,10 @@ describe('plugin update e2e', () => {
         },
       );
 
-      expect(updateResult).toMatchObject({ exitCode: 0 });
+      expect(updateResult.exitCode).toBe(0);
       expect(updateResult.stderr).toBe('');
-      expect(JSON.parse(updateResult.stdout)).toMatchObject({
+      const payload = JSON.parse(updateResult.stdout);
+      expect(payload).toMatchObject({
         success: true,
         command: 'plugin update',
         data: {
@@ -752,23 +772,20 @@ describe('plugin update e2e', () => {
             {
               plugin: 'demo@remote-marketplace',
               success: true,
-              action: 'updated',
+              action: 'skipped',
             },
             {
               plugin: 'demo@remote-marketplace',
               success: true,
-              action: 'updated',
+              action: 'skipped',
             },
           ],
-          updated: 2,
-          skipped: 0,
+          updated: 0,
+          skipped: 2,
           failed: 0,
-          syncResults: {
-            project: { failed: 0 },
-            user: { failed: 0 },
-          },
         },
       });
+      expect(payload.data.syncResults).toBeUndefined();
       expect(
         countGitCommands(
           tracePath,
@@ -776,21 +793,125 @@ describe('plugin update e2e', () => {
           'https://github.com/uat/plugin-marketplace.git',
         ),
       ).toBe(1);
-      expect(countGitCommands(tracePath, 'pull')).toBe(2);
-      expect(countGitCommands(tracePath, 'fetch')).toBe(4);
+      expect(countGitCommands(tracePath, 'pull')).toBe(0);
+      expect(countGitCommands(tracePath, 'fetch')).toBe(0);
       expect(countGitCommands(tracePath, 'clone')).toBe(0);
 
-      const updatedRegistry = JSON.parse(readFileSync(registryPath, 'utf8'));
-      const updatedEntry =
-        updatedRegistry.marketplaces['remote-marketplace'];
-      expect(updatedEntry.lastUpdated).not.toBe(
-        '2000-01-01T00:00:00.000Z',
+      const afterRegistry = JSON.parse(readFileSync(registryPath, 'utf8'));
+      const afterEntry = afterRegistry.marketplaces['remote-marketplace'];
+      expect(afterEntry.lastUpdated).toBe('2000-01-01T00:00:00.000Z');
+      expect(runGit(afterEntry.path, ['rev-parse', 'HEAD'])).toBe(cacheHead);
+
+      const interactive = await runInteractiveCli(
+        workspaceDir,
+        homeDir,
+        ['plugin', 'update', 'demo@remote-marketplace', '--scope', 'all'],
+        { gitWrapperDir: remote.gitWrapperDir },
       );
-      expect(runGit(updatedEntry.path, ['rev-parse', 'HEAD'])).toBe(
-        cacheHead,
+      expect(interactive.exitCode).toBe(0);
+      expect(interactive.stderr).toBe('');
+      const lines = interactive.stdout.replaceAll('\r', '').split('\n');
+      expect(lines).toContain(
+        'Checking plugin source: demo@remote-marketplace (project)',
+      );
+      expect(lines).toContain(
+        'Checking plugin source: demo@remote-marketplace (user)',
+      );
+      expect(interactive.stdout).not.toContain('Found ');
+      expect(
+        lines.filter(
+          (line) => line === '- demo@remote-marketplace (skipped)',
+        ),
+      ).toEqual([
+        '- demo@remote-marketplace (skipped)',
+        '- demo@remote-marketplace (skipped)',
+      ]);
+      expect(interactive.stdout).not.toContain(
+        'Updating demo@remote-marketplace',
+      );
+      expect(interactive.stdout).toContain(
+        'Update complete: 0 updated, 2 skipped, 0 failed',
       );
     },
-    15_000,
+    20_000,
+  );
+
+  test(
+    'checks each source and reports found updates before applying on a TTY',
+    async () => {
+      const remote = createRemoteMarketplace(rootDir);
+      const addResult = runCli(
+        workspaceDir,
+        homeDir,
+        ['plugin', 'marketplace', 'add', remote.source, '--scope', 'user'],
+        { gitConfig: remote.gitConfig },
+      );
+      expect(addResult.exitCode).toBe(0);
+      const installResult = runCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'install',
+          'demo@remote-marketplace',
+          '--scope',
+          'project',
+        ],
+        { gitConfig: remote.gitConfig },
+      );
+      expect(installResult.exitCode).toBe(0);
+
+      const registryPath = join(
+        homeDir,
+        '.allagents',
+        'marketplaces.json',
+      );
+      const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+      const entry = registry.marketplaces['remote-marketplace'];
+      runGit(entry.path, [
+        'remote',
+        'set-url',
+        'origin',
+        'https://github.com/uat/plugin-marketplace.git',
+      ]);
+      const updatedSha = advanceRemoteMarketplace(remote.worktree, 'v2');
+
+      const interactive = await runInteractiveCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'update',
+          'demo@remote-marketplace',
+          '--scope',
+          'project',
+        ],
+        { gitConfig: remote.gitConfig, gitWrapperDir: remote.gitWrapperDir },
+      );
+
+      expect(interactive.exitCode).toBe(0);
+      expect(interactive.stderr).toBe('');
+      const lines = interactive.stdout.replaceAll('\r', '').split('\n');
+      expect(
+        lines.filter(
+          (line) =>
+            line === 'Checking plugin source: demo@remote-marketplace' ||
+            line === 'Found 1 plugin update.' ||
+            line === 'Updating demo@remote-marketplace...' ||
+            line === '✓ demo@remote-marketplace (updated)',
+        ),
+      ).toEqual([
+        'Checking plugin source: demo@remote-marketplace',
+        'Found 1 plugin update.',
+        'Updating demo@remote-marketplace...',
+        '✓ demo@remote-marketplace (updated)',
+      ]);
+      expect(runGit(entry.path, ['rev-parse', 'HEAD'])).toBe(updatedSha);
+      expect(interactive.stdout).toContain(
+        'Update complete: 1 updated, 0 skipped, 0 failed',
+      );
+    },
+    20_000,
   );
 
   test(
@@ -840,7 +961,9 @@ describe('plugin update e2e', () => {
       ]);
       const enteredPath = join(rootDir, 'plugin-update-entered');
       const releasePath = join(rootDir, 'plugin-update-release');
-      const sourceLine = 'Updating demo@remote-marketplace (project)...';
+      advanceRemoteMarketplace(remote.worktree, 'v2');
+      const sourceLine =
+        'Checking plugin source: demo@remote-marketplace (project)';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         workspaceDir,
@@ -860,6 +983,7 @@ describe('plugin update e2e', () => {
       );
 
       expect(beforeRelease).toContain(sourceLine);
+      expect(beforeRelease).not.toContain('Found ');
       expect(beforeRelease).not.toContain(
         '✓ demo@remote-marketplace (updated)',
       );
@@ -874,10 +998,13 @@ describe('plugin update e2e', () => {
         .split('\n')
         .filter(
           (line) =>
+            line.startsWith('Checking plugin source: demo@remote-marketplace') ||
             line.startsWith('Updating demo@remote-marketplace') ||
             line === '✓ demo@remote-marketplace (updated)',
         );
       expect(lifecycleLines).toEqual([
+        'Checking plugin source: demo@remote-marketplace (project)',
+        'Checking plugin source: demo@remote-marketplace (user)',
         'Updating demo@remote-marketplace (project)...',
         '✓ demo@remote-marketplace (updated)',
         'Updating demo@remote-marketplace (user)...',
@@ -956,7 +1083,8 @@ describe('plugin update e2e', () => {
       const nativeRelease = join(rootDir, 'mixed-native-release');
       const gitEntered = join(rootDir, 'mixed-git-entered');
       const gitRelease = join(rootDir, 'mixed-git-release');
-      const sourceLine = 'Updating demo@remote-marketplace...';
+      advanceRemoteMarketplace(remote.worktree, 'v2');
+      const sourceLine = 'Checking plugin source: demo@remote-marketplace';
       const { beforeRelease, beforeNextRelease, result } =
         await runBlockedInteractiveCli(
           workspaceDir,
@@ -1003,15 +1131,93 @@ describe('plugin update e2e', () => {
           .filter(
             (line) =>
               line === sourceLine ||
+              line === 'Updating demo@remote-marketplace...' ||
               line === '✓ demo@remote-marketplace (updated)',
           ),
       ).toEqual([
         sourceLine,
+        'Updating demo@remote-marketplace...',
         '✓ demo@remote-marketplace (updated)',
       ]);
     },
     20_000,
   );
+
+  test('reports a check failure without applying the plugin', async () => {
+    const addResult = runCli(workspaceDir, homeDir, [
+      'plugin',
+      'marketplace',
+      'add',
+      marketplaceDir,
+      '--scope',
+      'user',
+    ]);
+    expect(addResult.exitCode).toBe(0);
+    const installResult = runCli(workspaceDir, homeDir, [
+      'plugin',
+      'install',
+      'demo@project-marketplace',
+      '--scope',
+      'user',
+    ]);
+    expect(installResult.exitCode).toBe(0);
+
+    const registryPath = join(homeDir, '.allagents', 'marketplaces.json');
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+    delete registry.marketplaces['project-marketplace'];
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+    const jsonResult = runCli(workspaceDir, homeDir, [
+      'plugin',
+      'update',
+      'demo@project-marketplace',
+      '--scope',
+      'user',
+    ]);
+    expect(jsonResult.exitCode).toBe(1);
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      success: false,
+      command: 'plugin update',
+      data: {
+        results: [
+          {
+            plugin: 'demo@project-marketplace',
+            success: false,
+            action: 'failed',
+            error: 'Marketplace not found: project-marketplace',
+          },
+        ],
+        updated: 0,
+        skipped: 0,
+        failed: 1,
+      },
+    });
+
+    const interactive = await runInteractiveCli(workspaceDir, homeDir, [
+      'plugin',
+      'update',
+      'demo@project-marketplace',
+      '--scope',
+      'user',
+    ]);
+    expect(interactive.exitCode).toBe(1);
+    expect(interactive.stderr).toBe('');
+    expect(interactive.stdout).toContain(
+      'Checking plugin source: demo@project-marketplace',
+    );
+    expect(interactive.stdout).not.toContain(
+      'Updating demo@project-marketplace...',
+    );
+    expect(interactive.stdout).toContain(
+      '✗ demo@project-marketplace (failed)',
+    );
+    expect(interactive.stdout).toContain(
+      'Error: Marketplace not found: project-marketplace',
+    );
+    expect(interactive.stdout).toContain(
+      'Update complete: 0 updated, 0 skipped, 1 failed',
+    );
+  }, 15_000);
 
   test(
     'keeps a native-only result provisional until native reconciliation settles',
@@ -1042,7 +1248,7 @@ describe('plugin update e2e', () => {
       const wrapperDir = createBlockingClaudeWrapper(rootDir);
       const enteredPath = join(rootDir, 'native-update-entered');
       const releasePath = join(rootDir, 'native-update-release');
-      const sourceLine = 'Updating demo@project-marketplace...';
+      const sourceLine = 'Checking plugin source: demo@project-marketplace';
 
       const { beforeRelease, result } = await runBlockedInteractiveCli(
         workspaceDir,
@@ -1074,6 +1280,9 @@ describe('plugin update e2e', () => {
       expect(result.stderr).toBe('');
       expect(result.stdout.split(sourceLine)).toHaveLength(2);
       expect(result.stdout).not.toContain('phase=update');
+      expect(result.stdout.split('Updating demo@project-marketplace...')).toHaveLength(
+        2,
+      );
       expect(result.stdout).toContain(
         '✓ demo@project-marketplace (updated)',
       );

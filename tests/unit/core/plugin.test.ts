@@ -1,10 +1,12 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import {
+  checkPluginUpdate,
   fetchPlugin,
   resetFetchCache,
   seedFetchCache,
   updatePlugin,
   type FetchDeps,
+  type PluginUpdateCheckDeps,
   type UpdatePluginDeps,
 } from '../../../src/core/plugin.js';
 import { GitCloneError } from '../../../src/core/git.js';
@@ -307,7 +309,7 @@ describe('updatePlugin', () => {
     expect(result).toEqual({
       plugin: url,
       success: true,
-      action: 'updated',
+      action: 'skipped',
       changed: false,
     });
     expect(resolveRemoteRevision).toHaveBeenCalledTimes(1);
@@ -588,5 +590,154 @@ describe('updatePlugin', () => {
     expect(result.error).toBe('Refused unsafe marketplace path');
     expect(mockParseManifest).not.toHaveBeenCalled();
     expect(mockUpdateMarketplace).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkPluginUpdate', () => {
+  const healthy = (head: string) =>
+    mock(async () => ({ status: 'healthy' as const, head, ref: 'main' }));
+  const resolved = (commit: string) =>
+    mock(async () => ({
+      status: 'resolved' as const,
+      commit,
+      ref: 'main',
+    }));
+
+  function checkDeps(
+    overrides: Partial<PluginUpdateCheckDeps> = {},
+  ): PluginUpdateCheckDeps {
+    return {
+      parsePluginSpec: (spec) => {
+        const [plugin, marketplaceName] = spec.split('@');
+        return plugin && marketplaceName ? { plugin, marketplaceName } : null;
+      },
+      getMarketplaceRegistration: async () => null,
+      validateMarketplaceAccess: () => undefined,
+      parseMarketplaceManifest: async () => ({
+        success: true,
+        data: { plugins: [] },
+      }),
+      existsSync: () => true,
+      ...overrides,
+    };
+  }
+
+  it('classifies a healthy equal direct checkout as up-to-date', async () => {
+    const pull = mock(async () => undefined);
+    const result = await checkPluginUpdate(
+      'https://github.com/owner/repo',
+      checkDeps({
+        pull,
+        resolveRemoteRevision: resolved('a'.repeat(40)),
+        checkRepositoryHealth: healthy('a'.repeat(40)),
+      }),
+      new UpdateContext(),
+    );
+
+    expect(result).toEqual({
+      plugin: 'https://github.com/owner/repo',
+      status: 'up-to-date',
+    });
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it('classifies a checkout behind its remote as available', async () => {
+    const result = await checkPluginUpdate(
+      'https://github.com/owner/repo',
+      checkDeps({
+        resolveRemoteRevision: resolved('b'.repeat(40)),
+        checkRepositoryHealth: mock(async () => ({
+          status: 'unhealthy' as const,
+          reason: 'head-mismatch' as const,
+          head: 'a'.repeat(40),
+        })),
+      }),
+      new UpdateContext(),
+    );
+
+    expect(result.status).toBe('available');
+  });
+
+  it('treats a local marketplace plugin as available work', async () => {
+    const result = await checkPluginUpdate(
+      'embedded@local-marketplace',
+      checkDeps({
+        getMarketplaceRegistration: async () => ({
+          key: 'local-marketplace',
+          entry: {
+            name: 'local-marketplace',
+            path: '/mock/local',
+            source: { type: 'local', location: '/mock/local' },
+          },
+        }),
+        parseMarketplaceManifest: async () => ({
+          success: true,
+          data: { plugins: [{ name: 'embedded', source: './plugins/embedded' }] },
+        }),
+      }),
+      new UpdateContext(),
+    );
+
+    expect(result.status).toBe('available');
+  });
+
+  it('requires both the marketplace and external checkout to be current', async () => {
+    const deps = checkDeps({
+      getMarketplaceRegistration: async () => ({
+        key: 'test-marketplace',
+        entry: {
+          name: 'test-marketplace',
+          path: '/mock/marketplace',
+          source: { type: 'github', location: 'owner/marketplace' },
+        },
+      }),
+      parseMarketplaceManifest: async () => ({
+        success: true,
+        data: {
+          plugins: [
+            { name: 'external', source: { url: 'https://github.com/external/repo' } },
+          ],
+        },
+      }),
+      resolveRemoteRevision: resolved('a'.repeat(40)),
+    });
+
+    const current = await checkPluginUpdate(
+      'external@test-marketplace',
+      { ...deps, checkRepositoryHealth: healthy('a'.repeat(40)) },
+      new UpdateContext(),
+    );
+    expect(current.status).toBe('up-to-date');
+
+    const stale = await checkPluginUpdate(
+      'external@test-marketplace',
+      {
+        ...deps,
+        checkRepositoryHealth: mock(async (path: string) =>
+          path.includes('external')
+            ? {
+                status: 'unhealthy' as const,
+                reason: 'head-mismatch' as const,
+                head: 'b'.repeat(40),
+              }
+            : { status: 'healthy' as const, head: 'a'.repeat(40), ref: 'main' },
+        ),
+      },
+      new UpdateContext(),
+    );
+    expect(stale.status).toBe('available');
+  });
+
+  it('reports an unresolvable marketplace as failed', async () => {
+    const result = await checkPluginUpdate(
+      'plugin@unknown-marketplace',
+      checkDeps(),
+    );
+
+    expect(result).toEqual({
+      plugin: 'plugin@unknown-marketplace',
+      status: 'failed',
+      error: 'Marketplace not found: unknown-marketplace',
+    });
   });
 });

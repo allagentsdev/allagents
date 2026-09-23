@@ -247,6 +247,20 @@ export function parseGitHubUrl(
   return null;
 }
 
+/**
+ * Parse a marketplace location string into owner, repo, and optional branch.
+ * Location format: "owner/repo" or "owner/repo/branch" (branch can contain slashes).
+ */
+export function parseMarketplaceLocation(location: string): {
+  owner: string;
+  repo: string;
+  branch?: string;
+} {
+  const [owner = '', repo = '', ...rest] = location.split('/');
+  const branch = rest.length > 0 ? rest.join('/') : undefined;
+  return { owner, repo, ...(branch !== undefined && { branch }) };
+}
+
 function decodeGitHubPath(path: string | undefined): string | undefined {
   if (!path) return path;
   try {

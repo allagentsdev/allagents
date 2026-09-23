@@ -29,6 +29,7 @@ repositories:
     source: github
     repo: myorg/my-project
     description: Main project repository
+    # managed: true                       # Opt in to clone/pull — see Managed Repositories
   - path: ../other-project               # Auto-discovers skills from client paths
   - path: ../framework
     skills:                               # Custom skill paths (relative to repo root)
@@ -523,6 +524,36 @@ When multiple repositories (or multiple client paths within the same repo) conta
 | 3rd | First-seen skill wins (repository order in `workspace.yaml`) |
 
 This differs from [plugin skill deduplication](/docs/guides/plugins/#duplicate-skill-handling), which keeps all copies and renames them for uniqueness. Repository skills are an index of pointers, so only the best source is kept.
+
+### Managed Repositories
+
+A `repositories[]` entry is a reference by default. AllAgents reads it to build the skills index and propagate agent files, but it never runs git against the directory — whoever created that directory owns it. The `managed` field opts a single repository into git materialization during `allagents update`.
+
+| Value | Path missing | Path exists |
+|-------|--------------|-------------|
+| omitted or `false` | AllAgents does nothing | AllAgents does nothing |
+| `"clone"` | `git clone` | AllAgents does nothing |
+| `true` or `"sync"` | `git clone` | `git pull` |
+
+`managed` requires both `source` and `repo`. An entry that sets `managed` without them is reported and skipped.
+
+```yaml
+repositories:
+  - path: ../my-project
+    source: github
+    repo: myorg/my-project
+    managed: true          # Clone when missing, pull on every sync
+  - path: ../pinned-lib
+    source: github
+    repo: myorg/pinned-lib
+    branch: release-1.x    # Pull only when this branch is checked out
+    managed: "clone"       # Clone when missing, never pull
+  - path: ../vendored      # No managed field: AllAgents never clones or pulls
+```
+
+Pulling never discards work. AllAgents skips the pull and reports a warning when the working tree has uncommitted changes, or when `branch` is set and the checkout is on a different branch.
+
+Managed operations run before plugin sync, so a repository cloned in a run is available to skill discovery in that same run. They are skipped entirely by `--offline`, `--dry-run`, and [`--no-managed`](/docs/reference/cli/#update); `--dry-run` does not preview them.
 
 ## MCP Servers
 

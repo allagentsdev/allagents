@@ -68,6 +68,7 @@ repositories:
     source: github
     repo: myorg/my-project
     description: My main project
+    managed: true               # Let AllAgents clone/pull this repo
   - path: ../shared-lib
     skills:                     # Custom skill paths (overrides auto-discovery)
       - plugins/my-plugin/skills
@@ -129,6 +130,22 @@ workspace:
 - **WORKSPACE-RULES injection**: AGENTS.md and CLAUDE.md automatically get workspace discovery rules, including a skills index if any repositories contain skills
 
 When using `--from` during init, relative paths are automatically converted to absolute paths so that `allagents update` can pull updates from the original source.
+
+### Managed Repositories
+
+A `repositories[]` entry is a reference by default. AllAgents reads it to build the skills index and propagate agent files, but it never runs git against the directory — whoever created that directory owns it.
+
+Set `managed` when AllAgents should materialize the repository too:
+
+| Value | Behavior |
+|-------|----------|
+| omitted or `false` | AllAgents never clones or pulls |
+| `"clone"` | Clones when the path is missing, never pulls |
+| `true` or `"sync"` | Clones when the path is missing, pulls on every sync |
+
+This matters most when something else populates the directory. A CI job that checks out a pinned commit before calling `allagents update` should leave `managed` unset — or pass `--no-managed` to that run — so AllAgents cannot move the checkout to upstream HEAD. Pulls are skipped rather than forced when the working tree is dirty or is not on the declared `branch`.
+
+See [Managed Repositories](/docs/reference/configuration/#managed-repositories) in the configuration reference for the full field semantics.
 
 ## VSCode Workspace Generation
 

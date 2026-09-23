@@ -95,6 +95,9 @@ bump, or promote step.
 - Never run `npm publish` directly.
 - Recovery: dispatch the `Publish` workflow with the release tag, and the
   `Release Please` workflow with `tag` to rebuild the release binaries.
+- Preview the pending release on the npm `next` dist-tag by dispatching the
+  `Release Next` workflow; it tags `vX.Y.Z-next.N` from the open release pull
+  request without touching the stable version.
 
 ## Architecture
 

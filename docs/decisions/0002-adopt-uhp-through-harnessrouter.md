@@ -215,7 +215,7 @@ repositories:
 
 Harbor and SWE-bench/Hugging Face are benchmark-ingestion precedents, not alternate workspace field vocabularies. Harbor clones a task repository and materializes its Dockerfile, Compose definition, or prebuilt `environment.docker_image`; SWE-bench records `repo` and `base_commit` and builds or pulls layered instance images. A future adapter may compile those records into the canonical AllAgents workspace and deployment inputs while preserving their upstream identity.
 
-A runnable Harbor or SWE-bench image is not automatically an AllAgents `workspaceSnapshot`. The former may combine source, tools, services, verifier assumptions, and runtime configuration; the latter is a source-only OCI artifact with a separately verified workspace manifest. Caller-selected task packages, runtime images, and verifiers require a separate versioned task/environment boundary rather than overloading `source`.
+A runnable Harbor or SWE-bench image is not automatically an AllAgents `workspaceSnapshot`. The former may combine source, tools, services, verifier assumptions, and runtime configuration. An AllAgents snapshot is a workspace source artifact: it may carry normalized offline Git history, but it does not select the runtime environment or verifier. Caller-selected task packages, runtime images, and verifiers require a separate versioned task/environment boundary rather than overloading `source`.
 
 ### Access and retention
 
@@ -244,7 +244,7 @@ Once attachment reaches `ready`, terminal events, retrieval, background completi
 |---|---|
 | `effectiveDescriptorDigest` | Digest of the normalized descriptor and defaults |
 | `generationId` | Public content identifier |
-| `sourceIdentity` | Normalized URL, destination, `requestedRef` when supplied, and `resolvedCommit`, or verified OCI identity |
+| `sourceIdentity` | Normalized URL, destination, `requestedRef` when supplied, and `resolvedCommit`; or verified `snapshotName` and `imageManifestDigest` plus each root's destination and optional `resolvedCommit` and `objectSetDigest`, never a Git remote URL |
 | `workingDirectory` | Effective `workspaceRoot` or `workspacePath` |
 | `workspaceManifestDigest` | Verified source-visible manifest digest |
 | `access`, `retention`, `expiresAt` | Effective workspace policy and expiry |
@@ -362,25 +362,48 @@ canonical bytes selected by `workspaceManifestDigest`.
 | One UTF-8 path | 4096 bytes and 128 components |
 | One PAX or extended header | 1 MiB |
 
+Workspace-manifest version 2 lets each repository item describe either a
+tree-only root or a history-bearing root. A history-bearing item adds `git` with
+`resolvedCommit` and `objectSetDigest`. Its destination must contain exactly one
+`.git` directory; a tree-only root must contain none. The snapshot's immutable
+digests bind the commit and object-set identity. The artifact contains no
+configured Git remote, and no Git remote URL is required or returned. Private
+evaluations can still use `git log`, `git blame`, and historical diffs offline.
+
 Before writing an entry, the materializer checks its type, path, link target, and
 declared size. It rejects devices, sockets, traversal, escaping links, sparse
 files, unknown or foreign layers, mutable tags, and undeclared output. The runner
 independently rejects a 129th repository root.
 
-The materializer verifies `imageManifestDigest`, `workspaceManifestDigest`, and
-every layer size and digest before use, then applies OCI whiteouts. It recomputes
-the canonical manifest from staging and requires it to match both the fetched
-manifest bytes and the caller-provided `workspaceManifestDigest`. Snapshot mode
-rejects `.git` administrative subtrees.
-Snapshots that require Git history use repository mode.
+After applying OCI whiteouts, the materializer verifies
+`imageManifestDigest`, `workspaceManifestDigest`, every layer size and digest,
+and the recomputed source-visible manifest. For every history-bearing root it
+then applies semantic Git verification: detached `HEAD` at `resolvedCommit`, an
+index equal to that commit tree, an object database equal to the complete
+transitive closure whose canonical digest is `objectSetDigest`, and
+source-visible descendants equal to the same commit tree. Dirty, staged,
+untracked, missing, or modified source fails validation.
+
+Snapshot Git state is offline. It must contain no remotes, branch-upstream
+configuration, credential helpers, config includes, hooks, worktree links,
+alternates, shallow, replace, or graft state, reflogs, `FETCH_HEAD`, extra refs,
+unreachable objects, or credential-bearing configuration. Physical `.git`
+entries and bytes count toward acquisition and retained-generation limits even
+though their volatile representation is excluded from the source-visible
+manifest.
 
 ### Canonical workspace manifest
 
 Both source modes produce the same versioned canonical manifest. Its RFC 8785 bytes enumerate every source-visible directory, regular file, and symbolic link in logical path order, including normalized mode, size, content digest, or link target.
 
-Repository roots are identified by destination. Git mode may omit only separately verified `.git` administrative subtrees. OCI mode rejects them. No source-visible path may be omitted.
-
-The runner reads the manifest through a private bounded result root, verifies its digest, walks staging without following links, reconstructs the same entries, and requires byte-for-byte canonical equality. The manifest never appears inside the published source tree.
+Repository roots are identified by unique, pairwise non-overlapping
+destinations. A declared, separately verified `.git` subtree is omitted from
+source-visible entries in either source mode; any undeclared `.git` path is
+invalid. The runner verifies the manifest digest, walks staging without following
+links, reconstructs the same source-visible entries, and requires byte-for-byte
+canonical equality. It separately verifies every omitted Git root against its
+declared commit and object-set digest. The manifest never appears inside the
+published source tree.
 
 ### Generation identity
 
@@ -391,13 +414,18 @@ The private generation key is computed before materialization. It includes every
 | Descriptor and hook contract versions | Access and retention |
 | Deployment authorization scope | Working directory |
 | Normalized caller Git URLs | Harness, profile, and session identity |
-| Resolved commits or immutable OCI digests | Physical paths |
+| Resolved commits or exact OCI image and workspace-manifest digests | Physical paths |
 | Normalized destinations | Credential values |
 | Selected credential-reference identities | Caller ref spelling after it resolves to the same commit |
-| Snapshot identity when applicable | Volatile Git pack, index, and stat representation |
+| Snapshot identity when applicable | Repository-mode volatile Git pack, index, and stat representation |
 | Acquisition and egress policy version | |
 
-Publication binds one private key and one internal epoch to one verified workspace-manifest digest and, for repositories, one semantic Git-state record. Materialization receives the exact private resolved plan and never resolves source again.
+OCI generation reuse is artifact-exact. Repacking snapshot `.git` data changes
+the image digest, generation key, and public OCI identity even when the semantic
+Git state is unchanged. Semantic Git verification proves what one artifact
+contains; it does not deduplicate distinct OCI artifacts.
+
+Publication binds one private key and one internal epoch to one verified workspace-manifest digest and every declared semantic Git-state record, whether Git was acquired from a remote or carried offline in an OCI snapshot. Materialization receives the exact private resolved plan and never resolves source again.
 
 ## Generation publication and attachments
 

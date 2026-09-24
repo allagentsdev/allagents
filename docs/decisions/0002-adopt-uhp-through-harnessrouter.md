@@ -45,8 +45,8 @@ An initial workspace-backed turn follows this order:
 6. On a cache miss, the materializer builds private staging. The runner
    independently verifies the source tree, Git or OCI state, manifest, limits,
    and generation key before publishing it atomically.
-7. The runner pins the generation, then mounts it read-only or creates an inode-
-   independent private editable copy.
+7. The runner pins the generation, then mounts it read-only or creates a private
+   writable view with no mutable state shared with another session.
 8. The gateway commits the attachment as `ready`. The runner acknowledges that
    commit, transfers or releases reservations, and releases the provisional pin
    exactly once.
@@ -104,7 +104,7 @@ flowchart TB
   MATERIALIZER --> SOURCE[HTTPS Git or configured OCI registry]
   RUNNER --> GENERATION[(immutable generations)]
   GENERATION --> READONLY[shared read-only attachment]
-  GENERATION --> EDITABLE[private editable copy]
+  GENERATION --> EDITABLE[private editable view]
   READONLY --> HARNESS[Codex or Pi harness]
   EDITABLE --> HARNESS
   RUNNER --> AUTH[(native auth profiles)]
@@ -121,7 +121,7 @@ flowchart TB
 |---|---|
 | UHP client | Prompt, model, harness ID, workspace descriptor, continuation ID |
 | HarnessRouter gateway | Caller authentication, UHP validation, public response and session state, attachment `ready`, expiry, tombstones |
-| HarnessRouter runner | Generation claims and publication, source child processes, mounts, private copies, quotas, references, pins, profile admission |
+| HarnessRouter runner | Generation claims and publication, source child processes, mounts, private writable views, quotas, references, pins, profile admission |
 | AllAgents materializer | Descriptor defaults, URL and source validation, Git or OCI resolution, staging construction, canonical manifest, provenance |
 | Coding harness | Provider login, native token refresh, conversation execution |
 | Operator | Deployment policy, egress, credential scopes, authentication profiles, persistence authorization, quotas, deletion, garbage collection |
@@ -213,9 +213,18 @@ repositories:
 
 `path` remains the existing or managed local checkout location. `url` replaces the lossy `source` plus `repo` pair. `branch` remains branch-specific because managed synchronization performs branch checkout and pull; it does not claim arbitrary detached-ref semantics. Path-only unmanaged entries may omit `url`; a managed entry requires it. The schema, CLI, generated schemas, examples, and tests cut over together without accepting both shapes indefinitely.
 
-Harbor and SWE-bench/Hugging Face are benchmark-ingestion precedents, not alternate workspace field vocabularies. Harbor clones a task repository and materializes its Dockerfile, Compose definition, or prebuilt `environment.docker_image`; SWE-bench records `repo` and `base_commit` and builds or pulls layered instance images. A future adapter may compile those records into the canonical AllAgents workspace and deployment inputs while preserving their upstream identity.
+Harbor sits beside the AllAgents gateway at Promptfoo's provider boundary.
+Promptfoo calls the gateway over UHP for AllAgents-backed rows; a Harbor provider
+calls Harbor for container-native rows, where Harbor owns task setup, execution,
+verification, artifacts, and teardown. Harbor is not an
+`allagents.workspace` backend, and its task schema is not compiled into the
+workspace descriptor.
 
-A runnable Harbor or SWE-bench image is not automatically an AllAgents `workspaceSnapshot`. The former may combine source, tools, services, verifier assumptions, and runtime configuration. An AllAgents snapshot is a workspace source artifact: it may carry normalized offline Git history, but it does not select the runtime environment or verifier. Caller-selected task packages, runtime images, and verifiers require a separate versioned task/environment boundary rather than overloading `source`.
+Harbor and SWE-bench/Hugging Face remain useful precedents for source and
+benchmark packaging. Their runnable images may combine source, tools, services,
+verifier assumptions, and runtime configuration, so they are not AllAgents
+`workspaceSnapshot` artifacts. An AllAgents snapshot contains source and may
+carry normalized offline Git history; it does not select a runtime or verifier.
 
 ### Access and retention
 
@@ -223,7 +232,7 @@ Access and retention are independent:
 
 | | `readOnly` | `editable` |
 |---|---|---|
-| Workspace | Shared immutable generation | Private inode-independent copy |
+| Workspace | Shared immutable generation | Private writable view; no mutable state shared across sessions |
 | Initial UHP files | Rejected before source acquisition | Applied after attachment |
 | Writes | Filesystem rejects them; no copy-up | Allowed within the private quota |
 | Checkpoints | No source mutation checkpoint | Root and nested repositories use private checkpoints |
@@ -235,6 +244,50 @@ Access and retention are independent:
 | `persistent` | No idle expiry. Requires deployment authorization and reserved capacity before source resolution. |
 
 Neither retries nor continuations can change access or retention.
+
+### Editable change collection
+
+The verified generation is the first-turn baseline. The runner does not copy or
+inventory the complete private workspace again before the harness starts.
+
+1. For a history-bearing root, the protected baseline is its recorded commit and
+   generation-owned object store. For a tree-only root, it is the canonical
+   workspace manifest. The runner keeps this baseline outside the editable
+   workspace.
+2. For each turn, the runner prepares and verifies the private view, then arms
+   candidate tracking before it applies UHP input overlays or gives any
+   non-runner process writable access. It durably binds that coverage marker to
+   the generation and previous turn state and keeps tracking active through
+   descendant quiescence.
+3. After the harness and its descendants stop, the runner obtains changed-path
+   candidates from the runner-owned tracker or storage state. It compares their
+   final type, mode, and content with the protected baseline through
+   root-confined, no-follow reads.
+4. If uninterrupted coverage cannot be proven, or candidate state is missing,
+   incomplete, overflowed, or uncertain after recovery, the runner walks the
+   complete private view without following links and performs the same bounded
+   comparison.
+
+The produced-file domain is every source-visible path under the declared
+workspace roots. The only exclusions are the original administrative `.git`
+subtrees identified by the protected generation record. Their mutations persist
+for continuation but are not produced files. An agent-created `.git` elsewhere
+is ordinary source-visible content. Candidate and full-scan paths use this same
+protected classification; final Git discovery or ignore rules cannot change it.
+
+For a continuation, the runner starts from the previous protected cumulative
+path state and applies verified candidates, or rebuilds that state with the
+fallback scan. It stores entries only for content that differs from the
+generation; unchanged paths inherit their generation state. Comparing the new
+state with the previous checkpoint yields the turn's produced-file delta without
+retaining or comparing a second full workspace.
+
+Editable `.git` state remains session-private and survives continuation for
+coding tools. After the harness starts, it is not authoritative for provenance
+or change collection. The runner never trusts its refs, configuration, index,
+hooks, alternates, or ignore rules, and an agent-edited ignore file cannot hide
+a produced path. Candidate tracking is an optimization; the bounded full-tree
+comparison remains the correctness fallback.
 
 ### Public workspace metadata
 
@@ -312,7 +365,7 @@ Every redirect is checked against the original scope. The connector strips the c
 Credentials are never encoded in URLs, persisted in Git configuration or remote
 URLs, or returned in hook output. Temporary credential state is removed before
 return. The gateway, runner base environment, published generation, editable
-copy, and every agent child remain credential-free. If a configured source secret
+view, and every agent child remain credential-free. If a configured source secret
 appears in the service or agent environment, the runner refuses to launch the
 agent.
 
@@ -437,9 +490,9 @@ cancel the build while another waiter remains; the runner cancels it when no
 waiter remains. Failed or partial staging is never attachable, and a failed
 competing build does not poison an existing verified generation.
 
-Before a mount or copy, the runner acquires a provisional pin under the generation lock. Garbage collection cannot race that pin.
+Before attaching a view, the runner acquires a provisional pin under the generation lock. Garbage collection cannot race that pin.
 
-The generation backing store remains owner-writable and is never exposed writable to a session. Publication is a recoverable same-filesystem atomic transition. Editable copies may not share mutable inodes with the generation or another session.
+The generation backing store remains owner-writable and is never exposed writable to a session. Publication is a recoverable same-filesystem atomic transition. Editable views may not share mutable state with the generation or another session.
 
 Read-only sessions share source bytes but keep their operating-system identity,
 conversation, home, temporary files, logs, outputs, and response state separate.
@@ -447,7 +500,7 @@ conversation, home, temporary files, logs, outputs, and response state separate.
 
 The gateway and runner commit an attachment in three steps:
 
-1. The runner prepares the mount or private copy and returns opaque evidence.
+1. The runner prepares the read-only mount or private writable view and returns opaque evidence.
 2. The gateway commits attachment state as `ready`.
 3. The runner acknowledges that commit, creates the durable reference or transfers the private reservation, and releases the provisional pin exactly once.
 
@@ -521,14 +574,14 @@ Every deployment limit must be finite and nonzero:
 Before a response is visible, one idempotent admission token reserves a generic session slot and a fixed-size tombstone slot. Invalid descriptors remain charged through failed-response retention, tombstoning, and purge.
 
 After validation and before source resolution, the runner authorizes persistence
-and reserves its slot. Editable access also receives one stable private-
-reservation ID. Its hard byte and inode allowance covers the private tree, UHP
+and reserves its slot. Editable access also receives one stable private-view
+reservation ID. Its hard byte and inode allowance covers the writable view, UHP
 overlays, root and nested-repository checkpoints, and produced-file state across
 every turn and continuation.
 
 A cache miss reserves staging and prospective generation capacity before byte acquisition. Independent full-tree accounting converts that reservation to actual retained usage before publication.
 
-A waiter receives an editable copy only when the complete generation fits its private allowance. A non-fitting waiter fails alone and does not invalidate the shared generation or another waiter.
+A waiter receives an editable view only when the complete generation fits its private allowance. A non-fitting waiter fails alone and does not invalidate the shared generation or another waiter.
 
 Protected state is never evicted. If leases, references, pins, or other protected resources consume capacity, admission fails instead.
 
@@ -711,9 +764,9 @@ The system fails closed. Source, access mode, retention, credentials, and provid
 | Missing or corrupt bound attachment evidence | HTTP 409 `allagents_workspace_non_resumable` | No profile admission or epoch substitution; return committed workspace metadata |
 | Busy native profile after replay and `session_busy` checks | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_busy` | Fail before allocation, runner work, or materialization |
 | Generic capacity unavailable | HTTP 503 `allagents_workspace_capacity_exceeded` | Admit no response or source work |
-| Editable copy or later growth exceeds its allowance | `allagents_workspace_private_quota_exceeded` | Fail only that waiter or turn; preserve mode and retention |
+| Editable view or later growth exceeds its allowance | `allagents_workspace_private_quota_exceeded` | Fail only that waiter or turn; preserve mode and retention |
 | Source policy, authentication, or transport failure | Coded failed response | Remove unpublished staging; publish nothing; start no agent or provider fallback |
-| Generation, attachment, or copy failure | Coded failed response | Quarantine incomplete state and release reservations and pins exactly once |
+| Generation, attachment, or private-view failure | Coded failed response | Quarantine incomplete state and release reservations and pins exactly once |
 | Materializer timeout, crash, malformed output, or live descendant | Coded materializer or containment failure | Wait for cgroup quiescence before result handling, secret release, or cleanup |
 | Provider authentication failure | Normalized UHP failure | Do not switch profile or activate proxy; finish teardown before lock release |
 | Provider execution failure | Normalized UHP failure | No source fallback and no credential material in output |
@@ -763,7 +816,7 @@ Revisit this decision when:
 - the host cannot enforce immutable read-only generation mounts across sessions;
 - continuation, expiry, deletion, and lease acquisition cannot be linearized and recovered safely;
 - generation churn or authorized persistent demand cannot fit practical finite quotas;
-- editable derivation requires stronger filesystem semantics than an independent private copy;
+- editable derivation requires stronger filesystem semantics than a private writable view with no shared mutable state;
 - upstream HarnessRouter accepts the generic workspace or authentication-state seam;
 - UHP adopts a standard workspace attachment or retention contract that replaces this extension;
 - the maintained patch grows beyond the narrow integration boundary;

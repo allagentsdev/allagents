@@ -23,8 +23,8 @@ execution: code
 - **Means:** Deploy a pinned HarnessRouter CE fork. Preserve HarnessRouter's UHP,
   caller authentication, session, streaming, cancellation, artifact, and
   agent-runner behavior. Add a generic generation resolve/build/attach boundary,
-  immutable generation store, read-only mounts, private editable copies, durable
-  leases, retention and quota state, garbage collection, nested logical working
+  immutable generation store, shared read-only mounts, private writable views,
+  durable leases, retention and quota state, garbage collection, nested logical
   directories, mode-specific checkpoint/collection behavior, and separation
   between session state and durable harness-native OAuth state. Implement
   Git/OCI semantics in a separate AllAgents executable. Codex authenticates
@@ -95,8 +95,8 @@ Promptfoo request names the HTTPS Git repositories to load; the AllAgents
 executable validates those URLs against deployment egress policy, resolves an
 immutable source plan, and builds verified staging only on a generation cache
 miss. The runner atomically publishes or reuses the generation, records the
-session attachment and retention state, then mounts it read-only or creates a
-private editable copy before provider dispatch.
+session attachment and retention state, then attaches either a shared read-only
+mount or a private writable view before provider dispatch.
 
 A continuation supplies `previous_response_id`, omits the workspace extension,
 and uses HarnessRouter's current native conversation plus the bound attachment.
@@ -138,7 +138,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
   provenance. It never authorizes persistence or publishes live state.
 - **A4. HarnessRouter runner:** Owns generation claims/publication and the
   resource journal: provisional pins, durable references, read-only mounts,
-  private editable copies and quotas, per-session operating-system identity and
+  private writable views and quotas, per-session operating-system identity and
   runtime state, mode-specific checkpoints and produced files, safe nested cwd,
   selected Codex/Pi process, conversation state, active-turn auth projection,
   cleanup, and garbage collection. It prepares attachment evidence but never
@@ -175,7 +175,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **Publish once per generation; attach once per session.** Concurrent requests
   for one immutable source plan share one claim and verified publication.
   Read-only sessions share that generation; editable sessions receive private
-  writable copies. Continuations omit the extension and reuse the original
+  writable views. Continuations omit the extension and reuse the original
   attachment through `previous_response_id`.
 - **Separate access from retention.** `readOnly` versus `editable` controls
   mutability. Default `session` versus authorized `persistent` controls
@@ -194,13 +194,14 @@ caller responsible for acquisition. The temporary fork closes those seams.
   provenance keeps `requestedRef` separate from `resolvedCommit`. Local
   `workspace.yaml` repository entries keep `path` and replace the provider-
   specific `source` plus `repo` pair with one canonical `url`. Benchmark-specific
-  aliases are accepted only by future adapters, never by the canonical schema.
-- **Keep benchmark task/environment identity separate from workspace source.**
-  Harbor task repositories and `environment.docker_image`, and SWE-bench/Hugging
-  Face `repo`, `base_commit`, and instance images, are adapter inputs. A runnable
-  benchmark image is not an AllAgents workspace source artifact. A snapshot may
-  contain normalized offline Git history, but direct task packages, environment
-  images, and verifiers need a separate versioned boundary if added later.
+  aliases are not accepted by the canonical schema.
+- **Keep provider lanes separate.** Promptfoo calls the AllAgents gateway over
+  UHP for AllAgents-backed rows. A Harbor provider calls Harbor for
+  container-native rows, where Harbor owns setup, execution, verification,
+  artifacts, and teardown. Harbor is not an `allagents.workspace` backend and
+  its task schema is not compiled into the workspace descriptor. Harbor and
+  SWE-bench/Hugging Face remain packaging precedents, but their runnable images
+  are not AllAgents source snapshots.
 - **Prefer harness-native OAuth.** Promptfoo's HarnessRouter API key authenticates
   the UHP caller only. Codex and Pi use their own login, token storage, refresh,
   and provider request path; native mode has no provider-route API key.
@@ -420,7 +421,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
   byte/inode usage. Under the generation lock, successful publication atomically
   converts the prospective generation reservation to actual usage, releases its
   excess and the staging reservation, and persists that accounting transition
-  before ready state or waiter pins become visible. Private copy-fit is not a
+  before ready state or waiter pins become visible. Private-view fit is not a
   shared-build condition: after publication, each editable waiter compares total
   physical generation bytes/inodes with its own hard allowance. A waiter that
   cannot fit fails `allagents_workspace_private_quota_exceeded` and releases only
@@ -491,26 +492,72 @@ caller responsible for acquisition. The temporary fork closes those seams.
   stable private-reservation ID admitted before resolve and compares the
   generation's independently measured total physical bytes/inodes with that
   allowance. Failure detaches only that waiter. A fitting waiter creates and
-  validates a unique writable copy with no mutable inode shared with the
-  generation and initializes root/nested checkpoints and collection baselines.
-  Its attachment evidence contains the epoch and opaque reservation ID. Ready
-  acknowledgement transfers the reservation from admission to the private
-  workspace without a second debit, then releases the provisional pin exactly
-  once. Failure before acknowledgement releases the reservation and prepared
-  resources once unless reconciliation proves that the gateway committed ready.
-  Expiry or deletion releases the ready workspace's reservation once. Startup
-  reconciles both halves of this prepare/ack and quota-transfer protocol.
+  validates a private writable view with no mutable state shared with the
+  generation or another session. A backend may use a full copy, reflink,
+  copy-on-write view, or storage clone only after proving the same isolation,
+  quota, accounting, and cleanup behavior. The runner initializes root/nested
+  checkpoints and stores protected collection state outside the editable
+  workspace. Its attachment evidence contains the epoch and opaque reservation
+  ID. Ready acknowledgement transfers the reservation from admission to the
+  private workspace without a second debit, then releases the provisional pin
+  exactly once. Failure before acknowledgement releases the reservation and
+  prepared resources once unless reconciliation proves that the gateway
+  committed ready. Expiry or deletion releases the ready workspace's reservation
+  once. Startup reconciles both halves of this prepare/ack and quota-transfer
+  protocol.
 
-  The editable hard quota covers the private tree, UHP input overlays,
+  The editable hard quota covers the private view, UHP input overlays,
   root/nested checkpoints, and produced-file state for every turn and
-  continuation. The filesystem quota backend must deny writes beyond either
-  byte or inode allowance and surface exhaustion to the runner; the runner
-  terminates that turn as failed `allagents_workspace_private_quota_exceeded`
-  without changing access or retention. Actual usage and reserved allowance are
-  persisted and reconciled before readiness. Only editable state receives
-  ordinary UHP input files, mutation checkpoints, and produced-file collection.
-  A `readOnly` request containing workspace input files fails before source
-  acquisition.
+  continuation. The filesystem quota backend denies writes beyond either byte or
+  inode allowance and surfaces exhaustion to the runner; the runner terminates
+  that turn as failed `allagents_workspace_private_quota_exceeded` without
+  changing access or retention. Actual usage and reserved allowance are persisted
+  and reconciled before readiness. Only editable state receives ordinary UHP
+  input files, mutation checkpoints, and produced-file collection. A `readOnly`
+  request containing workspace input files fails before source acquisition.
+
+  The verified generation is the first-turn collection baseline; attachment
+  does not walk, hash, or copy the complete private view again. For a
+  history-bearing root, the protected descriptor names its recorded commit and
+  generation-owned object store. For a tree-only root, it names the canonical
+  workspace manifest. The runner stores these descriptors outside the editable
+  workspace.
+
+  For every turn, the runner prepares and verifies the private view, then arms
+  candidate tracking before it applies a UHP input overlay or gives any
+  non-runner process writable access. It durably binds that coverage marker to
+  the generation and prior protected turn state. Tracking remains active through
+  runner-applied overlays and harness-cgroup quiescence.
+
+  After the harness cgroup is empty, the runner obtains additions, deletions,
+  type and mode changes, and content-change candidates from a runner-owned
+  change tracker or storage state. It verifies every candidate against the
+  protected descriptor and final workspace with root-confined, no-follow reads.
+  Candidate tracking is an optimization. If uninterrupted coverage cannot be
+  proven, or its state is missing, incomplete, overflowed, or uncertain after
+  recovery, the runner walks the complete private view without following links
+  and reconstructs the bounded cumulative difference from the generation.
+
+  Before terminal acknowledgement, the runner durably stores protected path state
+  only for content that differs from the generation. Unchanged paths inherit
+  generation state. On continuation, it applies verified candidates to the prior
+  cumulative state, or rebuilds that state with the fallback scan, then compares
+  the result with the prior state to produce the turn delta. It never retains or
+  compares a second full workspace. A path restored to its prior-turn state
+  produces no turn delta; transient-write auditing is outside this contract.
+
+  The produced-file domain is every source-visible path under the declared
+  workspace roots. The only exclusions are the original administrative `.git`
+  subtrees identified by the protected generation record. Their mutations
+  persist for continuation but are not produced files. An agent-created `.git`
+  elsewhere is ordinary source-visible content. Candidate and full-scan paths
+  use this same protected classification; final Git discovery or ignore rules
+  cannot change it.
+
+  Editable `.git` state remains part of the private session for coding tools and
+  continuation, but collection never trusts its repository identity, refs,
+  configuration, index, hooks, alternates, or ignore rules. An agent-edited
+  ignore file cannot hide a produced path.
 
   `lastUsedAt` remains null until the gateway commits an attachment `ready`.
   After acknowledgement, the runner updates it under the generation lock to
@@ -684,14 +731,14 @@ caller responsible for acquisition. The temporary fork closes those seams.
   retained-generation limits.
 
   Recompute the canonical workspace manifest from staging and require it to
-  match both the fetched manifest bytes and `workspaceManifestDigest`. After
-  publication the runner creates private collection baselines from the verified
-  trees so later produced-file reporting remains truthful. Both source modes
-  produce the same reusable immutable-generation abstraction. Validated `.git`
-  state from either mode is readable but immutable in `readOnly` attachments and
-  independently writable only in private `editable` copies. Generation
-  acquisition limits apply per build; retained-generation and private-workspace
-  quotas apply independently.
+  match both the fetched manifest bytes and `workspaceManifestDigest`. Publication
+  preserves that manifest and every semantic Git record as the protected
+  collection baseline; it does not build a second per-session inventory. Both
+  source modes produce the same reusable immutable-generation abstraction.
+  Validated `.git` state from either mode is readable but immutable in `readOnly`
+  attachments and independently writable only in private `editable` views.
+  Generation acquisition limits apply per build; retained-generation and
+  private-workspace quotas apply independently.
 - **R12.** Extend HarnessRouter's response translator and stored-response paths
   with a stage-dependent contract. Before attachment `ready`, non-2xx request
   errors and allocated terminal failures omit
@@ -785,7 +832,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
   deletion stays quarantined and counted against quota. Startup reconciles
   generic admission slots, active leases, build/staging/prospective-generation
   reservations, publication/accounting markers, build waiters, provisional pins,
-  references, mounts, private reservation transfers and actual usage, copies,
+  references, mounts, private reservation transfers, view state and actual usage,
   tombstones, compaction, and deletion before readiness or GC. If only protected
   state remains, new admission fails
   `allagents_workspace_capacity_exceeded`; no protected state is deleted and no
@@ -830,11 +877,11 @@ caller responsible for acquisition. The temporary fork closes those seams.
    source-secret handle; native or proxy trust mode; delegated cgroup v2 subtree;
    and `on-failure` restart policy. Verify the image and mounted inputs before
    running checks that depend on them.
-2. The runner validates read-only mount enforcement, private-copy isolation,
+2. The runner validates read-only mount enforcement, private-view isolation,
    finite lifecycle policy, storage relationships, and cgroup delegation. It
    reconciles incomplete generation claims/publications, build waiters,
-   provisional pins, durable session references, mounts, private editable
-   workspaces and quota usage, auth projections, tombstones/compaction, and
+   provisional pins, durable session references, mounts, private writable
+   views and quota usage, auth projections, tombstones/compaction, and
    interrupted deletions. Sweep orphaned cgroups and credential projections only
    after proving each old process boundary empty. Do not start GC or serving.
 3. Run the mounted AllAgents hook's bounded `preflight` mode. It validates hook,
@@ -926,11 +973,12 @@ caller responsible for acquisition. The temporary fork closes those seams.
    waiter's pin and access-specific reservations. Other waiters continue against
    the valid ready epoch. Otherwise the gateway CASes that session
    `resolving -> attaching`, and the runner prepares either a durable read-only
-   epoch reference plus verified mount or a unique private copy plus checkpoints
-   and collection baselines. It returns an opaque token/evidence. The gateway
-   alone CASes `attaching -> ready`, stores key/epoch evidence, and acknowledges
-   the token. Under the generation lock, the runner releases that provisional pin
-   exactly once and advances `lastUsedAt` to at least the ready-commit timestamp.
+   epoch reference plus verified mount or a private writable view plus
+   checkpoints and protected collection state. It returns opaque token/evidence.
+   The gateway alone CASes `attaching -> ready`, stores key/epoch evidence, and
+   acknowledges the token. Under the generation lock, the runner releases that
+   provisional pin exactly once and advances `lastUsedAt` to at least the
+   ready-commit timestamp.
    Prepare/ack recovery preserves the committed attachment or rolls that waiter's
    resources/reservations back once.
 7. Only after attachment `ready` do response events include the complete
@@ -940,12 +988,15 @@ caller responsible for acquisition. The temporary fork closes those seams.
    projection or scoped proxy credential, and dispatches the harness. Provider
    retry/fallback
    cannot validate, resolve, build, attach, or change any binding.
-8. Read-only collection reports no workspace mutation; editable collection walks
-   the private root and declared repositories without reporting initial source
-   files. After descendants stop, native finalization commits refresh state or
-   marks `repair-required`, removes the credential projection, and proves retained
-   homes/checkpoints clean. The gateway then durably stores the terminal response
-   and, for `session`, sets one expiry timestamp used by the terminal event, GET,
+8. Read-only collection reports no workspace mutation. After descendants stop,
+   editable collection verifies trusted changed-path candidates against the
+   protected generation and prior turn state, or performs a bounded full-tree
+   scan when candidate state is not trustworthy. It never reports initial source
+   files or trusts editable `.git` metadata. Native finalization then commits
+   refresh state or marks `repair-required`, removes the credential projection,
+   and proves retained homes/checkpoints clean. The gateway then durably stores
+   the terminal response and, for `session`, sets one expiry timestamp used by
+   the terminal event, GET,
    background completion, and replay. Only after that acknowledgement may the
    runner release the profile lock.
 
@@ -1034,7 +1085,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
    token, then reconciles generic admission, active leases, staging/prospective-
    generation reservation, publication/accounting conversion, provisional-pin/
    reference acquisition, attachment prepare/ack and private-reservation transfer,
-   mount/copy creation, private usage accounting, tombstoning, unmount, release,
+   mount/view creation, private usage accounting, tombstoning, unmount, release,
    compaction, and physical deletion without duplicating a debit/reference,
    leaking a pin, extending an original deadline, or exposing a partially deleted
    resource.
@@ -1107,13 +1158,20 @@ caller responsible for acquisition. The temporary fork closes those seams.
   before publication, attachment, or agent launch.
 - **AE5.** Two `editable` turns linked by `previous_response_id` preserve native
   conversation and a private file mutation. A separate editable trial from the
-  same generation receives a unique clean copy and cannot observe or mutate the
-  first. An editable waiter whose initial copy cannot fit fails its own
-  `allagents_workspace_private_quota_exceeded` response without invalidating the
-  ready epoch or a concurrent read-only/fitting waiter. Produced-file collection
-  reports only private changes. Growth across turns cannot exceed the session's
-  reserved hard quota. Two read-only turns preserve conversation but have no
-  workspace mutation checkpoint or produced-file delta.
+  same generation receives a unique clean writable view and cannot observe or
+  mutate the first. An editable waiter whose initial view cannot fit fails its
+  own `allagents_workspace_private_quota_exceeded` response without invalidating
+  the ready epoch or a concurrent read-only/fitting waiter. First-turn collection
+  uses the protected generation without a redundant full pre-agent inventory.
+  Candidate tracking begins before input overlays or writable process exposure;
+  a missing or discontinuous coverage marker forces the full scan. Candidate and
+  full-scan paths return the same source-visible delta, exclude the protected
+  declared Git administrative subtrees, report an agent-created `.git` elsewhere
+  as ordinary content, and cannot be hidden by editable Git metadata or ignore
+  rules.
+  Continuation reports the delta from the prior protected turn state and cannot
+  grow past the session's reserved hard quota. Two read-only turns preserve
+  conversation but have no workspace mutation checkpoint or produced-file delta.
 - **AE6.** Continuation omits the extension and preserves the exact generation
   epoch, access, retention, cwd, harness, and profile. Any attempted rebinding is
   rejected. One CAS rejects same-session overlap without changing expiry and
@@ -1125,14 +1183,15 @@ caller responsible for acquisition. The temporary fork closes those seams.
   `allagents_workspace_non_resumable`; a fully purged predecessor returns the
   stock unknown-ID error. None rematerializes or substitutes an epoch.
 - **AE7.** Explicit UHP input files overlay only an editable private workspace
-  after its initial checkpoint and before agent launch. A read-only request with
-  workspace input files fails `allagents_workspace_read_only`; a runtime write
-  receives a filesystem read-only error with no copy-up or mode change.
+  after its initial checkpoint and durable candidate coverage begins, but before
+  agent launch. A read-only request with workspace input files fails
+  `allagents_workspace_read_only`; a runtime write receives a filesystem
+  read-only error with no copy-up or mode change.
 - **AE8.** Faults at pre-allocation generic session/tombstone admission,
   validate, selected-credential verification, resolve, keyed epoch claim/waiter
   cancellation, staging/generation reservation and publication-accounting
   conversion, containment, provisional pin, attachment prepare/ack, read-only
-  epoch reference/mount, editable reservation-transfer/copy/checkpoint, expiry,
+  epoch reference/mount, editable reservation-transfer/view/checkpoint, expiry,
   unmount, release, tombstone compaction, and deletion either reconcile to one
   complete protected resource or fail closed. No agent sees staging, duplicate
   live epoch publication, partial private state, or a generation without required
@@ -1165,7 +1224,7 @@ caller responsible for acquisition. The temporary fork closes those seams.
   changed auth fails before runner work. Missing generation/reference or private
   checkpoint returns the cataloged non-resumable error without replay. A
   `containment_pending` session remains non-terminal until its cgroup is empty;
-  interrupted builds, pins, copies, quota records, auth projections, tombstones,
+  interrupted builds, pins, views, quota records, auth projections, tombstones,
   compaction, and deletions reconcile without resurrection or double release.
 - **AE12.** The protected publish job releases the public `linux/amd64` GHCR
   package without Docker Hub credentials. Anonymous verification covers the
@@ -1202,8 +1261,8 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - Safe public egress enforcement, source-credential scope mapping, and optional
   project `workspace.yaml` snapshot-catalog additions.
 - Deterministic Git and immutable OCI generation construction.
-- Shared read-only mounts, private editable copies, mode-specific
-  root/nested-repository checkpoint and produced-file integration.
+- Shared read-only mounts, private writable views, mode-specific root/nested-
+  repository checkpoint and produced-file integration.
 - Session idle expiry, persistent authorization, operator deletion, bounded
   storage admission, restart reconciliation, and generation eviction.
 - Source credential isolation and native-OAuth trust-boundary verification.
@@ -1223,9 +1282,10 @@ caller responsible for acquisition. The temporary fork closes those seams.
   credential fallback.
 - Caller-provided credentials, non-HTTPS/private-network origins, commands, host
   paths, materializers, or Docker options.
-- Direct Harbor task-package ingestion, SWE-bench/Hugging Face dataset ingestion,
-  caller-selected runtime images, benchmark verifiers, or compatibility aliases
-  inside `allagents.workspace`.
+- Harbor provider execution remains a separate Promptfoo lane outside this plan.
+  Direct Harbor task-package ingestion, SWE-bench/Hugging Face dataset ingestion,
+  caller-selected runtime images, benchmark verifiers, and compatibility aliases
+  remain invalid inside `allagents.workspace`.
 - Public multi-tenancy, per-caller authorization, Kubernetes workers, session
   branching, concurrent turns in one session, or guaranteed prompt-cache hits.
 - Exact rollback of workspace mutations between successful session turns.
@@ -1264,7 +1324,7 @@ flowchart TB
   MAT --> OCI[configured OCI registry]
   RUN -->|atomic publish or reuse| GEN[(immutable generation store)]
   GEN -->|read-only mount + reference| RO[read-only session]
-  GEN -->|private copy| EDIT[editable session]
+  GEN -->|private writable view| EDIT[editable session]
   RO --> HARNESS[Selected Codex or Pi harness]
   EDIT --> HARNESS
   LIFE[(leases, retention, quotas, GC)] --> RO
@@ -1283,7 +1343,7 @@ state; it also owns generic metadata bounds, provider-loop ordering, response
 metadata, and optional proxy brokering. The runner owns keyed generation claims,
 the resource journal, hook invocation, independent verification, atomic
 publication, provisional pins, durable references, read-only mounts, private
-editable copies, mode-specific checkpoints, quota admission, deletion, GC, safe
+writable views, mode-specific checkpoints, quota admission, deletion, GC, safe
 cwd, and agent launch. Attachment uses a durable prepare/evidence/ack protocol:
 the runner prepares resources, the gateway alone commits `ready`, and the runner
 finalizes or rolls back from that acknowledgement. The selected harness owns
@@ -1568,7 +1628,7 @@ digest and every declared semantic Git-state record. Access, retention, cwd,
 harness/profile, and session identity are not manifest fields and cannot
 fragment or mutate generation content. The backing tree, including validated
 `.git` state, becomes owner-writable only and is exposed to sessions solely
-through verified read-only mounts or independent private editable copies.
+through verified read-only mounts or private writable views.
 
 The frozen history-bearing fixture is:
 
@@ -1623,7 +1683,7 @@ error object in `response.error`; workspace failures use
 | `allagents_workspace_persistence_forbidden` | failed response when `persistent` retention is not authorized for the selected deployment target | no |
 | `allagents_workspace_read_only` | failed response when a read-only initial request contains workspace input files or attachment policy would create writable shadow state | no |
 | `allagents_workspace_capacity_exceeded` | HTTP 503 `server_error` before response allocation when generic session/tombstone admission cannot reserve capacity; otherwise a failed response when finite staging, generation, private, session, or persistence capacity cannot be reserved after safe eviction | yes |
-| `allagents_workspace_private_quota_exceeded` | failed response when an editable waiter's initial generation copy cannot fit or an attached editable turn exhausts its fixed per-session byte or inode allowance; access and retention remain unchanged | no |
+| `allagents_workspace_private_quota_exceeded` | failed response when an editable waiter's private view cannot fit the complete generation or an attached editable turn exhausts its fixed per-session byte or inode allowance; access and retention remain unchanged | no |
 | `allagents_workspace_source_auth_failed` | failed response for Git or registry credential rejection | no |
 | `allagents_workspace_acquisition_failed` | failed response when Git, registry, HTTP, or transport I/O prevents complete byte acquisition; excludes digest, schema, and limit failures | no |
 | `allagents_workspace_limit_exceeded` | failed response for source/archive/manifest repository, entry, byte, layer, file, path, or header limits | no |
@@ -1633,8 +1693,8 @@ error object in `response.error`; workspace failures use
 | `allagents_workspace_manifest_invalid` | failed response for workspace-manifest media type, schema, canonical bytes, or declared digest | no |
 | `allagents_workspace_integrity_mismatch` | failed response for source descriptor digest/size mismatch, validated/resolved-plan or generation-key drift, staging/manifest mismatch, semantic Git-state failure, or corrupt ready generation | no |
 | `allagents_workspace_publication_failed` | failed response for generation claim/publication/marker failure | no |
-| `allagents_workspace_attachment_failed` | failed response for read-only mount/reference or private editable copy/publication failure | no |
-| `allagents_workspace_checkpoint_failed` | failed response for editable root/nested checkpoint or collection-baseline failure | no |
+| `allagents_workspace_attachment_failed` | failed response for read-only mount/reference or private writable-view publication failure | no |
+| `allagents_workspace_checkpoint_failed` | failed response for editable root/nested checkpoint or protected collection-state failure | no |
 | `allagents_workspace_state_failed` | failed response for generation/session/pin/reference/quota/expiry/tombstone/purge persistence or CAS failure | no |
 | `allagents_workspace_containment_breach` | failed response for completed-parent/live-descendant even if forced kill succeeds; an unquiescent leaf remains internal until restart proves it empty | no |
 
@@ -1736,17 +1796,23 @@ into successful empty output and performs no automatic retry.
   Never attach `building`, quarantined, or deleting state.
 - **Read-only escape or writable alias:** Keep the generation backing store
   owner-writable only, verify mount flags and mount topology, forbid writable
-  bind aliases and hard-linked private copies, and probe writes through root,
-  nested repositories, symlinks, and alternate paths.
-- **Editable cross-session leakage or growth:** Create a unique private tree and
-  checkpoint namespace per fitting session, verify inode separation, reject only
-  a waiter whose initial copy cannot fit, reserve its full byte/inode allowance
-  from global capacity, enforce that hard quota through every continuation, and
-  scan produced files against only its private baseline.
+  bind aliases and hard-link aliases, and probe writes through root, nested
+  repositories, symlinks, and alternate paths.
+- **Editable cross-session leakage or growth:** Create a unique private writable
+  view and checkpoint namespace per fitting session, prove that no mutable state
+  or writable alias is shared, reject only a waiter whose initial view cannot
+  fit, reserve its full byte/inode allowance from global capacity, and enforce
+  that hard quota through every continuation.
+- **Produced-file drift or expensive full inventories:** Use the verified
+  generation as the first-turn baseline and retain only protected cumulative
+  path state that differs from it. Verify trusted candidates after quiescence;
+  if candidate state is incomplete, overflowed, or uncertain after recovery,
+  perform a bounded no-follow full-tree scan. Never trust editable `.git`,
+  agent-supplied paths, or final ignore rules.
 - **Nested Git versus mode-specific checkpoints:** Preserve repository `.git`
   state inside the generation. Read-only sessions do not mutate or checkpoint
-  it; editable copies ignore declared roots in the HarnessRouter root index and
-  extend list/file/ack/checkpoint/hydrate across private nested repositories.
+  it; editable views preserve private Git state for continuation while
+  collection uses only protected generation and turn state.
 - **Lease, expiry, and deletion races:** Linearize unexpired-idle or persistent
   turn admission against tombstoning; hold a provisional pin through attachment
   prepare/ack; persist exact epoch references before mount exposure; recheck
@@ -1767,8 +1833,8 @@ into successful empty output and performs no automatic retry.
   and persist a ready marker; retry cannot resolve, build, attach, or change
   source/access/retention/auth mode.
 - **Source credential leakage:** Use subprocess-only source credentials,
-  hermetic configuration, leak scans across staging/generations/private copies,
-  and a non-escapable cgroup boundary proven empty before result handling.
+  hermetic configuration, leak scans across staging, generations, and private
+  views, and a non-escapable cgroup boundary proven empty before result handling.
 - **Native OAuth exposure:** Treat the selected profile as available to its
   harness and same-identity tools only during an active turn. Use a
   same-filesystem namespace projection, mount no other profile, never copy it to
@@ -1801,9 +1867,9 @@ into successful empty output and performs no automatic retry.
 3. Workspace lifecycle fork spike: a fake `preflight/validate/resolve/materialize`
    hook, concurrent identical epoch claims, independently cancelled waiters, one
    immutable publication, provisional pins, two read-only mounts, one quota-
-   bounded private editable copy, per-waiter copy-fit failure, attachment
+   bounded private writable view, per-waiter view-fit failure, attachment
    prepare/ack, epoch eviction/republication, and restart reconciliation.
-4. Prove read-only enforcement, writable-copy isolation and growth limits,
+4. Prove read-only enforcement, writable-view isolation and growth limits,
    mode-specific checkpoint/collection, nested cwd, provider-fallback non-reentry,
    and unexpired/persistent continuation reuse. Stop if any invariant needs prompt
    or client cooperation.
@@ -1881,7 +1947,7 @@ into successful empty output and performs no automatic retry.
   one immutable generation, attach it in both access modes, and reconcile its
   lifecycle before provider dispatch while preserving stock UHP.
 - **Repositories/files:** HarnessRouter fork `gateway/app.py`,
-  `runner/server.py`, generation/session persistence, mount/copy and
+  `runner/server.py`, generation/session persistence, mount/view and
   checkpoint/produced-file helpers, runner/gateway tests, and a fake
   preflight/validate/resolve/materialize hook.
 - **Approach:** Add opaque metadata bounds, typed operation envelopes,
@@ -1889,21 +1955,27 @@ into successful empty output and performs no automatic retry.
   independent waiter cancellation, separate generation/resource and gateway
   session CAS state, canonical manifest fixtures, atomic publication,
   provisional pins, attachment prepare/ack, durable epoch references, verified
-  read-only mounts, per-waiter copy-fit and unique hard-quota-bounded editable
-  copies, mode-specific checkpoint/collection, safe nested cwd, stage-dependent
-  response metadata, and cgroup containment. Add fake finite TTL, persistence,
-  tombstone, quota, deletion, and epoch-republication state sufficient to prove
-  restart ordering; U3 completes production policy and GC.
+  read-only mounts, per-waiter fit checks and unique hard-quota-bounded private
+  writable views, mode-specific checkpoints, protected sparse collection state,
+  candidate verification with full-scan fallback, safe nested cwd,
+  stage-dependent response metadata, and cgroup containment. Add fake finite TTL,
+  persistence, tombstone, quota, deletion, and epoch-republication state
+  sufficient to prove restart ordering; U3 completes production policy and GC.
 - **Verification:** Upstream UHP conformance stays green. Two concurrent
   identical read-only initial requests execute fake materialize once, attach the
   same generation under separate UIDs and harness/profile bindings, deny writes
   through root/nested/symlink/alternate paths, and isolate runtime state. Two
-  editable sessions receive inode-independent private trees; one mutation and
-  checkpoint never appears in the other or generation. Continuation reuses its
-  original mode and state without the extension.
+  editable sessions receive private writable views; one mutation and checkpoint
+  never appears in the other or generation. Continuation reuses its original
+  mode and state without the extension. A large clean fixture creates no
+  redundant pre-agent inventory. Candidate collection and forced full-scan
+  fallback produce the same per-turn source-visible delta. Both exclude changes
+  to the protected declared `.git` subtrees while counting source-visible ignore
+  files and an agent-created `.git` elsewhere; a coverage gap before a UHP input
+  overlay forces the full scan.
 
   Fault every validate/resolve/claim/waiter/containment/publication/pin/
-  prepare/ready-ack/reference/mount/copy/quota/checkpoint/CAS boundary. The runner
+  prepare/ready-ack/reference/mount/view/quota/checkpoint/CAS boundary. The runner
   rejects forged manifests, changed staging, escaping links, invalid repository
   destinations, writable aliases, and generation-key drift. Restart exposes only
   a complete publication plus valid attachment evidence; provider fallback never
@@ -1984,7 +2056,7 @@ into successful empty output and performs no automatic retry.
   access, retention, expiry, attachment evidence, and auth binding. Implement
   active leases, terminal-time idle expiry, bounded tombstones and purge,
   authorized persistent pins, provisional attachment pins, fixed private
-  byte/inode reservations and runtime enforcement, per-waiter initial copy fit,
+  byte/inode reservations and runtime enforcement, per-waiter initial view fit,
   editable cleanup, read-only epoch-reference release, deterministic eviction of
   ready zero-reference/zero-pin epochs, completed-eviction fencing before
   republication, deletion quarantine, and startup reconciliation. Extend every
@@ -2019,7 +2091,7 @@ into successful empty output and performs no automatic retry.
   capacity returns the cataloged retryable failure.
 
   Crash every generation-epoch/session/build-waiter/pin/prepare/ready-ack/
-  reference/mount/copy/quota/tombstone/unmount/purge/delete transition and require
+  reference/mount/view/quota/tombstone/unmount/purge/delete transition and require
   reconciliation before readiness or GC. Continuation succeeds only for valid
   exact-epoch evidence whose retention is persistent or session idle deadline is
   unexpired; retained expiry returns 410, corrupt evidence returns 409
@@ -2048,9 +2120,10 @@ into successful empty output and performs no automatic retry.
   detached `HEAD`, index/tree equality, exact object closure and digest, exact
   worktree/commit equality, closed refs/config, and the absence of remotes,
   credentials, and unsafe administrative state. Reject `.git` in tree-only or
-  undeclared locations. A runnable Harbor or SWE-bench instance image still
-  requires an explicit adapter/transform and is never relabeled as a workspace
-  source snapshot. The runner remains the sole publisher/resource preparer and
+  undeclared locations. Runnable Harbor and SWE-bench environments remain
+  outside `allagents.workspace`; Promptfoo invokes Harbor through its separate
+  provider lane. They are never relabeled as workspace source snapshots. The
+  runner remains the sole publisher/resource preparer and
   the gateway the sole session-attachment writer.
 - **Verification:** Distribution fixtures cover exact request-field naming,
   `snapshotName` lookup, direct `imageManifestDigest` enforcement, workspace-
@@ -2065,8 +2138,8 @@ into successful empty output and performs no automatic retry.
   foreign media, traversal, links, devices, sparse files, cancellation, cleanup,
   no Git fallback, and exact error precedence. Concurrent identical OCI requests
   produce one publication; read-only sessions share it; editable sessions get
-  private copies; access, retention, cwd, harness/profile, and session do not
-  fragment its generation key.
+  private writable views; access, retention, cwd, harness/profile, and session
+  do not fragment its generation key.
 
 ### U5. Harness-native OAuth, optional proxy, and Promptfoo E2E
 
@@ -2091,7 +2164,7 @@ into successful empty output and performs no automatic retry.
   Same-profile cross-session overlap retains the cataloged fail-fast result;
   same-session overlap returns `session_busy`; idempotent duplicates share one
   admission/result. Editable turn two sees turn one's mutation; a different trial
-  sees a clean private copy.
+  sees a clean private writable view.
 
   Real-image lifecycle probes cover terminal-time TTL, retained-expiry HTTP 410,
   purged-predecessor stock failure, HTTP 409 non-resumable, authorized
@@ -2152,7 +2225,8 @@ into successful empty output and performs no automatic retry.
 | Shared-build cancellation | One request cancellation/deadline detaches only that waiter. A build continues for remaining live waiters, stops when none remain or its runner-owned deadline expires, and produces at most one publication/failure for its epoch. |
 | Manifest integrity | Git and OCI share one source-visible schema with pairwise non-overlapping repository destinations. A root may omit `.git` only when its manifest item declares history and the runner validates the detached commit, exact index/tree and object set, exact source-visible worktree, closed configuration and refs, and safe administrative state. Tree-only and undeclared `.git` fail. Git-acquired content equals the union of resolved commit trees at their destinations plus necessary ancestors. Plan/key drift, undeclared paths, forged manifests, changed staging, invalid paths/types/links/destinations, semantic Git mismatch, and digest mismatch fail before publication. |
 | Shared read-only generation | Concurrent sessions using different harnesses/profiles share one exact generation epoch. Root, nested, symlink, and alternate-path writes fail; runtime/session/auth/output state remains isolated. |
-| Editable isolation | Every fitting editable trial receives an inode-independent private tree and reserved hard byte/inode allowance covering overlays/checkpoints/produced state. A non-fitting waiter fails alone; continuation preserves a fitting trial's mutations but cannot grow past its envelope; siblings and the generation remain unchanged. |
+| Editable isolation | Every fitting editable trial receives a private writable view with no mutable state shared with the generation or another session, plus a reserved hard byte/inode allowance covering overlays, checkpoints, and produced state. A non-fitting waiter fails alone; continuation preserves a fitting trial's mutations but cannot grow past its envelope. |
+| Produced-file integrity | A clean first turn creates no redundant full-workspace inventory. Candidate tracking is durably active before input overlays or writable process exposure and remains active through quiescence; a missing or discontinuous coverage marker forces the bounded no-follow full scan. Candidate and full-scan paths produce the same source-visible additions, deletions, type/mode changes, and content changes. Both exclude only the declared Git administrative subtrees recorded by the protected generation, report an agent-created `.git` elsewhere as ordinary content, and ignore final Git discovery, ignore rules, and agent-supplied path lists. Continuation derives its delta from protected prior turn state. |
 | Materializer containment | Fork/double-fork/cancellation/deadline fixtures prove `populated 0` before result read, publication, secret release, or cleanup. `containment_pending` blocks terminal visibility/readiness through restart and resolves once after quiescence. |
 | Capacity envelope | Native profiles retain one active turn and zero waiters. Source build limits and finite staging/generation/private-byte/private-inode/session/persistence/tombstone quotas reject overflow. Invalid descriptors cannot bypass generic admission; one editable session creates one private debit; successful publication releases staging capacity. References and provisional pins prevent eviction; all-protected capacity returns the cataloged retryable failure. |
 | Durable lifecycle | Fault injection covers generic and provisional turn admission, active leases, generation epochs, build/staging/generation reservations, publication/accounting conversion, build waiters, provisional pins, attachment prepare/ready-ack and private-reservation transfer, references, mounts, private usage, expiry, tombstones/purge, unmount, deletion, quarantine, and GC. Startup reconciles before readiness; no deadline extends, no debit duplicates/leaks, no second epoch appears before prior eviction completes, and no session silently rematerializes. |
@@ -2160,7 +2234,7 @@ into successful empty output and performs no automatic retry.
 | Session continuity | Both modes preserve conversation and fixed generation key/epoch/access/retention/cwd/harness/auth binding while persistent or unexpired; editable preserves private files; read-only remains immutable. Corrupt known evidence returns HTTP 409 non-resumable with no source access or later-epoch substitution. |
 | Git acquisition | Caller-supplied canonical HTTPS URLs, public-address egress enforcement, DNS-rebinding and redirect defense, structured-scope credential isolation, constrained refs, exact commits, closed transport/config, exact object closure/index semantics, generation reuse, and partial cleanup pass against local network fixtures. |
 | OCI acquisition | Digest/media/path/link/type/limit checks, tree-only and normalized offline-history fixtures, producer removal and materializer rejection of remotes and credentials, semantic Git verification, generation reuse, and the attachment matrix pass against a local registry. |
-| Credential boundary | Preflight sees no secret values and returns bounded configured reference identities; validate selects a bounded subset; the runner verifies handles and injects only that selected set into source-access children. Source secrets and caller keys are absent from staging, generations, private trees, base environments, checkpoints, backups, logs, and output. The selected OAuth profile is visible only through its active-turn projection, which is absent before acknowledgement and after restart reconciliation. |
+| Credential boundary | Preflight sees no secret values and returns bounded configured reference identities; validate selects a bounded subset; the runner verifies handles and injects only that selected set into source-access children. Source secrets and caller keys are absent from staging, generations, private views, base environments, checkpoints, backups, logs, and output. The selected OAuth profile is visible only through its active-turn projection, which is absent before acknowledgement and after refresh finalization, including failure, cancellation, restart, and continuation. Same-profile overlap fails before allocation; the active harness and same-identity tools remain an explicit owner-trust boundary. |
 | Provider boundary | Codex/Pi native OAuth, refresh repair, projection teardown, idempotency/session/profile admission, different-profile concurrency, same-profile fail-fast exclusion, and explicit proxy scope all pass without implicit switching. |
 | Packaging | The public GHCR digest and provenance/SBOM attestations verify exact inputs; deployment uses that digest and finite lifecycle configuration. |
 | Consumer | Promptfoo concurrent/one-shot/two-turn/lifecycle success and every cataloged or UHP terminal failure map exactly. Active streams expose null expiry; terminal/GET/replay expose one stable expiry. Failures before attachment ready omit workspace metadata; later terminal failures include the complete public object. None becomes empty success or automatic retry. |
@@ -2195,11 +2269,13 @@ into successful empty output and performs no automatic retry.
 - Concurrent read-only sessions with different harness/profile bindings share
   generation bytes but no mutable runtime, auth, conversation, output, or
   lifecycle state. Filesystem probes prove no writable path or copy-up.
-- Each fitting editable trial has a private writable tree with no mutable inode
+- Each fitting editable trial has a private writable view with no mutable state
   shared with the generation or another session. Its reserved hard byte/inode
   allowance covers every turn, overlay, checkpoint, and produced-file record.
-  Non-fitting waiters fail independently. Continuation preserves only its own
-  mutations and produced-file history.
+  Non-fitting waiters fail independently. Collection uses the verified generation
+  plus protected sparse turn state, produces the same delta through candidate and
+  full-scan paths, and never trusts editable Git metadata. Continuation preserves
+  only its own mutations and produced-file history.
 - Generation publication and every validate/resolve/materialize result remain
   behind cgroup quiescence, exact commit-tree/source-visible manifest and semantic
   Git validation, full physical accounting, atomic reservation conversion,

@@ -198,9 +198,9 @@ caller responsible for acquisition. The temporary fork closes those seams.
 - **Keep benchmark task/environment identity separate from workspace source.**
   Harbor task repositories and `environment.docker_image`, and SWE-bench/Hugging
   Face `repo`, `base_commit`, and instance images, are adapter inputs. A runnable
-  benchmark image is not an AllAgents source-only `workspaceSnapshot`; direct
-  task packages, environment images, and verifiers need a separate versioned
-  boundary if added later.
+  benchmark image is not an AllAgents workspace source artifact. A snapshot may
+  contain normalized offline Git history, but direct task packages, environment
+  images, and verifiers need a separate versioned boundary if added later.
 - **Prefer harness-native OAuth.** Promptfoo's HarnessRouter API key authenticates
   the UHP caller only. Codex and Pi use their own login, token storage, refresh,
   and provider request path; native mode has no provider-route API key.
@@ -361,10 +361,12 @@ caller responsible for acquisition. The temporary fork closes those seams.
   commits or the exact OCI `imageManifestDigest` and
   `workspaceManifestDigest`, normalized destinations, `snapshotName` when
   applicable, and acquisition/egress policy version. Access, retention, logical
-  cwd, harness/profile, session identity, physical paths, credential values, and
-  volatile Git administrative representation do not fragment that key.
-  Publication binds it to the independently verified workspace-manifest digest
-  and semantic Git record when applicable.
+  cwd, harness/profile, session identity, physical paths, and credential values
+  do not fragment that key. In repository mode, volatile Git pack, index, and
+  stat representation also does not fragment it. OCI reuse is artifact-exact:
+  repacking a snapshot changes its image digest and therefore its generation key
+  even when its semantic Git state is unchanged. Publication binds the key to the
+  independently verified workspace-manifest digest and every semantic Git record.
   Omitted and explicit default values have the same effective descriptor digest.
   The raw request descriptor digest records the exact initial JSON only in
   private session state; public response metadata names and returns only
@@ -649,23 +651,44 @@ caller responsible for acquisition. The temporary fork closes those seams.
   entry's configured workspace-manifest media type and address the canonical
   bytes selected by `workspaceManifestDigest`; redirects may not change registry
   authority. Verify both named manifests plus every layer size and digest before
-  use; apply OCI whiteouts;
-  limit the image manifest to 4 MiB, the workspace-manifest blob to 128 MiB,
-  its `repositories` array to 128 items, total compressed layers to 8 GiB,
-  expanded bytes to 32 GiB, entries to 500,000, one regular file to 4 GiB, paths
-  to 4096 UTF-8 bytes and 128 components, and one PAX/extended header to 1 MiB.
-  The runner independently rejects a 129th repository root even when the archive
-  and fetched manifest otherwise agree. Reject devices,
-  sockets, traversal, escaping links, sparse files, unknown or foreign layers,
-  mutable tags, and undeclared output. Recompute the canonical workspace
-  manifest from staging and require it to match both the fetched manifest bytes
-  and `workspaceManifestDigest`. Snapshot mode rejects `.git` administrative
-  subtrees; snapshots that require Git history use repository mode. After
-  publication the runner creates private collection baselines from the verified
-  trees so later produced-file reporting remains truthful.
+  use; apply OCI whiteouts; limit the image manifest to 4 MiB, the workspace-
+  manifest blob to 128 MiB, its `repositories` array to 128 items, total
+  compressed layers to 8 GiB, expanded bytes to 32 GiB, entries to 500,000, one
+  regular file to 4 GiB, paths to 4096 UTF-8 bytes and 128 components, and one
+  PAX/extended header to 1 MiB. The runner independently rejects a 129th
+  repository root even when the archive and fetched manifest otherwise agree.
+  Reject devices, sockets, traversal, escaping links, sparse files, unknown or
+  foreign layers, mutable tags, and undeclared output.
 
-  Both source modes produce the same reusable immutable-generation abstraction.
-  Repository `.git` state is readable but immutable in `readOnly` attachments and
+  Each snapshot repository root is either tree-only or declares
+  `git: { resolvedCommit, objectSetDigest }` in the workspace manifest. Snapshot
+  destinations are pairwise non-overlapping. A tree-only root rejects `.git`. A
+  history-bearing root must contain one `.git` directory at its destination.
+  The producer must normalize it before publication; the materializer
+  independently verifies the detached `HEAD`, exact index/tree, complete
+  transitive object closure, and canonical object set required by repository
+  mode. It reads the declared commit tree and requires every source-visible
+  descendant of that destination to equal it, with no staged, dirty, missing, or
+  untracked path. It rejects rather than repairs nonconforming state and requires
+  the computed digest to equal `objectSetDigest`.
+
+  Snapshot Git state is offline: reject every remote, branch-upstream setting,
+  credential helper, config include, hook, worktree link, alternate, shallow,
+  replace, graft, reflog, `FETCH_HEAD`, extra ref, unreachable object, and
+  credential-bearing configuration. The Git administrative state contains no
+  configured remote, and no Git remote URL appears in the workspace manifest or
+  returned provenance. Exclude only declared and
+  verified `.git` subtrees from source-visible entries; any other `.git` path
+  fails integrity validation.
+  Physical Git entries and bytes still count toward acquisition and
+  retained-generation limits.
+
+  Recompute the canonical workspace manifest from staging and require it to
+  match both the fetched manifest bytes and `workspaceManifestDigest`. After
+  publication the runner creates private collection baselines from the verified
+  trees so later produced-file reporting remains truthful. Both source modes
+  produce the same reusable immutable-generation abstraction. Validated `.git`
+  state from either mode is readable but immutable in `readOnly` attachments and
   independently writable only in private `editable` copies. Generation
   acquisition limits apply per build; retained-generation and private-workspace
   quotas apply independently.
@@ -679,6 +702,10 @@ caller responsible for acquisition. The temporary fork closes those seams.
   bounded fields: extension version, `effectiveDescriptorDigest`, public
   `generationId`, canonical workspace-manifest digest, logical cwd, access,
   resolved retention, source completeness, and resolved Git/OCI provenance.
+  Snapshot `sourceIdentity` retains `snapshotName` and `imageManifestDigest` and
+  mirrors each verified root's `destination` and optional `git` declaration in
+  the exact shape below. History-bearing roots expose `resolvedCommit` and
+  `objectSetDigest`, but no Git remote URL.
   `generationId` is the SHA-256 digest of versioned RFC 8785 bytes containing
   only the returned normalized source provenance, normalized destinations, and
   workspace-manifest digest. It is metadata-only and is never a cache,
@@ -961,17 +988,17 @@ caller responsible for acquisition. The temporary fork closes those seams.
 
 #### F4. Execute an OCI-backed first turn
 
-1. The caller selects one configured snapshot and immutable manifest/workspace
-   digests; it never sends the registry origin or credential.
+1. The caller selects one configured snapshot and immutable image/workspace-
+   manifest digests; it never sends the registry origin or credential.
 2. Resolve computes the OCI generation key. A ready epoch is reused. Otherwise a
-   current claim is joined or, after completed eviction, a new epoch owner
-   fetches and verifies the direct manifest, config, workspace manifest, and
-   layers; applies changesets under fixed limits; and returns verified staging
-   and provenance.
+   current claim is joined or, after completed eviction, a new epoch owner fetches
+   and verifies the direct manifest, config, workspace manifest, and layers;
+   applies changesets under fixed limits; validates every declared offline Git
+   root; and returns verified staging, semantic Git records, and provenance.
 3. The runner publishes the same immutable-generation-epoch abstraction as Git,
    then follows the same per-waiter read-only or editable attachment path.
-   Registry, digest, media, path, limit, or layout failure removes only
-   unpublished staging and enters neither Git nor provider fallback.
+   Registry, digest, media, path, limit, layout, or semantic Git failure removes
+   only unpublished staging and enters neither Git nor provider fallback.
 
 #### F5. Cancel, fail, or restart
 
@@ -1111,13 +1138,18 @@ caller responsible for acquisition. The temporary fork closes those seams.
   live epoch publication, partial private state, or a generation without required
   protection. Every reservation, pin, and reference debits and releases exactly
   once. Provider fallback never reruns the hook.
-- **AE9.** OCI mode accepts a valid digest-pinned fixture with gzip/zstd layers
-  and whiteouts and rejects mutable tags, indexes, mismatched digests/sizes,
-  traversal, escaping links, devices, sparse files, unknown media types, and
-  declared-limit overflow. Repeated Git and OCI requests with identical resolved
-  plan, sharing authorization, and selected credential-reference identities reuse
-  their matching epoch regardless of access, retention, cwd, harness, profile, or
-  session.
+- **AE9.** OCI mode accepts valid digest-pinned tree-only and history-bearing
+  fixtures with gzip/zstd layers and whiteouts. The history fixture has no
+  remotes or credentials and supports offline `git log`, `git blame`, and
+  historical diff from its declared detached commit. OCI rejects undeclared
+  `.git`, overlapping repository destinations, remote or credential
+  configuration, unsafe Git administrative state, dirty or untracked worktree
+  content, commit-tree or object-set mismatch, mutable tags, indexes, mismatched
+  digests/sizes, traversal, escaping links, devices, sparse files, unknown media
+  types, and declared-limit overflow. Repeated Git and OCI requests with
+  identical resolved plan, sharing authorization, and selected credential-
+  reference identities reuse their matching epoch regardless of access,
+  retention, cwd, harness, profile, or session.
 - **AE10.** Codex and Pi own login and refresh. Missing, revoked, expired,
   unrefreshable, or stale-after-crash OAuth affects only that profile and never
   selects another profile or proxy. Same-key arrivals share one admission and
@@ -1348,6 +1380,34 @@ Successful terminal response metadata fragment:
 }
 ```
 
+For snapshot source, `sourceIdentity` has this exact shape:
+
+```json
+{
+  "kind": "workspaceSnapshot",
+  "complete": true,
+  "snapshotName": "benchmark-fixture",
+  "imageManifestDigest": "sha256:...",
+  "repositories": [
+    {
+      "destination": "api",
+      "git": {
+        "resolvedCommit": "0123456789abcdef0123456789abcdef01234567",
+        "objectSetDigest": "sha256:..."
+      }
+    },
+    {
+      "destination": "docs"
+    }
+  ]
+}
+```
+
+The sorted `repositories` array mirrors the verified workspace-manifest root
+declarations. The top-level response field carries `workspaceManifestDigest`.
+Snapshot identity retains `snapshotName` and `imageManifestDigest`; repository
+subrecords contain no `url` or `requestedRef`.
+
 ### Materializer Hook Contract
 
 HarnessRouter configuration names one metadata key, absolute executable path,
@@ -1432,18 +1492,34 @@ The source tree includes one generated normative
 `workspace-manifest.schema.json`, imported unchanged by the Git materializer,
 OCI producer/materializer, runner validator, and their contract fixtures. The
 document is at most 128 MiB and is an object with `additionalProperties: false`,
-required string `version` fixed to `"1"`, required `repositories`, and required
+required string `version` fixed to `"2"`, required `repositories`, and required
 `entries`.
 
 `repositories` is an array with at most 128 items. Every item is an object with
-`additionalProperties: false` and exactly one required string field,
-`destination`, validated as a non-root `RelativeDirectory`. Destinations are
-unique and items are sorted by the UTF-8 bytes of the NFC-normalized destination.
-Every destination must exactly equal the `path` of a directory entry in the same
-manifest. Duplicate destinations, missing destination entries, and destinations
-naming files or symbolic links are invalid even when the manifest digest is
-correct. Repository roots are identified by destination in the generation-scoped
-manifest and semantic Git-state record.
+`additionalProperties: false`, required `destination`, and optional `git`.
+`destination` is a non-root `RelativeDirectory`. When present, `git` is an
+object with `additionalProperties: false` and exactly two required string
+fields: `resolvedCommit`, a full lowercase 40-hex commit ID, and
+`objectSetDigest`, a `sha256:` digest of the canonical object-set bytes defined
+below. Absence of `git` declares a tree-only root.
+Destinations are unique, pairwise non-overlapping, and sorted by the UTF-8 bytes
+of the NFC-normalized destination. Every destination must exactly equal the
+`path` of a directory entry in the same manifest. Duplicate, ancestor/descendant,
+or missing destinations, and destinations naming files or symbolic links, are
+invalid even when the manifest digest is correct. Repository roots are
+identified by destination in the generation-scoped manifest and any semantic
+Git-state record.
+
+Canonical object-set bytes use ASCII and Git SHA-1 object IDs. Starting at
+`resolvedCommit`, enumerate each unique reachable commit, tree, and blob,
+including all commit parents and their trees. Sort records by the ASCII bytes of
+the 40-character lowercase object ID. Emit exactly
+`<object-id> SP <type> SP <size> LF` for each object, where `type` is `commit`,
+`tree`, or `blob`, and `size` is the unpadded base-10 byte length of the
+uncompressed object content. There is one ASCII space at each `SP`, every record
+ends in LF including the last, and no other bytes are present. `objectSetDigest`
+is the SHA-256 of that concatenation. Pack layout, compression, offsets, and
+filenames do not participate.
 
 `entries` is an array with at most 500,000 items. Every item has
 `additionalProperties: false` and is exactly one of:
@@ -1463,43 +1539,67 @@ and NFC; implementations reject rather than normalize non-UTF-8 or non-NFC
 values. Paths and targets containing NUL, absolute paths, missing parents, or
 links escaping the workspace are invalid. The root is implicit and has no entry.
 Hard links are expanded to regular-file entries. Entries enumerate every
-source-visible path. In repository mode only, each declared repository's
-separately validated `.git` directory and descendants are omitted because
-volatile pack/index layout is not source identity; no other path may be omitted.
+source-visible path. A repository item with `git` may omit only its separately
+validated `.git` directory and descendants; an item without `git` may omit
+nothing and must not contain `.git`. Any `.git` outside a declared history-
+bearing repository root is invalid.
 
-The digest is `sha256:` plus the lowercase SHA-256 of the RFC 8785 bytes. Git
-mode computes those bytes after completing staging and performs the separate
-semantic `.git` validation required by R10. OCI mode rejects `.git`
-administrative subtrees, requires its configured workspace-manifest blob to
-contain the same canonical bytes, and copies them to the private result root.
+The digest is `sha256:` plus the lowercase SHA-256 of the RFC 8785 bytes.
+Repository mode computes those bytes after completing staging and adds `git`
+metadata from its resolved commits. OCI mode requires its configured workspace-
+manifest blob to contain the canonical bytes, including any declared offline Git
+metadata, and copies them to the private result root.
+
 The runner resolves only the fixed `workspace-manifest.json` relative path,
 validates it against the shared schema, verifies its size and digest, walks
-staging without following links, reconstructs the same catalog and entries while
-skipping only approved Git administrative roots, and requires byte-for-byte
-canonical equality before publication. It separately revalidates every skipped
-Git root against the resolved commit and safe-state rules. The private result
-root is never published or exposed through UHP.
+staging without following links, reconstructs the same catalog and source-visible
+entries while skipping only declared Git administrative roots, and requires
+byte-for-byte canonical equality before publication. It separately revalidates
+every skipped Git root against its declared commit, exact object set, closed
+configuration and refs, and safe-state rules. For each history-bearing root, the
+manifest descendants must equal the prefixed commit tree exactly; dirty,
+untracked, missing, or modified paths fail. The private result root is never
+published or exposed through UHP.
 
 The immutable generation key is not the workspace-manifest digest: it is the
 pre-build digest of the resolved source plan used for keyed reuse. Atomic
 publication binds that key to exactly one verified source-visible manifest
-digest and, in repository mode, one semantic Git-state record for the resolved
-commits. Access, retention, cwd, harness/profile, and session identity are not
-manifest fields and cannot fragment or mutate generation content. The backing
-tree, including validated `.git` state, becomes owner-writable only and is
-exposed to sessions solely through verified read-only mounts or independent
-private editable copies.
+digest and every declared semantic Git-state record. Access, retention, cwd,
+harness/profile, and session identity are not manifest fields and cannot
+fragment or mutate generation content. The backing tree, including validated
+`.git` state, becomes owner-writable only and is exposed to sessions solely
+through verified read-only mounts or independent private editable copies.
 
-The frozen cross-repository fixture is:
+The frozen history-bearing fixture is:
 
 ```json
-{"entries":[{"mode":"040755","path":"services","type":"directory"},{"mode":"040755","path":"services/api","type":"directory"},{"mode":"100644","path":"services/api/README.md","sha256":"sha256:98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4","size":3,"type":"file"},{"mode":"120000","path":"services/api/current","target":"README.md","type":"symlink"}],"repositories":[{"destination":"services/api"}],"version":"1"}
+{"entries":[{"mode":"040755","path":"services","type":"directory"},{"mode":"040755","path":"services/api","type":"directory"},{"mode":"100644","path":"services/api/README.md","sha256":"sha256:98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4","size":3,"type":"file"},{"mode":"120000","path":"services/api/current","target":"README.md","type":"symlink"}],"repositories":[{"destination":"services/api","git":{"objectSetDigest":"sha256:b3b49d7b3ff3fd8c4fb3acbf7de36d92f6a4029f3244064f79e37408463288b5","resolvedCommit":"cd95f8951573f4e021ddb57594dd3376a2b2f644"}}],"version":"2"}
 ```
 
-Those exact bytes digest to
-`sha256:658d89a3127eb79b1479960d3f264456c42c170920cac79e0a6e1837db60d543`.
-The file bytes are `hi\n`. A change to the schema, fixture bytes, or digest is a
-versioned contract change, not an implementation detail.
+Those exact manifest bytes digest to
+`sha256:e870d43fa34f5f863ef7382e70844c4a2ebe86d79dac14505f005f4dda448e70`.
+The fixture is a two-commit SHA-1 repository. Parent
+`8884f45f3cf3e306cf0eeaa39febd41808151db5` contains `README.md` with bytes
+`old\n`. The declared head contains `README.md` with bytes `hi\n` and symlink
+`current` with target bytes `README.md`. Both commits use
+`Eval Fixture <fixture@example.invalid>` as author and committer, timestamps
+`0 +0000` and `1 +0000`, and messages `initial\n` and `current\n`,
+respectively. Its canonical object-set bytes are:
+
+```text
+3367afdbbf91e638efe983616377c60477cc6612 blob 4
+42061c01a1c70097d1e4579f29a5adf40abdec95 blob 9
+45b983be36b73c0788dc9cbcb76cbb80fc7bb057 blob 3
+4f5089b76757df68fb1b6b02be2c8da302d03550 tree 37
+785c0b097dc21d45f9726d412592b7609526c4c6 tree 72
+8884f45f3cf3e306cf0eeaa39febd41808151db5 commit 166
+cd95f8951573f4e021ddb57594dd3376a2b2f644 commit 214
+```
+
+Those bytes, including the final LF, digest to
+`sha256:b3b49d7b3ff3fd8c4fb3acbf7de36d92f6a4029f3244064f79e37408463288b5`.
+A change to the schema, fixture bytes, or either digest is a versioned contract
+change, not an implementation detail.
 
 ### Failure Contract
 
@@ -1931,30 +2031,42 @@ into successful empty output and performs no automatic retry.
 
 ### U4. Immutable OCI workspace materialization
 
-- **Goal:** Add OCI as the second immutable generation source without weakening
-  Git reuse, attachment, retention, or failure behavior.
-- **Files:** AllAgents OCI client, manifest/archive validator,
-  workspace-manifest types, deterministic producer fixture, local registry E2E,
-  generation fixtures, and security fixtures.
+- **Goal:** Add OCI as the second immutable generation source, including
+  tree-only and normalized offline-history snapshots, without weakening Git
+  reuse, attachment, retention, or failure behavior.
+- **Files:** AllAgents OCI client, manifest/archive and semantic Git validator,
+  workspace-manifest types, tree-only and history-bearing producer fixtures,
+  local registry E2E, generation fixtures, and security fixtures.
 - **Approach:** Resolve only configured registries; treat `snapshotName` as the
   operator catalog selector and `imageManifestDigest` as the required direct OCI
   image-manifest identity; implement bounded Basic/Bearer auth and exact-host
   redirects; compute the immutable resolved plan; on a generation miss verify
   the image manifest, config, `workspaceManifestDigest`, and layers while
-  streaming; reject `.git` administrative subtrees; apply staging changesets;
-  validate paths/types/limits/catalog; and return through the same envelope as
-  Git. A runnable Harbor or SWE-bench instance image requires an explicit
-  adapter/transform and is never relabeled as a source-only snapshot. The runner
-  remains the sole publisher/resource preparer and the gateway the sole session-
-  attachment writer.
+  streaming; apply staging changesets; validate paths, types, limits, and the
+  catalog; and return through the same envelope as Git. Reject overlapping
+  repository destinations. For each manifest root that declares `git`, validate
+  detached `HEAD`, index/tree equality, exact object closure and digest, exact
+  worktree/commit equality, closed refs/config, and the absence of remotes,
+  credentials, and unsafe administrative state. Reject `.git` in tree-only or
+  undeclared locations. A runnable Harbor or SWE-bench instance image still
+  requires an explicit adapter/transform and is never relabeled as a workspace
+  source snapshot. The runner remains the sole publisher/resource preparer and
+  the gateway the sole session-attachment writer.
 - **Verification:** Distribution fixtures cover exact request-field naming,
   `snapshotName` lookup, direct `imageManifestDigest` enforcement, workspace-
-  manifest equality, auth, private CA, compression, whiteouts, redirects,
-  rebinding, indexes, foreign media, traversal, links, devices, sparse files,
-  cancellation, cleanup, no Git fallback, and exact error precedence.
-  Concurrent identical OCI requests produce one publication; read-only sessions
-  share it; editable sessions get private copies; access, retention, cwd,
-  harness/profile, and session do not fragment its generation key.
+  manifest equality, tree-only snapshots, offline history with no configured
+  remote, `git log`/`git blame`/historical diff in read-only and editable
+  attachments, private editable Git-state isolation, exact commit/object-set/
+  worktree mismatch, overlapping destinations, producer removal and materializer
+  rejection of remote or credential configuration, forbidden config/includes/
+  hooks/alternates/worktrees/shallow/replace/graft/ref/reflog state, undeclared
+  `.git`, physical accounting,
+  auth, private CA, compression, whiteouts, redirects, rebinding, indexes,
+  foreign media, traversal, links, devices, sparse files, cancellation, cleanup,
+  no Git fallback, and exact error precedence. Concurrent identical OCI requests
+  produce one publication; read-only sessions share it; editable sessions get
+  private copies; access, retention, cwd, harness/profile, and session do not
+  fragment its generation key.
 
 ### U5. Harness-native OAuth, optional proxy, and Promptfoo E2E
 
@@ -2038,7 +2150,7 @@ into successful empty output and performs no automatic retry.
 | Caller authentication | Every external create, continuation, retrieval, stream, cancellation, file, artifact, and lifecycle administration path authenticates before existence or metadata disclosure. |
 | Generation ordering | Generic session/tombstone admission precedes response visibility; secret-free preflight/validate and selected-reference verification plus access-specific authorization/reservation precede resolve. A miss reserves staging/prospective generation before acquisition; containment, full-tree accounting, commit-tree/Git/manifest verification, and atomic accounting conversion precede ready state/pins. Runner prepare plus gateway ready-ack precede provider dispatch; fallback never reenters. |
 | Shared-build cancellation | One request cancellation/deadline detaches only that waiter. A build continues for remaining live waiters, stops when none remain or its runner-owned deadline expires, and produces at most one publication/failure for its epoch. |
-| Manifest integrity | Git and OCI share the normative source-visible schema and fixture. Git administrative bytes are omitted only after exact semantic validation, and repository-mode content must equal the union of resolved commit trees at non-overlapping destinations plus necessary ancestors; OCI rejects `.git`. Plan/key drift, undeclared paths, forged manifests, changed staging, invalid paths/types/links/destinations, and digest mismatches fail before publication. |
+| Manifest integrity | Git and OCI share one source-visible schema with pairwise non-overlapping repository destinations. A root may omit `.git` only when its manifest item declares history and the runner validates the detached commit, exact index/tree and object set, exact source-visible worktree, closed configuration and refs, and safe administrative state. Tree-only and undeclared `.git` fail. Git-acquired content equals the union of resolved commit trees at their destinations plus necessary ancestors. Plan/key drift, undeclared paths, forged manifests, changed staging, invalid paths/types/links/destinations, semantic Git mismatch, and digest mismatch fail before publication. |
 | Shared read-only generation | Concurrent sessions using different harnesses/profiles share one exact generation epoch. Root, nested, symlink, and alternate-path writes fail; runtime/session/auth/output state remains isolated. |
 | Editable isolation | Every fitting editable trial receives an inode-independent private tree and reserved hard byte/inode allowance covering overlays/checkpoints/produced state. A non-fitting waiter fails alone; continuation preserves a fitting trial's mutations but cannot grow past its envelope; siblings and the generation remain unchanged. |
 | Materializer containment | Fork/double-fork/cancellation/deadline fixtures prove `populated 0` before result read, publication, secret release, or cleanup. `containment_pending` blocks terminal visibility/readiness through restart and resolves once after quiescence. |
@@ -2047,7 +2159,7 @@ into successful empty output and performs no automatic retry.
 | Retention and disposal | Fake-clock evidence proves one session CAS rejects busy/expired continuation admission, provisionally saves/clears a valid deadline, and either commits active after profile admission or restores the exact future deadline/tombstones an elapsed one after pre-allocation profile failure. Terminal acknowledgement alone sets the next `expiresAt`; polls/replays do not renew. Invalid failed responses stay accounted through purge; retained expiry returns HTTP 410; purge returns stock unknown; persistence authorizes before source access; operator deletion is idempotent. Null `lastUsedAt` epochs evict first by `publishedAt`; used epochs order by `lastUsedAt`, then `publishedAt`, generation key, and epoch. |
 | Session continuity | Both modes preserve conversation and fixed generation key/epoch/access/retention/cwd/harness/auth binding while persistent or unexpired; editable preserves private files; read-only remains immutable. Corrupt known evidence returns HTTP 409 non-resumable with no source access or later-epoch substitution. |
 | Git acquisition | Caller-supplied canonical HTTPS URLs, public-address egress enforcement, DNS-rebinding and redirect defense, structured-scope credential isolation, constrained refs, exact commits, closed transport/config, exact object closure/index semantics, generation reuse, and partial cleanup pass against local network fixtures. |
-| OCI acquisition | Digest/media/path/link/type/limit, `.git` rejection, generation reuse, and attachment matrix pass against a local registry. |
+| OCI acquisition | Digest/media/path/link/type/limit checks, tree-only and normalized offline-history fixtures, producer removal and materializer rejection of remotes and credentials, semantic Git verification, generation reuse, and the attachment matrix pass against a local registry. |
 | Credential boundary | Preflight sees no secret values and returns bounded configured reference identities; validate selects a bounded subset; the runner verifies handles and injects only that selected set into source-access children. Source secrets and caller keys are absent from staging, generations, private trees, base environments, checkpoints, backups, logs, and output. The selected OAuth profile is visible only through its active-turn projection, which is absent before acknowledgement and after restart reconciliation. |
 | Provider boundary | Codex/Pi native OAuth, refresh repair, projection teardown, idempotency/session/profile admission, different-profile concurrency, same-profile fail-fast exclusion, and explicit proxy scope all pass without implicit switching. |
 | Packaging | The public GHCR digest and provenance/SBOM attestations verify exact inputs; deployment uses that digest and finite lifecycle configuration. |
@@ -2061,10 +2173,13 @@ into successful empty output and performs no automatic retry.
   `workspace.yaml` uses `path` plus optional `url` with no ordinary
   `source`/`repo` compatibility fields; the UHP descriptor uses `url`, optional
   `ref`, and `destination`; snapshot requests use `snapshotName`,
-  `imageManifestDigest`, and `workspaceManifestDigest`; runtime environment and
-  benchmark task identity remain separate; and immutable generations, read-only
-  and editable attachments, bounded retention, native OAuth, explicit proxy
-  mode, and GHCR digest-pinned distribution remain consistent.
+  `imageManifestDigest`, and `workspaceManifestDigest`; snapshot repository roots
+  may be tree-only or carry declared, normalized offline Git history without a
+  configured Git remote; runtime environment and benchmark task identity remain
+  separate;
+  and immutable generations, read-only and editable attachments, bounded
+  retention, native OAuth, explicit proxy mode, and GHCR digest-pinned
+  distribution remain consistent.
 - The U0 evidence predates U1-U6 and both native targets pass on the recorded
   inputs; changed inputs have replacement evidence before dependent work resumes.
 - No second execution protocol/control plane, separate AllAgents gateway, direct

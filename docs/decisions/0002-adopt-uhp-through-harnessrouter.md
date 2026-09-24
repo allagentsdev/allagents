@@ -87,8 +87,8 @@ Each target must prove all eight behaviors:
 2. A real first turn and continuation succeed without a provider-route API key.
 3. The selected authentication binding survives restart and fails closed when unavailable.
 4. Session conversation state remains separate while only the selected profile is visible.
-5. Overlapping refresh-capable turns for one profile are serialized.
-6. Credential files remain complete before, during, and after refresh; invalid post-rotation state becomes `repair-required`.
+5. Two turns cannot use the same profile at once, because either may renew and replace its OAuth credentials.
+6. Credential files remain complete before, during, and after renewal; an invalid saved update makes the profile `repair-required`.
 7. Success, failure, cancellation, and crash recovery remove the active projection. Credentials remain absent from retained homes, checkpoints, produced-file records, backups, passive logs, and response metadata.
 8. The evidence explicitly records that the selected harness and same-identity tools can read or emit the credential during an active turn.
 
@@ -632,20 +632,24 @@ target. HarnessRouter does not switch to another profile or provider route.
 
 Native OAuth uses an owner-trust boundary. During an active turn, the selected harness and same-operating-system-identity tools may read or emit that profile's credential. Operators that require stronger isolation must use the explicit proxy route or isolate the whole deployment more strongly.
 
+During a turn, Codex or Pi may renew an expired OAuth token and replace the
+profile's stored credentials. If two turns did that at once, one could overwrite
+the other's update.
+
 Login, logout, and repair acquire the same runner-owned zero-waiter profile lock
 as an active turn. They use the same durable fence and `finally` release and
 acknowledgement protocol.
 
 A native turn follows this order:
 
-1. Acquire the runner-owned profile lock. Version one allows exactly one active refresh-capable turn per profile and no waiters.
+1. Acquire the runner-owned profile lock. Version one allows one active turn per profile. A second turn fails immediately instead of waiting.
 2. Project only the selected profile through a turn-scoped mount namespace or equivalent same-filesystem view that preserves native atomic file replacement.
 3. Run the harness and descendants.
-4. Commit or reject refresh state after descendants stop.
+4. After descendants stop, validate any renewed credentials and either save or reject the update.
 5. Remove the projection and verify the retained session home is clean.
 6. Persist terminal acknowledgement, then release the profile lock.
 
-A local refresh commit uses a same-filesystem temporary file, file `fsync`, atomic rename, parent-directory `fsync`, and validation. If a crash after provider rotation leaves invalid local state, restart marks the profile `repair-required` and requires native login again. It never switches profiles or activates the proxy.
+When the harness renews credentials, the runner writes them through a same-filesystem temporary file, file `fsync`, atomic rename, parent-directory `fsync`, and validation. If the provider issued a replacement token but a crash leaves invalid local state, restart marks the profile `repair-required` and requires native login again. It never switches profiles or activates the proxy.
 
 HarnessRouter claims each `Idempotency-Key` atomically. Requests with the same
 key share one result.
@@ -804,7 +808,7 @@ The maintained fork must be rebased and tested against selected upstream release
 
 ## Deliberate limits
 
-Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, simultaneous refresh-capable turns for one native profile, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
+Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, two turns using the same native authentication profile at once, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
 
 Read-only attachments never copy up or become editable. Editable sessions never share mutations. Callers cannot choose arbitrary TTLs, bypass persistence quotas, or change retention on continuation. Leased, referenced, or pinned state is never evicted. Default retention is always bounded.
 

@@ -81,16 +81,17 @@ Freeze this evidence set:
 
 Changing any input invalidates the evidence. Dependent work remains blocked until both native targets pass again.
 
-Each target must prove all eight behaviors:
+Each target must prove all nine behaviors:
 
 1. The operator can complete native login in a controlled environment.
 2. A real first turn and continuation succeed without a provider-route API key.
 3. The selected authentication binding survives restart and fails closed when unavailable.
 4. Session conversation state remains separate while only the selected profile is visible.
-5. Two turns cannot use the same profile at once, because either may renew and replace its OAuth credentials.
-6. Credential files remain complete before, during, and after renewal; an invalid saved update makes the profile `repair-required`.
-7. Success, failure, cancellation, and crash recovery remove the active projection. Credentials remain absent from retained homes, checkpoints, produced-file records, backups, passive logs, and response metadata.
-8. The evidence explicitly records that the selected harness and same-identity tools can read or emit the credential during an active turn.
+5. Two real turns using the same profile and a valid token succeed concurrently.
+6. When two turns start with an expired token, renewal is coordinated before either calls the provider: one renews, the other rereads the saved update, both succeed, and the credential file remains valid.
+7. Credential files remain complete through renewal and injected crashes; an invalid saved update makes the profile `repair-required`.
+8. Success, failure, cancellation, and crash recovery remove every active projection. Credentials remain absent from retained homes, checkpoints, produced-file records, backups, passive logs, and response metadata.
+9. The evidence explicitly records that the selected harness and same-identity tools can read or emit the credential during an active turn.
 
 The proxy route cannot satisfy this gate. Failure of either native target stops dependent implementation. A proxy-only release or narrower harness scope requires a new decision.
 
@@ -550,9 +551,15 @@ Missing or corrupt generation, reference, publication, private workspace, or che
 
 Every active operation holds a durable lease and has no idle expiry.
 
-One gateway compare-and-swap checks `session_busy`, exact binding, and expiry or deletion together. A busy or invalid turn changes no deadline.
+One gateway compare-and-swap checks `session_busy`, exact binding, and expiry or
+deletion together. A busy or invalid turn changes no deadline.
 
-For an eligible continuation, the gateway saves and clears the current idle deadline in a provisional admission fence before the runner attempts to acquire the selected native profile. Profile success commits the session as active. A pre-allocation profile failure restores the exact saved deadline when it is still future, or tombstones the session if that deadline elapsed.
+For an eligible continuation, the gateway saves and clears the current idle
+deadline in a provisional admission fence before the runner checks profile
+readiness and reserves one configured concurrent-turn slot for that profile.
+Success commits the session as active. A pre-allocation profile failure restores
+the exact saved deadline when it is still future, or tombstones the session if
+that deadline elapsed.
 
 After terminal acknowledgement, a `session` workspace receives one idle deadline. GET, polling, background completion, and replay never extend it. Persistent sessions keep `expiresAt: null`.
 
@@ -565,6 +572,7 @@ Every deployment limit must be finite and nonzero:
 | Sessions | Total active and retained sessions |
 | Failed identity | Tombstone count, bytes, and TTL |
 | Builds | Concurrent builds and staging bytes |
+| Native authentication | At least two concurrent turns per profile; finite renewal timeout |
 | Generations | Published count and bytes |
 | Editable workspaces | Per-session hard bytes and inodes |
 | Private storage | Total reserved bytes and inodes |
@@ -618,49 +626,98 @@ An internal `containment_pending` session remains non-terminal until its recorde
 |---|---|---|
 | Default | Yes | No; explicit configuration only |
 | Provider credential owner | Codex or Pi harness profile | Proxy service |
-| Harness receives | Selected turn-scoped profile projection | Non-refreshable scoped turn credential |
-| Refresh | Harness-native | Not allowed for the turn credential |
+| Harness receives | Selected turn-scoped view of the shared profile | Non-refreshable scoped turn credential |
+| Refresh | Harness-native through the per-profile renewal coordinator | Not allowed for the turn credential |
 | Automatic fallback | Never | Never |
 
 Promptfoo's HarnessRouter API key authenticates the UHP caller only. HarnessRouter never translates it into provider credentials.
 
-Each native harness target has one dedicated durable authentication root outside generations, editable workspaces, session checkpoints, and conversation state. Codex uses file credential storage under `CODEX_HOME`. Pi uses `~/.pi/agent/auth.json` after controlled `/login`.
+Each configured native profile has one dedicated durable authentication root
+outside generations, editable workspaces, session checkpoints, and conversation
+state. Compatible harness targets may reference the same profile. Codex uses
+file credential storage under `CODEX_HOME`. Pi uses
+`~/.pi/agent/auth.json` after controlled `/login`.
 
-Missing, expired, revoked, or unrefreshable native OAuth disables that harness
-target. HarnessRouter does not switch to another profile or provider route.
-
+Missing, revoked, or unrefreshable native OAuth disables that harness target. An
+expired but refreshable token is renewed through the coordinator. HarnessRouter
+does not switch to another profile or provider route.
 
 Native OAuth uses an owner-trust boundary. During an active turn, the selected harness and same-operating-system-identity tools may read or emit that profile's credential. Operators that require stronger isolation must use the explicit proxy route or isolate the whole deployment more strongly.
 
-During a turn, Codex or Pi may renew an expired OAuth token and replace the
-profile's stored credentials. If two turns did that at once, one could overwrite
-the other's update.
+Multiple turns may use one native profile at the same time. Reading a valid token
+does not require a lock. Renewal does, because two provider refresh calls using
+the same old token can invalidate or overwrite each other.
 
-Login, logout, and repair acquire the same runner-owned zero-waiter profile lock
-as an active turn. They use the same durable fence and `finally` release and
-acknowledgement protocol.
+The pinned auth adapter remembers which credential contents a turn used and must
+enter the runner-owned renewal coordinator before calling the provider's refresh
+endpoint. Waiting for the renewal lock stops at the turn deadline. Once the
+coordinator records a pending renewal, it—not the turn—owns the transaction:
+
+1. Acquire the renewal lock and reread the current credential file.
+2. If its contents changed since the turn last read them, reload the saved
+   credential, release the lock, and skip the provider refresh call.
+3. Otherwise, record the renewal attempt before the provider call.
+4. Renew once and replace the credential file with a same-filesystem temporary
+   file, file `fsync`, atomic rename, parent-directory `fsync`, and validation.
+5. Mark the renewal complete and release the lock as soon as the valid credential
+   is visible.
+
+Cancellation or the turn deadline cannot release a recorded renewal. The
+coordinator uses its own finite renewal timeout. On timeout or process failure,
+it stops the refresh process, waits until that process tree is gone, marks the
+profile `repair-required`, and only then releases the lock. The turn cannot reach
+terminal acknowledgement before that outcome is durable.
+
+A turn must never call the provider's refresh endpoint outside that coordinator.
+If the pinned Codex or Pi version cannot acquire the renewal lock before calling
+the provider, that target fails the phase-zero gate.
+
+A `repair-required` profile accepts no new turns or renewal attempts. A turn
+already running may finish if its current access token still works; otherwise it
+returns the normal provider-authentication failure. It never switches profiles or
+activates the proxy.
+
+Login, logout, and repair use a separate durable maintenance fence. Its
+`pending` state stops new admissions and waits for active turns to finish. While
+the fence is pending or active, a new turn receives the retryable
+`allagents_auth_profile_unavailable` error. If the operator deadline expires
+before maintenance starts, the runner removes the pending fence and normal
+admission resumes.
+
+Once maintenance becomes `active`, timeout or cancellation requests process
+termination but never releases the fence. The runner waits for the process tree
+to stop, validates the profile or marks it `repair-required`, records the
+outcome, and only then resumes admission. Startup reconciles every pending or
+active maintenance record before that profile becomes ready.
 
 A native turn follows this order:
 
-1. Acquire the runner-owned profile lock. Version one allows one active turn per profile. A second turn fails immediately instead of waiting.
-2. Project only the selected profile through a turn-scoped mount namespace or equivalent same-filesystem view that preserves native atomic file replacement.
-3. Run the harness and descendants.
-4. After descendants stop, validate any renewed credentials and either save or reject the update.
+1. Reserve one configured concurrent-turn slot for the profile.
+2. Project only that profile through a turn-scoped mount namespace or equivalent
+   same-filesystem view. Concurrent turns see the same atomically replaced
+   credential file.
+3. Run the harness and descendants. The auth adapter coordinates renewal only
+   when needed.
+4. After descendants stop, verify that turn has no incomplete renewal record.
+   Reconcile uncertain state or mark the profile `repair-required`.
 5. Remove the projection and verify the retained session home is clean.
-6. Persist terminal acknowledgement, then release the profile lock.
-
-When the harness renews credentials, the runner writes them through a same-filesystem temporary file, file `fsync`, atomic rename, parent-directory `fsync`, and validation. If the provider issued a replacement token but a crash leaves invalid local state, restart marks the profile `repair-required` and requires native login again. It never switches profiles or activates the proxy.
+6. Persist terminal acknowledgement, then release the profile turn slot.
 
 HarnessRouter claims each `Idempotency-Key` atomically. Requests with the same
-key share one result.
+key share one result. Same-session overlap still returns `session_busy`.
 
-Different profiles may run concurrently on one generation. A new cross-session turn that collides on a busy profile fails immediately before response allocation with HTTP 503 `harness_unavailable` and reason `allagents_auth_profile_busy`. Stock idempotent replay and same-session `session_busy` take precedence.
+Different sessions may run concurrently with the same or different profiles.
+Each profile has a finite concurrent-turn limit of at least two. Saturation fails
+before response allocation with HTTP 503 `harness_unavailable` and reason
+`allagents_auth_profile_capacity_exceeded`.
 
-The runner supervisor holds turn admission and the profile lock through
-descendant termination, refresh disposition, projection teardown, and terminal
-acknowledgement. Gateway failure cannot release them. Runner failure leaves a
-durable fence. Startup blocks readiness and profile admission until it reconciles
-that fence and every stale projection.
+The runner supervisor holds each turn's admission token and credential projection
+through descendant termination, credential validation, projection teardown, and
+terminal acknowledgement. It holds renewal ownership from the durable pending
+record through commit or a durable `repair-required` fence. Gateway failure
+cannot release the turn token. Runner failure leaves durable state. Startup
+blocks that profile's admission until it reconciles every turn token, renewal
+record, maintenance record, and stale projection.
 
 In proxy mode, the gateway issues a non-refreshable credential bound to one proxy
 audience, harness target, model allowlist, response and turn ID, and the UHP
@@ -766,13 +823,14 @@ The system fails closed. Source, access mode, retention, credentials, and provid
 | Expired or deleted retained session | HTTP 410 `allagents_workspace_expired` | No runner or profile work; no rematerialization |
 | Purged predecessor | Stock non-disclosing unknown-predecessor error | No rematerialization |
 | Missing or corrupt bound attachment evidence | HTTP 409 `allagents_workspace_non_resumable` | No profile admission or epoch substitution; return committed workspace metadata |
-| Busy native profile after replay and `session_busy` checks | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_busy` | Fail before allocation, runner work, or materialization |
+| Native profile reaches its configured concurrent-turn limit after replay and `session_busy` checks | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_capacity_exceeded` | Fail before allocation, runner work, or materialization |
+| Native profile is unavailable, `repair-required`, or under maintenance | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_unavailable` | Fail before allocation without switching profile or activating the proxy |
 | Generic capacity unavailable | HTTP 503 `allagents_workspace_capacity_exceeded` | Admit no response or source work |
 | Editable view or later growth exceeds its allowance | `allagents_workspace_private_quota_exceeded` | Fail only that waiter or turn; preserve mode and retention |
 | Source policy, authentication, or transport failure | Coded failed response | Remove unpublished staging; publish nothing; start no agent or provider fallback |
 | Generation, attachment, or private-view failure | Coded failed response | Quarantine incomplete state and release reservations and pins exactly once |
 | Materializer timeout, crash, malformed output, or live descendant | Coded materializer or containment failure | Wait for cgroup quiescence before result handling, secret release, or cleanup |
-| Provider authentication failure | Normalized UHP failure | Do not switch profile or activate proxy; finish teardown before lock release |
+| Provider authentication failure | Normalized UHP failure | Do not switch profile or activate proxy; validate credentials, remove the projection, and release turn capacity |
 | Provider execution failure | Normalized UHP failure | No source fallback and no credential material in output |
 
 Capacity is reserved in order: generic session and tombstone before response visibility; persistence and editable allowance after validation and before source resolution; staging and prospective generation after resolution and before byte acquisition; actual retained usage before publication. Each reservation is released or transferred exactly once.
@@ -785,7 +843,7 @@ New vendor codes use the `allagents_` prefix. Promptfoo maps every non-success t
 
 HarnessRouter remains the sole execution and session control plane. AllAgents adds workspace preparation and source policy without adding another streaming API, process supervisor, artifact service, provider adapter, or task engine.
 
-Shared read-only generations avoid repeated acquisition and may serve different harnesses and profiles concurrently. Editable sessions trade that reuse for a reserved private byte and inode envelope.
+Shared read-only generations avoid repeated acquisition and may serve concurrent sessions using the same or different harness profiles. Editable sessions trade that reuse for a reserved private byte and inode envelope.
 
 Persistent sessions, active references, provisional pins, retained tombstones, and quarantined deletion failures consume finite capacity. Crash-consistent accounting and admission rejection are operational requirements, not optional optimizations.
 
@@ -808,7 +866,7 @@ The maintained fork must be rebased and tested against selected upstream release
 
 ## Deliberate limits
 
-Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, two turns using the same native authentication profile at once, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
+Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
 
 Read-only attachments never copy up or become editable. Editable sessions never share mutations. Callers cannot choose arbitrary TTLs, bypass persistence quotas, or change retention on continuation. Leased, referenced, or pinned state is never evicted. Default retention is always bounded.
 

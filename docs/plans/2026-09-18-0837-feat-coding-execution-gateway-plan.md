@@ -26,31 +26,35 @@ protocol, global composition cache, or materializer service.
 
 ## Implementation-handoff prerequisites
 
-### Target rename: operator-owned and required before code work
+### Target repository: operator setup complete
 
-`allagentsdev/harnessrouter` already exists and GitHub reports it as a fork of
-`HarnessRouter/harnessrouter`. Do not create or bootstrap a second repository.
-An organization repository administrator, not the implementation agent, MUST:
+On 2026-09-27, an organization repository administrator completed the
+repository setup:
 
-1. Rename `allagentsdev/harnessrouter` in place to
-   `allagentsdev/allagents-gateway`. Preserve its repository identity, fork
+1. Renamed the existing `allagentsdev/harnessrouter` GitHub fork in place to
+   `allagentsdev/allagents-gateway`, preserving repository identity, fork
    network, complete history, settings, redirects, Apache-2.0 `LICENSE`,
    `NOTICE`, copyright, and attribution.
-2. Verify GitHub still identifies `HarnessRouter/harnessrouter` as the parent.
-   Set `origin` to the renamed writable repository and retain that parent as
-   `upstream`. Record upstream commit
-   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3` as the characterized baseline;
-   upstream acceptance is not a dependency.
-3. Create writable branch `feat/workspace-composition` from downstream `main`
+2. Verified that GitHub still identifies `HarnessRouter/harnessrouter` as the
+   parent. Upstream commit `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`
+   remains the characterized baseline; upstream acceptance is not a dependency.
+3. Created writable branch `feat/workspace-composition` from downstream `main`
    commit `fbcb73132423c8c4575113fc8943c6a6280a4746`. That commit is the pinned
-   upstream baseline plus the existing three downstream commits; implementation
-   MUST NOT discard them by branching directly from the older upstream commit.
-4. Grant the implementation agent normal pull-request rights to that branch.
-5. Keep the downstream distribution names fixed:
-   - repository: `allagentsdev/allagents-gateway`;
-   - image: `ghcr.io/allagentsdev/allagents-gateway`;
-   - service: `allagents-gateway`; and
-   - product: **AllAgents Gateway**.
+   upstream baseline plus the existing three downstream commits.
+4. Updated the repository description, homepage, topics, and merge policy for
+   the AllAgents Gateway identity.
+
+The implementation clone MUST use the renamed repository as `origin` and retain
+`HarnessRouter/harnessrouter` as `upstream`. It MUST start from the existing
+`feat/workspace-composition` branch rather than discard downstream work by
+branching from the older upstream commit. Do not create a second repository.
+
+Keep the downstream distribution names fixed:
+
+- repository: `allagentsdev/allagents-gateway`;
+- image: `ghcr.io/allagentsdev/allagents-gateway`;
+- service: `allagents-gateway`; and
+- product: **AllAgents Gateway**.
 
 The implementation environment also requires these checked-in local test
 capabilities, with no external credentials:

@@ -747,6 +747,34 @@ Requests without the extension keep stock behavior. Upstream UHP conformance mus
 
 The upstream proposal should contain only the generic workspace and authentication-state seams. If upstream accepts an equivalent interface, remove the corresponding fork patch rather than keeping a compatibility layer.
 
+### Upstream status
+
+We rechecked upstream on 2026-09-27 at HarnessRouter
+[`5f82db1d`](https://github.com/HarnessRouter/harnessrouter/commit/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3),
+also released as
+[`v0.25.4`](https://github.com/HarnessRouter/harnessrouter/releases/tag/v0.25.4).
+Upstream now has a session lease before workspace hydration, per-session
+workspaces, durable checkpoints, safe input and plugin-package writes, and
+per-turn API-key brokering. We will reuse those pieces rather than replace them.
+
+The two required seams are still missing at that pin. Ordinary request metadata
+does not reach the runner; the source says that only its System One probe is
+forwarded
+([gateway source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/gateway/app.py#L7289-L7293)).
+The runner's authentication shape contains API keys, endpoints, and cloud
+credentials, but no native profile identity or OAuth state
+([authentication source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L1386-L1405)).
+Codex and Pi credential files are deliberately excluded from session checkpoints
+([checkpoint source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L476-L503)),
+with no separately durable profile store or projection contract to replace them.
+Upstream therefore does not provide the native-profile renewal coordination,
+repair fencing, or profile-local readiness required here.
+
+Therefore stock HarnessRouter still cannot implement this decision. The maintained
+fork remains necessary, but only for the two seams above. Every upstream pin
+change must repeat this inspection. If upstream supplies either equivalent seam,
+we delete that downstream patch.
+
 ### Materializer containment
 
 Each hook invocation receives one runner-owned cgroup-v2 leaf under the delegated
@@ -802,9 +830,42 @@ Operators must be able to observe aggregate generation, editable-workspace, pers
 
 AllAgents publishes the public `linux/amd64` image as `ghcr.io/allagentsdev/harnessrouter`. Version and commit tags are discovery labels, not immutable deployment identities. Deployments pin the manifest digest.
 
-The release workflow uses an approved ref, commit-pinned actions, an unprivileged build and test job, and a separate environment-approved publish job. GitHub package permission replaces third-party registry credentials.
+The release workflow uses commit-pinned actions and separates untrusted,
+credential-free pull-request testing from protected release testing. A
+credential-bearing job never runs for a pull-request event or PR-controlled ref.
+It accepts only an image artifact whose recorded digest, source commit, and
+workflow identity match the approved release ref.
 
-The final digest receives GitHub/Sigstore build-provenance and SBOM attestations. Deployment verifies the expected repository, workflow, ref, subject digest, predicate, base-image digest, lockfiles, OS packages, source tools, and Codex and Pi versions.
+Green release verification runs the service, not just its build. A GitHub Actions
+job starts the exact image as a local container on loopback or a private Docker
+network, waits for readiness, and runs the AI Evals repository's locked Promptfoo
+CLI and provider against it. This is an ephemeral test deployment, not a public
+HarnessRouter service. A hand-written HTTP call may provide an additional smoke
+test, but it cannot replace the real Promptfoo path.
+
+Pull-request jobs use a deterministic local provider fixture and receive no real
+provider credentials. An environment-approved release job mounts the real Codex
+and Pi profiles and proves native login, continuation, concurrency, renewal, and
+cleanup. If a standard GitHub-hosted runner cannot provide the required mount or
+cgroup behavior, the job receives a dedicated one-job self-hosted runner. That
+runner is destroyed after credential teardown and is never reused for an
+untrusted job; the workflow may not weaken or skip checks to fit a runner.
+
+The protected workflow pushes an untagged candidate by digest, creates
+GitHub/Sigstore build-provenance and SBOM attestations, and anonymously pulls that
+digest into a fresh protected job. That job repeats the complete Promptfoo path,
+including native Codex and Pi cases, then creates a signed green-E2E attestation
+for the same digest. Only after all three attestations verify does the workflow
+apply version and commit discovery tags or mark the release complete. Deployment
+requires the expected repository, workflow, approved ref, subject digest,
+predicate, base-image digest, lockfiles, OS packages, source tools, Codex and Pi
+versions, pinned AI Evals commit, Promptfoo lockfile identity, and successful
+green-E2E attestation. A candidate without that final attestation is not
+deployable.
+
+Promptfoo and AI Evals are pinned by the AI Evals lockfile and commit; the
+workflow never downloads a floating `promptfoo@latest`. GitHub package
+permission replaces third-party registry credentials.
 
 ## Failure behavior
 

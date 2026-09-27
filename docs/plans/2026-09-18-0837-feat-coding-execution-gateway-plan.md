@@ -1,7 +1,7 @@
 ---
 title: "UHP Coding-Agent Execution through HarnessRouter - Plan"
 date: 2026-09-18
-updated: 2026-09-24
+updated: 2026-09-27
 type: feat
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -872,28 +872,60 @@ caller responsible for acquisition. The temporary fork closes those seams.
   inherited Docker Hub release path. The Dockerfile pins every base image by
   digest; runtime lockfiles and version-locked OS packages, Git/OCI tools, Codex,
   and Pi define the remaining build inputs. The build fails on any unpinned
-  input. A no-write job builds, tests, and exports the identified image artifact
-  using commit-pinned third-party actions. A separate protected,
-  environment-approved publish job accepts only an approved release/tag ref and
-  uses `GITHUB_TOKEN` with `contents: read`, `packages: write`,
-  `attestations: write`, and `id-token: write`. It publishes unique version and
-  commit tags as mutable discovery labels, reads back the registry manifest, and
-  creates GitHub/Sigstore build-provenance and SBOM attestations whose subject is
-  the final manifest digest. Package visibility is public and verified with an
-  anonymous digest pull. Deployment fails unless both attestations verify the
-  expected owner, repository, workflow, approved ref, subject digest, predicates,
-  base-image digest, runtime lockfiles, OS package set, Git/OCI tool versions, and
-  Codex/Pi versions. Release E2E uses that digest, never `latest`. Requests
-  without the configured metadata key remain stock-compatible. CI rebases
-  selected upgrades and runs upstream plus AllAgents integration tests.
-- **R16.** AI Evals owns its Promptfoo provider. It sends the UHP request directly
-  to HarnessRouter, maps Promptfoo variables to the closed extension, and maps
-  terminal output, usage, artifacts, provenance, and failures to
-  `ProviderResponse`. Every non-success follows the Failure Contract's exact
-  status/error/retryability/metadata mapping; none becomes empty success or an
-  automatic retry. Multi-turn cases retain the prior response ID and send it as
-  `previous_response_id`. AllAgents documents the contract and examples but does
-  not depend on Promptfoo at runtime.
+  input.
+
+  A no-write GitHub Actions job builds, tests, and exports the identified image
+  artifact using commit-pinned third-party actions. It starts that exact artifact
+  as a local container on loopback or a private Docker network, waits for
+  readiness, checks out AI Evals at a pinned commit, installs its locked
+  dependencies, and runs its actual Promptfoo CLI and provider against
+  HarnessRouter. A direct UHP smoke script may supplement this test but cannot
+  replace Promptfoo. The job never downloads a floating `promptfoo@latest`.
+
+  The pull-request path uses a deterministic local provider fixture and receives
+  no real provider credentials. The native-auth path never runs for a
+  `pull_request` event or PR-controlled ref. It requires environment approval,
+  an approved release/tag ref, and an image artifact whose recorded digest,
+  source commit, and producing workflow identity match that ref. It mounts the
+  real Codex and Pi profiles and runs the native-auth cases against that exact
+  artifact. If a standard hosted runner cannot prove the required mount and
+  cgroup behavior, use a dedicated ephemeral self-hosted Actions runner for one
+  job. Destroy it after credential teardown and never schedule an untrusted job
+  on it; do not weaken or skip checks to fit a runner.
+
+  A separate protected publish job accepts only that approved artifact. It uses
+  `GITHUB_TOKEN` with `contents: read`, `packages: write`,
+  `attestations: write`, and `id-token: write`. It first pushes an untagged
+  candidate by digest, reads back the registry manifest, and creates
+  GitHub/Sigstore build-provenance and SBOM attestations whose subject is that
+  digest. Package visibility is public and verified with an anonymous digest
+  pull into a fresh protected job. That job repeats both the PR-safe and real
+  native-profile Promptfoo suites against the pulled bytes and creates a signed
+  green-E2E attestation recording the subject digest, approved source ref, AI
+  Evals commit, Promptfoo lockfile identity, scenario identity, and successful
+  workflow run. Only after build provenance, SBOM, and green-E2E attestations all
+  verify does the workflow apply unique version and commit discovery tags or
+  mark the release complete.
+
+  Deployment fails unless those three attestations verify the expected owner,
+  repository, workflow, approved ref, subject digest, predicates, base-image
+  digest, runtime lockfiles, OS package set, Git/OCI tool versions, Codex/Pi
+  versions, AI Evals commit, Promptfoo lockfile, and successful scenario run. An
+  untagged candidate without the green-E2E attestation is not deployable.
+  Requests without the configured metadata key remain stock-compatible. CI
+  rebases selected upgrades and runs upstream plus AllAgents integration tests.
+- **R16.** AI Evals owns its Promptfoo provider and the executable green-E2E
+  configuration. The workflow invokes the Promptfoo version from AI Evals'
+  lockfile through that repository's package script. The provider sends the UHP
+  request directly to the locally running HarnessRouter, maps Promptfoo variables
+  to the closed extension, and maps terminal output, usage, artifacts,
+  provenance, and failures to `ProviderResponse`. Every non-success follows the
+  Failure Contract's exact status/error/retryability/metadata mapping; none
+  becomes empty success or an automatic retry. Multi-turn cases retain the prior
+  response ID and send it as `previous_response_id`. Green requires the real
+  Promptfoo process to exit successfully and the scenario assertions to pass; a
+  hand-written client is not consumer proof. AllAgents documents the contract
+  and examples but does not depend on Promptfoo at runtime.
 
 ### Key Flows
 
@@ -1775,7 +1807,7 @@ failure stays operational: readiness is false and the safe operator diagnostic
 uses the same classification vocabulary without pretending a task failed.
 
 Vendor codes and vendor detail reasons use the required `allagents_` prefix. A
-request failure includes `detail.retryable`; the busy-profile reason omits
+request failure includes `detail.retryable`; the profile-capacity reason omits
 `retry_after_ms` rather than guessing. Promptfoo maps a non-2xx or `failed`
 response to `ProviderResponse.error = "<error.code>: <error.message>"`. It maps
 `incomplete` to `ProviderResponse.error = "incomplete: task stopped at a budget"`
@@ -1795,6 +1827,18 @@ into successful empty output and performs no automatic retry.
 
 ### Fork Maintenance Contract
 
+The 2026-09-27 upstream recheck inspected HarnessRouter
+[`5f82db1d`](https://github.com/HarnessRouter/harnessrouter/commit/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3),
+released as
+[`v0.25.4`](https://github.com/HarnessRouter/harnessrouter/releases/tag/v0.25.4).
+Stock now provides a session lease before hydration, per-session workspaces,
+durable checkpoints, safe file/package materialization, and per-turn API-key
+brokering. The fork must reuse those lifecycle and security primitives. Stock
+still forwards no ordinary request metadata to the runner and provides neither
+the pre-turn Git/OCI materializer contract nor durable named native OAuth
+profiles. Both planned seams therefore remain necessary at this pin.
+ADR 0002's upstream-status section records the source evidence.
+
 - Keep the fork in a dedicated repository/branch with the upstream remote intact.
 - Pin production images to an upstream commit, never a moving branch.
 - Keep the materializer changes as a small ordered patch series with focused
@@ -1803,6 +1847,9 @@ into successful empty output and performs no automatic retry.
   changes in touched gateway/runner/session code, run upstream tests and UHP
   conformance, run AllAgents hook/session E2E, rebuild the image, and record the
   new inputs and digest.
+- Before accepting every new upstream pin, repeat the documented two-seam
+  capability check. Record which upstream source replaced any patch, and delete
+  that patch in the same upgrade; absence of a recheck blocks the upgrade.
 - Publish releases to `ghcr.io/allagentsdev/harnessrouter`, record the manifest
   digest, and rehearse deployment from that digest rather than a local build or
   mutable tag.
@@ -2232,6 +2279,13 @@ into successful empty output and performs no automatic retry.
   shared-build waiters, editable two-turn growth and cross-trial isolation,
   persistence, expiry/deletion/purge, capacity, restart, cancellation,
   unsafe-URL/egress rejection, and every failure mapping.
+
+  GitHub Actions is the executable test host. Its driver starts the built image
+  locally, waits for HarnessRouter readiness, checks out the pinned AI Evals
+  commit, installs the lockfile, and invokes AI Evals' Promptfoo package script
+  against the local UHP endpoint. The pull-request lane uses a deterministic
+  local provider fixture; the protected lane uses the real Codex and Pi profiles.
+  Both lanes exercise the same Promptfoo provider and scenario definitions.
 - **Verification:** Codex and Pi use native OAuth without a provider-route key.
   Concurrent sessions using the same profile share one read-only generation
   while conversation, home, log, and output state remain isolated. A
@@ -2257,6 +2311,12 @@ into successful empty output and performs no automatic retry.
   Promptfoo returns exact coded errors and metadata, never empty success or
   automatic retry.
 
+  The Promptfoo process must exit successfully and its assertions must identify
+  the expected output, continuation, provenance, artifacts, and coded failures.
+  The job also checks HarnessRouter logs and the temporary roots for leaked
+  processes, mounts, credentials, and retained test state. A direct UHP script is
+  useful for diagnosis but does not satisfy this consumer E2E.
+
 ### U6. Release, operations, review, and upstream preparation
 
 - **Goal:** Produce a reproducible, registry-published supported image and
@@ -2267,10 +2327,18 @@ into successful empty output and performs no automatic retry.
 - **Approach:** Build from exact upstream/fork/AllAgents/agent inputs. Pin base
   images, lockfiles, OS packages, Git/OCI tools, Codex, and Pi. U6 uses the
   identities frozen by current U0 evidence; changing one stops release and
-  reruns U0. Replace inherited Docker Hub publication with separated no-write
-  build/test and protected GHCR publish jobs using commit-pinned actions. Publish
-  `linux/amd64`, read back the manifest, and attach verified build-provenance and
-  SBOM attestations before E2E.
+  reruns U0. Replace inherited Docker Hub publication with a no-write build/test
+  job, a protected native-auth test job, a protected candidate-publish job, and a
+  final promotion job, all using commit-pinned actions. The no-write job runs the
+  PR-safe Promptfoo suite against the exported image artifact. The native-auth
+  job runs only from an approved release/tag ref and accepts only the artifact
+  provenance bound to that exact ref; it never runs pull-request code. Push the
+  `linux/amd64` candidate without discovery tags, read back the manifest, and
+  attach verified build-provenance and SBOM attestations. A fresh protected job
+  anonymously pulls that digest, runs the PR-safe and real native-profile
+  Promptfoo suites against the registry bytes, and creates the green-E2E
+  attestation. Only then may promotion apply version/commit tags or complete the
+  release.
 
   Document durable generation/session/private/auth volumes; caller-supplied Git
   URLs in the JSON descriptor versus the optional operator-owned
@@ -2282,14 +2350,26 @@ into successful empty output and performs no automatic retry.
   and the owner-trust boundary. Review both repositories before
   final green E2E and prepare generic generation/attachment/lifecycle and
   auth-state patches for upstream.
-- **Verification:** A clean `linux/amd64` host verifies attestations and pinned
-  inputs, anonymously pulls by digest, configures finite lifecycle policy, and
-  reproduces Git/OCI generation reuse, cross-harness/profile read-only
-  concurrency, editable isolation, continuation, persistence, expiry/deletion,
-  capacity pressure, GC, cancellation, restart, native auth, proxy, and every
-  documented failure. No Docker Hub credential is required. Wrong provenance,
-  build input, lifecycle configuration, or unverified generation store prevents
-  readiness or release. Rebase rehearsal reports incompatibility before release.
+- **Verification:** A clean `linux/amd64` GitHub Actions job verifies the
+  candidate's build-provenance and SBOM attestations and pinned inputs,
+  anonymously pulls it by digest, starts HarnessRouter locally, waits for
+  readiness, and runs the pinned AI Evals Promptfoo package script. It configures
+  finite lifecycle policy and reproduces Git/OCI generation reuse,
+  cross-harness/profile read-only concurrency, editable isolation, continuation,
+  persistence, expiry/deletion, capacity pressure, GC, cancellation, restart,
+  native auth, proxy, and every documented failure. Credential-bearing jobs run
+  only for the approved ref. If standard hosted runners cannot provide the
+  required mount or cgroup behavior, each such job receives a dedicated
+  ephemeral one-job self-hosted runner that is destroyed after credential
+  teardown and never executes untrusted work.
+
+  The successful job creates a signed green-E2E attestation for the candidate
+  digest before promotion. No version/commit discovery tag or completed release
+  exists before that attestation verifies. No Docker Hub credential is required.
+  Wrong provenance, build input, lifecycle configuration, unverified generation
+  store, Promptfoo assertion, leak check, process exit, or test-attestation
+  identity prevents promotion and deployment. Rebase rehearsal reports
+  incompatibility before release.
 
 ---
 
@@ -2298,7 +2378,7 @@ into successful empty output and performs no automatic retry.
 | Gate | Required evidence |
 |---|---|
 | Native-auth feasibility | Before workspace work, the minimal image proves real Codex and Pi login, continuation, binding persistence, profile isolation, concurrent same-profile turns with valid and forced-expired tokens, exactly one coordinated provider refresh, renewal ownership that survives turn cancellation/deadline, durable maintenance recovery, per-profile failure isolation, active-turn projection teardown on success/cancel/crash, and passive exclusion from checkpoints/backups/logs. Recorded pinned inputs invalidate the gate when changed. |
-| Stock compatibility | Upstream HarnessRouter tests and UHP conformance pass; requests without the metadata key are unchanged. |
+| Stock compatibility | Every upstream pin records a source-backed check for the workspace-hook and native-auth-profile seams. Any equivalent upstream seam replaces its downstream patch in the same upgrade. Upstream HarnessRouter tests and UHP conformance pass; requests without the metadata key are unchanged. |
 | Caller authentication | Every external create, continuation, retrieval, stream, cancellation, file, artifact, and lifecycle administration path authenticates before existence or metadata disclosure. |
 | Generation ordering | Generic session/tombstone admission precedes response visibility; secret-free preflight/validate and selected-reference verification plus access-specific authorization/reservation precede resolve. A miss reserves staging/prospective generation before acquisition; containment, full-tree accounting, commit-tree/Git/manifest verification, and atomic accounting conversion precede ready state/pins. Runner prepare plus gateway ready-ack precede provider dispatch; fallback never reenters. |
 | Shared-build cancellation | One request cancellation/deadline detaches only that waiter. A build continues for remaining live waiters, stops when none remain or its runner-owned deadline expires, and produces at most one publication/failure for its epoch. |
@@ -2315,8 +2395,8 @@ into successful empty output and performs no automatic retry.
 | OCI acquisition | Digest/media/path/link/type/limit checks, tree-only and normalized offline-history fixtures, producer removal and materializer rejection of remotes and credentials, semantic Git verification, generation reuse, and the attachment matrix pass against a local registry. |
 | Credential boundary | Preflight sees no secret values and returns bounded configured reference identities; validate selects a bounded subset; the runner verifies handles and injects only that selected set into source-access children. Source secrets and caller keys are absent from staging, generations, private views, base environments, checkpoints, backups, logs, and output. The selected OAuth profile is visible only through each active turn's projection, which is absent before acknowledgement and after that turn's teardown. Concurrent turns may share the profile; the active harness and same-identity tools remain an explicit owner-trust boundary. |
 | Provider boundary | Codex/Pi native OAuth, coordinated same-profile renewal, renewal ownership across turn cancellation/deadline, durable maintenance, profile-local repair/readiness, projection teardown, idempotency and same-session precedence, finite profile capacity of at least two, same-profile concurrency, and explicit proxy scope all pass without implicit switching. |
-| Packaging | The public GHCR digest and provenance/SBOM attestations verify exact inputs; deployment uses that digest and finite lifecycle configuration. |
-| Consumer | Promptfoo concurrent/one-shot/two-turn/lifecycle success and every cataloged or UHP terminal failure map exactly. Active streams expose null expiry; terminal/GET/replay expose one stable expiry. Failures before attachment ready omit workspace metadata; later terminal failures include the complete public object. None becomes empty success or automatic retry. |
+| Packaging | The no-write GitHub Actions job starts the exported image and passes the credential-free Promptfoo suite. Credential-bearing jobs accept only an artifact bound to the approved release ref and never run pull-request code. The protected workflow pushes an untagged GHCR candidate, verifies build-provenance/SBOM attestations, anonymously pulls the digest into a fresh job, and passes both Promptfoo suites. That job creates the signed green-E2E attestation before version/commit tags or release completion. Deployment requires all three attestations. A hosted-runner limitation selects a dedicated ephemeral one-job self-hosted runner that is destroyed after credential teardown, never a weaker check or reused host. |
+| Consumer | The Promptfoo version from AI Evals' lockfile runs through that repository's package script against the local HarnessRouter endpoint. Its process exits successfully for concurrent, one-shot, two-turn, and lifecycle success scenarios, and its assertions prove every cataloged or UHP terminal failure maps exactly. Active streams expose null expiry; terminal/GET/replay expose one stable expiry. Failures before attachment ready omit workspace metadata; later terminal failures include the complete public object. None becomes empty success or automatic retry. A direct HTTP smoke test cannot substitute for this gate. |
 | Review | Final review findings in both repositories are resolved before final built-image E2E. |
 
 ## Definition of Done

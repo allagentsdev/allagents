@@ -1,951 +1,229 @@
-# ADR 0002: Adopt UHP through HarnessRouter with an AllAgents workspace materializer
+# ADR 0002: Build AllAgents Gateway as a narrow HarnessRouter downstream
 
-- Status: Accepted; implementation gated on native-auth feasibility
+- Status: Accepted
 - Date: 2026-09-21
-- Updated: 2026-09-24
+- Updated: 2026-09-27
+
+## Context
+
+Promptfoo needs a remote coding-harness endpoint that can prepare a repository before a turn, preserve that checkout across continuations, and expose the result through the Unified Harness Protocol (UHP). HarnessRouter already owns the difficult execution-plane behavior: UHP requests and streams, sessions, cancellation, files, artifacts, caller authentication, harness processes, and custom harness configuration. Replacing that control plane would create a second implementation of behavior we already need.
+
+The examined baseline is UHP [`2026-09-12`](https://github.com/HarnessRouter/harnessrouter/tree/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/protocol/versions/2026-09-12) at HarnessRouter commit [`5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`](https://github.com/HarnessRouter/harnessrouter/commit/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3), released as [`v0.25.4`](https://github.com/HarnessRouter/harnessrouter/releases/tag/v0.25.4).
+
+UHP already reserves `metadata` for additive extensions. At the pinned commit, the request schema accepts an open metadata object ([UHP schema](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/protocol/schema/uhp-2026-09-12.openapi.yaml#L1051-L1057)). That is an existing protocol extension point, not an extension framework: stock HarnessRouter gives arbitrary metadata no runner semantics. It extracts only nested `metadata.systemone` ([gateway extraction](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/gateway/app.py#L7571-L7572)) and forwards only that probe to the runner ([runner handoff](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/gateway/app.py#L7008-L7011)). Workspace semantics therefore require a downstream change.
+The AllAgents key follows the same nested namespace convention as the existing `metadata.systemone.script`: `metadata.allagents.workspace`. The shared convention is the metadata shape, not System One's special forwarding behavior.
 
 ## Decision
 
-AllAgents will use the Unified Harness Protocol (UHP) `2026-09-12` through a pinned HarnessRouter Community Edition deployment for remote Codex and Pi execution. UHP remains the only execution protocol.
+We will ship **AllAgents Gateway** as a rebase-friendly downstream of HarnessRouter. The existing GitHub fork `allagentsdev/harnessrouter` will be renamed to [`allagentsdev/allagents-gateway`](https://github.com/allagentsdev/allagents-gateway), preserving its fork relationship and history. We will not create a third repository that consumes the fork.
 
-HarnessRouter will keep responsibility for caller authentication, UHP behavior, sessions, streaming, cancellation, idempotency, harness execution, usage, artifacts, and lifecycle state.
+The downstream adds one product feature: on a first turn, recognize the exact `metadata.allagents.workspace` object, validate and materialize one repository into a private session checkout, bind it immutably to the session, and start the selected harness there. A continuation reuses that exact checkout.
 
-A narrow AllAgents-maintained fork will add a generic pre-turn workspace hook. The hook will validate and resolve the caller's source, build a verified immutable workspace when needed, and attach it before the coding harness starts.
+The supported v1 harnesses are **Codex** and **OMP**. Provider traffic goes only through an existing, separately operated OAuth-to-OpenAI-compatible gateway. Promptfoo calls AllAgents Gateway directly over UHP.
 
-Codex and Pi will use their native login and refresh behavior by default. An
-authenticated provider proxy remains an explicitly configured last resort.
-Native-auth failure must never activate the proxy automatically. Version one
-still implements and verifies proxy mode even when a deployment does not use it.
+The downstream is not a general workspace platform. It adds no extension registry, dynamically selected hook, arbitrary materializer command, or second protocol. It invokes exactly one operator-configured materializer that is included in the AllAgents Gateway image.
 
-Project `workspace.yaml` will remain ordinary local AllAgents configuration plus an optional operator-owned OCI snapshot catalog. Its local repository entries use `path` for the checkout location and one canonical `url` for remote identity; the provider-specific `source` plus `repo` pair is removed as a clean schema cutover. It will not control which Git repositories a UHP caller may request.
-
-The fork is delivery machinery, not a second protocol. We will keep the changes narrow and suitable for upstreaming, but delivery will not depend on upstream acceptance.
-
-## Main flow
-
-HarnessRouter has two relevant components. The gateway owns public response and
-session transitions. The runner owns processes, filesystems, and resource state.
-The external AllAgents materializer validates and builds source.
-
-An initial workspace-backed turn follows this order:
-
-1. The gateway authenticates the caller and claims the idempotency key. The
-   runner selects the harness and authentication binding, admits the native
-   profile when applicable, and reserves session and tombstone capacity.
-2. The gateway allocates the response and session, stores the opaque workspace
-   descriptor, and asks the materializer to validate it without accessing source.
-3. The runner authorizes persistent retention when requested and reserves the
-   editable workspace allowance when needed.
-4. The materializer resolves every Git ref or OCI digest to immutable source
-   identity and returns provenance. It does not write source bytes during this
-   step.
-5. The runner reuses a valid ready generation, joins an existing build for the
-   same generation key, or claims a new build and reserves staging and generation
-   capacity.
-6. On a cache miss, the materializer builds private staging. The runner
-   independently verifies the source tree, Git or OCI state, manifest, limits,
-   and generation key before publishing it atomically.
-7. The runner pins the generation, then mounts it read-only or creates a private
-   writable view with no mutable state shared with another session.
-8. The gateway commits the attachment as `ready`. The runner acknowledges that
-   commit, transfers or releases reservations, and releases the provisional pin
-   exactly once.
-9. The runner projects the selected native OAuth profile or issues the configured
-   scoped proxy credential. HarnessRouter starts the coding harness in the
-   requested working directory.
-10. After the harness and descendants stop, the runner finalizes authentication
-    state and removes the credential projection. The gateway stores the terminal
-    response and starts the idle deadline for `session` retention.
-
-After the first turn:
-
-1. A continuation reuses only the exact bound attachment.
-2. Expiry or deletion tombstones the session before cleanup, waits for active
-   resources to quiesce, and releases references and reservations exactly once.
-
-Source resolution, workspace attachment, and authentication selection happen before provider execution. Provider retry or fallback cannot repeat or change them.
-
-## Phase-zero feasibility gate
-
-Production workspace implementation must not begin until a minimal pinned image proves native authentication against real provider traffic for both Codex and Pi. The spike excludes the workspace materializer and Git or OCI acquisition.
-
-Freeze this evidence set:
-
-| Input | Required identity |
-|---|---|
-| HarnessRouter | Exact upstream commit |
-| Base image | Manifest digest |
-| Codex | Exact version |
-| Pi | Exact version |
-| Auth adapter | Patch digest |
-
-Changing any input invalidates the evidence. Dependent work remains blocked until both native targets pass again.
-
-Each target must prove all nine behaviors:
-
-1. The operator can complete native login in a controlled environment.
-2. A real first turn and continuation succeed without a provider-route API key.
-3. The selected authentication binding survives restart and fails closed when unavailable.
-4. Session conversation state remains separate while only the selected profile is visible.
-5. Two real turns using the same profile and a valid token succeed concurrently.
-6. When two turns start with an expired token, renewal is coordinated before either calls the provider: one renews, the other rereads the saved update, both succeed, and the credential file remains valid.
-7. Credential files remain complete through renewal and injected crashes; an invalid saved update makes the profile `repair-required`.
-8. Success, failure, cancellation, and crash recovery remove every active projection. Credentials remain absent from retained homes, checkpoints, produced-file records, backups, passive logs, and response metadata.
-9. The evidence explicitly records that the selected harness and same-identity tools can read or emit the credential during an active turn.
-
-The proxy route cannot satisfy this gate. Failure of either native target stops dependent implementation. A proxy-only release or narrower harness scope requires a new decision.
-
-## System map and ownership
+## System flow and ownership
 
 ```mermaid
-flowchart TB
-  CLIENT[Promptfoo or another UHP client] -->|UHP plus optional workspace metadata| GATEWAY[HarnessRouter gateway]
-  GATEWAY --> RUNNER[HarnessRouter runner]
-  RUNNER -->|validate, resolve, materialize| MATERIALIZER[AllAgents materializer]
-  MATERIALIZER --> SOURCE[HTTPS Git or configured OCI registry]
-  RUNNER --> GENERATION[(immutable generations)]
-  GENERATION --> READONLY[shared read-only attachment]
-  GENERATION --> EDITABLE[private editable view]
-  READONLY --> HARNESS[Codex or Pi harness]
-  EDITABLE --> HARNESS
-  RUNNER --> AUTH[(native auth profiles)]
-  AUTH -->|active-turn projection| HARNESS
-  HARNESS -->|native OAuth| PROVIDER[model provider]
-  HARNESS -.->|explicit proxy mode| GATEWAY
-  GATEWAY -.-> PROXY[authenticated provider proxy]
-  PROXY -.-> PROVIDER
-  GATEWAY --> SESSION[(session and attachment state)]
-  RUNNER --> RESOURCE[(generation and resource journal)]
+flowchart LR
+  P[Promptfoo] -->|UHP + caller API key| A[AllAgents Gateway]
+  A -->|fixed workspace seam| M[In-image Git materializer]
+  M -->|anonymous HTTPS| G[Public Git repository]
+  A --> C[(Private session checkout)]
+  C --> H[Codex or OMP]
+  H -->|short-lived turn credential| B[HarnessRouter loopback broker]
+  B -->|Responses or Chat Completions| O[OAuth-to-OpenAI-compatible gateway]
+  O --> V[Model provider]
+  A --> D[(/data sessions and state)]
 ```
 
-| Actor | Owns |
+| Component | Owns |
 |---|---|
-| UHP client | Prompt, model, harness ID, workspace descriptor, continuation ID |
-| HarnessRouter gateway | Caller authentication, UHP validation, public response and session state, attachment `ready`, expiry, tombstones |
-| HarnessRouter runner | Generation claims and publication, source child processes, mounts, private writable views, quotas, references, pins, profile admission |
-| AllAgents materializer | Descriptor defaults, URL and source validation, Git or OCI resolution, staging construction, canonical manifest, provenance |
-| Coding harness | Provider login, native token refresh, conversation execution |
-| Operator | Deployment policy, egress, credential scopes, authentication profiles, persistence authorization, quotas, deletion, garbage collection |
+| Promptfoo | Prompt, model, `metadata.harness_id`, first-turn workspace request, continuation ID, and evaluation assertions |
+| HarnessRouter gateway and runner | Caller authentication, UHP validation and conformance, idempotency, session hydration, streaming, cancellation, harness execution, files, artifacts, and lifecycle state |
+| AllAgents workspace seam | Exact metadata recognition, first-turn binding, continuation lookup, ordering before harness execution, and normalized workspace failures |
+| Fixed materializer | URL and ref validation, safe Git resolution and acquisition, exact commit provenance, checkout validation, resource enforcement, cancellation, and cleanup |
+| HarnessRouter custom harness definition | Reusable remote harness configuration: Codex or OMP base harness, model defaults, instructions, tools, skills, and server-owned provider route |
+| HarnessRouter loopback broker | Per-turn scoped credential minting and exchange; the harness process never receives the long-lived external-gateway API key |
+| External OAuth gateway | Provider login, OAuth token storage, refresh, repair, provider API compatibility, and provider authorization |
+| Operator | Caller credentials, custom harnesses, provider endpoint and API key, egress policy, limits, TTL, deployment, upgrades, and deletion policy |
 
-The gateway is the only writer of public session attachment, expiry, and tombstone state. The runner is the only writer of generation and resource state. The materializer cannot authorize persistence or publish live state.
+The materializer never owns UHP sessions or provider credentials. The external OAuth gateway never owns source acquisition or UHP session state. Promptfoo never receives source or provider credentials.
 
-## Protocol and workspace descriptor
+## Request contract
 
-UHP is the sole wire contract and its conformance suite is the protocol oracle. The fork must preserve its Responses-shaped requests, ordered streaming events, `previous_response_id`, cancellation, files, artifacts, usage, lifecycle, and error behavior.
-
-Version one adds one namespaced first-turn extension: `metadata["allagents.workspace"]`.
-
-Before response allocation, the gateway requires this extension to be a JSON
-object no larger than 64 KiB and no deeper than 32 levels. A non-object receives
-HTTP 400 `invalid_input`; a byte or depth overflow receives HTTP 413
-`allagents_workspace_too_large`.
-
-### Request fields
-
-| Field | Required | Contract |
-|---|---:|---|
-| `version` | yes | Exactly `"1"` |
-| `access` | yes | `readOnly` or `editable` |
-| `retention` | no | `session` by default, or authorized `persistent` |
-| `source` | yes | Repository list or configured workspace snapshot |
-| `workingDirectory` | no | `{ "kind": "workspaceRoot" }` by default, or `{ "kind": "workspacePath", "path": "…" }` |
-
-Repository mode accepts one through 128 entries.
-
-Each repository entry has this shape:
-
-| Field | Required | Contract |
-|---|---:|---|
-| `url` | yes | Canonical public HTTPS Git URL; the same URL may appear more than once |
-| `ref` | no | Full ref name, unambiguous branch or tag shorthand, or full 40-hex commit ID; omission means remote symbolic HEAD |
-| `destination` | yes | Unique, non-root relative directory; destinations must not overlap or collide with a runner-owned control namespace |
-
-A workspace snapshot source instead has the exact shape `{ "kind": "workspaceSnapshot", "snapshotName": ConfigName, "imageManifestDigest": Digest, "workspaceManifestDigest": Digest }`. `snapshotName` selects an operator-owned catalog entry; `imageManifestDigest` identifies the accepted direct OCI image manifest; `workspaceManifestDigest` identifies the canonical source-visible manifest.
-
-Reserved control namespaces include HarnessRouter's root checkpoint repository.
-Source-free validation rejects a destination that equals, contains, or is
-contained by a reserved namespace.
-
-`workspacePath` is relative to the mounted workspace and must name a directory in the resolved source manifest. The same working-directory contract applies to repository and snapshot sources.
-
-Example:
+A workspace-backed first turn uses the normal UHP `POST /v1/responses` request. The exact v1 extension shape is:
 
 ```json
 {
-  "version": "1",
-  "access": "readOnly",
-  "retention": "session",
-  "source": {
-    "kind": "repositories",
-    "repositories": [
-      {
-        "url": "https://github.com/acme/api.git",
-        "ref": "refs/pull/123/head",
-        "destination": "api"
+  "model": "gpt-5.4",
+  "input": "Implement the requested change.",
+  "metadata": {
+    "harness_id": "chrn_…",
+    "allagents": {
+      "workspace": {
+        "version": "1",
+        "repository": {
+          "url": "https://github.com/example/project.git",
+          "ref": "refs/heads/main"
+        },
+        "workingDirectory": "packages/service"
       }
-    ]
-  },
-  "workingDirectory": {
-    "kind": "workspacePath",
-    "path": "api/packages/service"
+    }
   }
 }
 ```
 
-The descriptor is session input, not project configuration. Promptfoo supplies the repositories to load. The materializer loads them before the harness starts; the model never performs the initial clone.
+`metadata.harness_id` is HarnessRouter's existing harness selector. HarnessRouter documents custom harnesses as reusable configurations with a fixed base harness and selects them through `metadata.harness_id` ([custom harness behavior](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/README.md#L155-L163), [UHP selection](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/README.md#L186-L203)). For this product, a custom harness is the remote equivalent of a reusable profile. It is not an AllAgents CLI profile and is not projected from a developer machine.
 
-The descriptor cannot supply credentials, host paths, commands, environment variables, materializer executables, or Docker options.
+`metadata.allagents.workspace` has exactly these fields:
 
-A continuation supplies `previous_response_id` and must omit the extension. It reuses the original descriptor, attachment, access, retention, working directory, harness, and authentication binding.
+| Field | Required | Contract |
+|---|---:|---|
+| `version` | yes | Exactly `"1"`. Other versions fail before source access. |
+| `repository.url` | yes | Anonymous public HTTPS Git URL. No embedded credentials, userinfo, query, fragment, alternate protocol, or local path. |
+| `repository.ref` | no | Advertised `refs/heads/*` or `refs/tags/*`, or unambiguous branch/tag shorthand. Omission means the remote default branch. Raw object IDs, other namespaces, ambiguous names, and unfetchable values fail. V1 accepts SHA-1 repositories only and records the resolved 40-hex commit. |
+| `workingDirectory` | no | Relative POSIX directory beneath the checkout. Omission means the repository root. Absolute paths, empty components, `.`/`..` traversal, platform-specific separators, and any symlink escape fail. |
 
-### Contract vocabulary and benchmark compatibility
+No other keys are accepted at any level of this object. The object cannot carry credentials, headers, environment variables, commands, destination paths, Docker settings, materializer selection, resource limits, retention, or provider configuration. Request size, string length, nesting depth, and parsing work are bounded before source access.
 
-The JSON descriptor uses one canonical vocabulary rather than aliases for benchmark-specific names. `url`, optional `ref`, and `destination` describe requested Git materialization; `workingDirectory` describes the logical workspace-relative command directory. Public provenance preserves `requestedRef` separately from `resolvedCommit`. The contract does not also accept Harbor `git_url` or `workdir`, SWE-bench `repo` or `base_commit`, or Devfile `revision` or `clonePath`.
+A first turn may omit `metadata.allagents.workspace`; stock HarnessRouter behavior then remains available. A session that starts without it cannot add it on a continuation.
 
-The local `workspace.yaml` contract represents a different boundary:
+After successful binding, public response metadata records the normalized requested URL, optional requested ref, exact resolved commit, and effective working directory under `metadata.allagents.workspace`. Internal checkout IDs and host paths remain private. The resolved commit, not a mutable branch or tag, is the provenance authority for the session.
 
-```yaml
-repositories:
-  - path: ../api
-    url: https://github.com/acme/api.git
-    managed: sync
-    branch: main
-```
+## First turn and continuation semantics
 
-`path` remains the existing or managed local checkout location. `url` replaces the lossy `source` plus `repo` pair. `branch` remains branch-specific because managed synchronization performs branch checkout and pull; it does not claim arbitrary detached-ref semantics. Path-only unmanaged entries may omit `url`; a managed entry requires it. The schema, CLI, generated schemas, examples, and tests cut over together without accepting both shapes indefinitely.
+For a workspace-backed first turn:
 
-Harbor sits beside the AllAgents gateway at Promptfoo's provider boundary.
-Promptfoo calls the gateway over UHP for AllAgents-backed rows; a Harbor provider
-calls Harbor for container-native rows, where Harbor owns task setup, execution,
-verification, artifacts, and teardown. Harbor is not an
-`allagents.workspace` backend, and its task schema is not compiled into the
-workspace descriptor.
+1. HarnessRouter authenticates the caller, validates the UHP request, establishes idempotency, and resolves whether the request creates or reuses a session.
+2. Any reused session, whether selected by `previous_response_id` or `metadata.session_id`, rejects workspace metadata. If it already has an AllAgents workspace binding, its stored harness and binding win and a caller-supplied harness mismatch fails. An unbound session with no workspace metadata retains upstream routing.
+3. For a new workspace-backed session, a workspace-aware hydrate creates an isolated empty session allocation but skips the stock empty Git initialization. It reserves bounded materialization capacity before provider or harness execution.
+4. The materializer resolves the optional advertised ref to one exact commit, builds and validates a private checkout in staging, then atomically publishes it into the empty runner-designated checkout root.
+5. The runner keeps its control root as a sibling of the checkout, never inside repository content. It derives the execution working directory as a validated descendant of the checkout.
+6. HarnessRouter atomically binds the descriptor, resolved commit, checkout root, control root, execution working directory, cleanup deadline, and selected harness to the session.
+7. The selected custom harness starts in the execution working directory, while its home, credentials, scratch, skills, and checkpoint control state remain anchored under the runner-owned control root.
 
-Harbor and SWE-bench/Hugging Face remain useful precedents for source and
-benchmark packaging. Their runnable images may combine source, tools, services,
-verifier assumptions, and runtime configuration, so they are not AllAgents
-`workspaceSnapshot` artifacts. An AllAgents snapshot contains source and may
-carry normalized offline Git history; it does not select a runtime or verifier.
+A continuation selects an existing session with `previous_response_id` or HarnessRouter's existing `metadata.session_id` recovery path and omits `metadata.allagents.workspace`. For a workspace-bound session, the gateway derives the harness from stored state; if the caller supplies a different harness, the request fails before hydration. The continuation reuses the exact private checkout, including edits from earlier turns, and the original resolved-commit provenance. Supplying workspace metadata on any reused session is invalid, even if byte-for-byte identical. The gateway never resolves the ref again, clones a replacement, changes the working directory, or silently starts a fresh session.
 
-### Access and retention
+If the bound checkout is expired, missing, corrupt, or cannot be proven to belong to the predecessor, continuation fails closed. There is no rematerialization, source fallback, or checkout substitution. The bounded ephemeral TTL is operator-configured; ordinary completion does not immediately remove a checkout that remains eligible for continuation. Expiry and explicit deletion use the same minimal idempotent cleanup path.
 
-Access and retention are independent:
+## Materializer and downstream boundary
 
-| | `readOnly` | `editable` |
-|---|---|---|
-| Workspace | Shared immutable generation | Private writable view; no mutable state shared across sessions |
-| Initial UHP files | Rejected before source acquisition | Applied after attachment |
-| Writes | Filesystem rejects them; no copy-up | Allowed within the private quota |
-| Checkpoints | No source mutation checkpoint | Root and nested repositories use private checkpoints |
-| Cross-session mutation | Impossible | Impossible |
+The only maintained HarnessRouter seam is a workspace validate/materialize call **after session resolution and the workspace-aware hydration step, but before provider or harness execution**. It has two paths:
 
-| Retention | Behavior |
-|---|---|
-| `session` | Default. Idle expiry starts only after durable terminal acknowledgement. |
-| `persistent` | No idle expiry. Requires deployment authorization and reserved capacity before source resolution. |
+- first turn: allocate an empty session root without stock Git initialization, validate and materialize into its checkout child, create the separate control child, validate the execution working directory, and commit the binding;
+- continuation: hydrate the bound session root, then load and verify the existing checkout, control root, and execution working directory without invoking source acquisition.
 
-Neither retries nor continuations can change access or retention.
+The downstream code recognizes only `metadata.allagents.workspace` and calls one configured in-image materializer. The caller cannot name an implementation. There is no registry, plugin lifecycle, generic hook graph, network materializer service, or reusable extension SDK.
 
-### Editable change collection
+The materializer contract is intentionally small: normalized descriptor in; an empty runner-assigned checkout target, cancellation, and fixed resource limits supplied by the runner; either a verified private checkout plus provenance, or a coded failure out. HarnessRouter remains responsible for session, checkpoint, file/artifact, and process lifecycle. Runner control state never lives inside the checkout, and the materializer cannot write it.
 
-The verified generation is the first-turn baseline. The runner does not copy or
-inventory the complete private workspace again before the harness starts.
+Requests without the AllAgents object retain upstream behavior, including routing for reused unbound sessions, and the pinned UHP conformance suite remains the protocol oracle. Each upstream rebase must review the patch against the metadata, session-resolution, hydration, checkpoint, runner-root, and custom-provider paths. If upstream gains an equivalent narrow lifecycle seam, remove the downstream patch rather than retain a compatibility layer.
 
-1. For a history-bearing root, the protected baseline is its recorded commit and
-   generation-owned object store. For a tree-only root, it is the canonical
-   workspace manifest. The runner keeps this baseline outside the editable
-   workspace.
-2. For each turn, the runner prepares and verifies the private view, then arms
-   candidate tracking before it applies UHP input overlays or gives any
-   non-runner process writable access. It durably binds that coverage marker to
-   the generation and previous turn state and keeps tracking active through
-   descendant quiescence.
-3. After the harness and its descendants stop, the runner obtains changed-path
-   candidates from the runner-owned tracker or storage state. It compares their
-   final type, mode, and content with the protected baseline through
-   root-confined, no-follow reads.
-4. If uninterrupted coverage cannot be proven, or candidate state is missing,
-   incomplete, overflowed, or uncertain after recovery, the runner walks the
-   complete private view without following links and performs the same bounded
-   comparison.
+## Provider authentication and harness configuration
 
-The produced-file domain is every source-visible path under the declared
-workspace roots. The only exclusions are the original administrative `.git`
-subtrees identified by the protected generation record. Their mutations persist
-for continuation but are not produced files. An agent-created `.git` elsewhere
-is ordinary source-visible content. Candidate and full-scan paths use this same
-protected classification; final Git discovery or ignore rules cannot change it.
+Provider authentication is proxy-only. Each deployment configures one external OAuth-to-OpenAI-compatible gateway base URL and API key server-side. HarnessRouter represents that endpoint with two protocol-specific logical connections using the same secret: Responses for Codex and OpenAI Chat Completions for OMP. Each harness policy contains exactly its matching connection, with no fallback. The UHP caller cannot supply or override the endpoint, key, transport, or route.
 
-For a continuation, the runner starts from the previous protected cumulative
-path state and applies verified candidates, or rebuilds that state with the
-fallback scan. It stores entries only for content that differs from the
-generation; unchanged paths inherit their generation state. Comparing the new
-state with the previous checkpoint yields the turn's produced-file delta without
-retaining or comparing a second full workspace.
+The external OAuth gateway owns login, token persistence, refresh, and repair. AllAgents Gateway does not implement provider login, import local credentials, mount developer credential files, or coordinate token refresh. HarnessRouter's caller API key authenticates the UHP caller only and is never reused as a provider credential.
 
-Editable `.git` state remains session-private and survives continuation for
-coding tools. After the harness starts, it is not authoritative for provenance
-or change collection. The runner never trusts its refs, configuration, index,
-hooks, alternates, or ignore rules, and an agent-edited ignore file cannot hide
-a produced path. Candidate tracking is an optimization; the bounded full-tree
-comparison remains the correctness fallback.
+The deployment must use HarnessRouter's brokered sandbox mode, not the self-host image's `HR_SANDBOX_TRUST=owner` pass-through default. The gateway exchanges the long-lived external-gateway key server-side and gives each harness only a short-lived, session-scoped credential plus the loopback broker URL. Readiness fails if the local broker cannot mint and exchange that credential. The long-lived key never enters the harness process environment or session files. Scoped turn credentials may exist only in the active process environment or a per-turn ephemeral config root; the runner deletes them before checkpointing or exposing any file, artifact, log, or response.
 
-### Public workspace metadata
+Codex requires an OpenAI Responses-compatible endpoint. This matches the pinned runner, which states that current Codex supports Responses rather than Chat Completions ([Codex endpoint behavior](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L1907-L1915)); HarnessRouter supports Codex against custom endpoints that provide the Responses format ([provider compatibility](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/docs/self-hosting-guide.md#L331-L350)). OMP uses the same external gateway's OpenAI Chat Completions surface in v1, which its pinned builder supports ([OMP endpoint behavior](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L2609-L2644)). An incompatible route fails readiness or the turn; it never changes protocol or provider automatically.
 
-Once attachment reaches `ready`, terminal events, retrieval, background completion, replay, and later terminal failures return the same verified workspace object.
+V1 custom harnesses use Codex or ordinary session-local OMP. OMP starts from the container's/session's own configuration. It does not import AllAgents profiles, host profiles, or developer state. There is no profile synchronization, profile projection, or AllAgents CLI integration.
 
-| Public field | Meaning |
-|---|---|
-| `effectiveDescriptorDigest` | Digest of the normalized descriptor and defaults |
-| `generationId` | Public content identifier |
-| `sourceIdentity` | Normalized URL, destination, `requestedRef` when supplied, and `resolvedCommit`; or verified `snapshotName` and `imageManifestDigest` plus each root's destination and optional `resolvedCommit` and `objectSetDigest`, never a Git remote URL |
-| `workingDirectory` | Effective `workspaceRoot` or `workspacePath` |
-| `workspaceManifestDigest` | Verified source-visible manifest digest |
-| `access`, `retention`, `expiresAt` | Effective workspace policy and expiry |
+## Source and workspace security invariants
 
-`generationId` is the SHA-256 digest of versioned RFC 8785 bytes containing only returned source provenance, normalized destinations, and the workspace-manifest digest. It is metadata only. It is never a cache, authorization, attachment, or lookup key.
+Repository content is untrusted. The implementation must preserve all of these invariants:
 
-Active turns and persistent sessions report `expiresAt: null`. For `session` retention, durable terminal acknowledgement sets the timestamp returned by terminal, retrieval, and replay paths. Polling and replay do not renew it.
+- Caller authentication is required before session lookup, source access, continuation, retrieval, streaming, cancellation, file/artifact access, or deletion. Authentication failure does not disclose whether a session exists.
+- Source is exactly one anonymous public HTTPS Git repository. URL parsing happens before DNS or process launch. Credentials and caller-controlled proxy settings are rejected and never forwarded.
+- Every initial host and redirect target is re-parsed and re-authorized. DNS answers are checked against loopback, link-local, private, reserved, multicast, metadata-service, and otherwise non-public ranges; the approved address is pinned for the connection so DNS rebinding cannot change it. Redirect count, response size, and time are bounded.
+- Git runs with a sanitized environment and isolated configuration. Interactive credentials, repository hooks, checkout filters, Git LFS, submodules, alternates, and non-HTTPS helpers or protocols, including `file`, `ssh`, and `ext`, are disabled or rejected. Repository configuration cannot weaken those rules.
+- Ref discovery and fetch are bounded. V1 accepts only advertised branch/tag refs in SHA-1 repositories, ties the checkout to the exact resolved 40-hex commit, and records requested URL/ref plus resolved commit as provenance.
+- The checkout is private and editable by one session only. No mutable state is shared across sessions. The runner-owned session root has separate checkout and control children; repository content can never overlap the control root.
+- All path operations are rooted, no-follow where appropriate, and checked for traversal and symlink escape. The execution working directory must resolve to a real directory inside the checkout. Harness home, credentials, scratch, skills, and control state remain anchored under the sibling control root regardless of that working directory.
+- Materialization and cleanup have hard process, descendant, wall-clock, byte, inode, file-count, and concurrency bounds. Cancellation terminates the complete acquisition process tree before cleanup and terminal acknowledgement.
+- Partial staging is never attached. Cleanup is deterministic and idempotent after success, failure, cancellation, restart, expiry, and deletion. A path whose deletion failed is not reused or reported as free.
+- Long-lived provider and caller credentials never enter Git arguments, the harness process environment, checkout or session files, response metadata, artifacts, logs, or provenance. A short-lived broker token may enter only the active harness environment or per-turn ephemeral config and is removed before checkpointing or public file collection. Source-controlled configuration cannot select the provider endpoint.
 
-Failures before attachment reaches `ready` omit workspace metadata. Failures after `ready` include the complete committed object.
-
-Public metadata never exposes the private generation key, raw request digest, URL credentials, credential-scope mappings, selected credential references or values, redirect-chain URLs, resolved network addresses, physical paths, internal epoch, lease, reservation, claim, pin, or attachment identifiers, or other sessions' quota state.
-
-## Source authority and acquisition
-
-### Configuration boundary
-
-| Source | Authority |
-|---|---|
-| Caller-requested Git | The UHP JSON descriptor supplies `url`, optional `ref`, and `destination` |
-| OCI snapshot | Operator-owned `workspace.yaml` snapshot catalog plus caller-supplied `snapshotName`, `imageManifestDigest`, and `workspaceManifestDigest` |
-| Harness, model, persistence, quota, and egress policy | HarnessRouter deployment configuration |
-| Source credentials | Operator-owned secret store and credential-scope mappings |
-
-`workspace.yaml` is not a Git-origin allowlist. The service may accept any repository reachable through its safe public HTTPS egress boundary.
-
-### URL and network rules
-
-Before parsing a Git URL, validation rejects ASCII controls, whitespace, and backslashes. It then parses the URL once with the WHATWG URL Standard and requires the input bytes to equal the serialized URL exactly.
-
-The serialized URL must meet all of these rules:
-
-- scheme is `https`;
-- hostname is an ASCII lowercase IDNA A-label DNS name without a trailing dot;
-- no userinfo, query, fragment, IP literal, or explicit default port;
-- path is non-empty; and
-- no percent-encoded control, slash, backslash, or dot segment.
-
-The same serialization and structured `(scheme, host, effectivePort)` origin drive policy, credentials, redirects, DNS, provenance, generation identity, and the URL passed to Git and libcurl. Local paths and `file`, `ssh`, `git`, and extension transports are rejected.
-
-Every connection follows this sequence:
-
-1. Route the acquisition child through the deployment connector. The child has no direct network path and no inherited proxy configuration.
-2. Resolve the canonical hostname. Reject the whole answer set if any address is loopback, link-local, private, reserved, metadata, or otherwise non-public.
-3. Pin one approved address for that connection so DNS rebinding cannot change the destination.
-4. Accept at most five HTTPS redirects. Parse, serialize, resolve, and validate every hop again.
-
-Deployment policy may further restrict public egress, but it does not need to list every allowed repository.
-
-### Source credentials
-
-Callers cannot provide credentials or credential-reference names.
-
-A credential scope is either an exact structured origin or that origin plus a canonical repository-path segment prefix. Prefixes match complete path segments, never raw strings. The matching rule with the most path segments selects one server-owned secret reference. No match means anonymous acquisition.
-
-Preflight receives no request URL or secret value. It validates policy and configured reference syntax, then returns bounded reference names or opaque IDs. The runner verifies the selected handles before source access.
-
-A source-access child receives only the selected value. It has an isolated home,
-`GIT_CONFIG_NOSYSTEM=1`, no global Git configuration, no inherited proxy
-variables, no Git or remote proxy configuration, and no direct network path. Its
-ephemeral credential helper uses `credential.useHttpPath=true` and independently
-enforces the selected protocol, host, port, and path scope.
-
-Every redirect is checked against the original scope. The connector strips the credential when a redirect leaves that scope, including a same-origin path escape. A redirect never selects a new credential.
-
-Credentials are never encoded in URLs, persisted in Git configuration or remote
-URLs, or returned in hook output. Temporary credential state is removed before
-return. The gateway, runner base environment, published generation, editable
-view, and every agent child remain credential-free. If a configured source secret
-appears in the service or agent environment, the runner refuses to launch the
-agent.
-
-### Git resolution and verification
-
-`ref` is at most 255 ASCII bytes. It may be a full 40-hex object ID or a ref name accepted by rules equivalent to `git check-ref-format`.
-
-Validation rejects leading dashes, whitespace, controls, refspec colons, glob metacharacters, traversal-like components, `@{`, and `.lock` components. It resolves a full ref or unambiguous branch or tag shorthand with `ls-remote`. A full object ID is accepted only when advertised.
-
-The materializer records the normalized URL, requested ref when present, and resolved commit in provenance. Fetch and checkout commands receive only the verified object ID, never caller ref text.
-
-Every Git and libcurl operation uses an argument vector without a shell and
-explicit end-of-options handling. Hooks, `file` and `ext` protocols, submodule
-recursion, Git LFS hydration, and configured clean and smudge filters are disabled
-before the materializer touches caller-selected source.
-
-The published repository keeps `.git` for coding tools, but the materializer normalizes it to a closed detached-HEAD state. It removes reflogs, `FETCH_HEAD`, locks, hooks, worktree links, alternates, shallow, replace, and graft state, extra refs and objects, and credential-bearing configuration.
-
-The runner independently verifies:
-
-- `HEAD` resolves to the recorded commit;
-- the index exactly matches that commit tree;
-- the object database contains the complete required transitive closure, with no missing, corrupt, or extra objects;
-- the canonical object-ID, type, and size set matches its recorded digest; and
-- source-visible content equals the union of the resolved commit trees at their declared destinations, plus only the ancestor directories needed to connect them.
-
-Any undeclared path fails integrity validation.
-
-### OCI snapshots
-
-Snapshot mode accepts only the direct OCI image manifest selected by
-`imageManifestDigest` from the repository owned by the `snapshotName` catalog
-entry. Redirects may not change registry authority. The config descriptor must
-use that entry's configured workspace-manifest media type and address the
-canonical bytes selected by `workspaceManifestDigest`.
-
-| Limit | Maximum |
-|---|---:|
-| Distributable tar, gzip, or zstd layers | 64 |
-| Image manifest | 4 MiB |
-| Workspace-manifest blob | 128 MiB |
-| Repository roots | 128 |
-| Compressed layers | 8 GiB |
-| Expanded tree | 32 GiB |
-| Filesystem entries | 500,000 |
-| One regular file | 4 GiB |
-| One UTF-8 path | 4096 bytes and 128 components |
-| One PAX or extended header | 1 MiB |
-
-Workspace-manifest version 2 lets each repository item describe either a
-tree-only root or a history-bearing root. A history-bearing item adds `git` with
-`resolvedCommit` and `objectSetDigest`. Its destination must contain exactly one
-`.git` directory; a tree-only root must contain none. The snapshot's immutable
-digests bind the commit and object-set identity. The artifact contains no
-configured Git remote, and no Git remote URL is required or returned. Private
-evaluations can still use `git log`, `git blame`, and historical diffs offline.
-
-Before writing an entry, the materializer checks its type, path, link target, and
-declared size. It rejects devices, sockets, traversal, escaping links, sparse
-files, unknown or foreign layers, mutable tags, and undeclared output. The runner
-independently rejects a 129th repository root.
-
-After applying OCI whiteouts, the materializer verifies
-`imageManifestDigest`, `workspaceManifestDigest`, every layer size and digest,
-and the recomputed source-visible manifest. For every history-bearing root it
-then applies semantic Git verification: detached `HEAD` at `resolvedCommit`, an
-index equal to that commit tree, an object database equal to the complete
-transitive closure whose canonical digest is `objectSetDigest`, and
-source-visible descendants equal to the same commit tree. Dirty, staged,
-untracked, missing, or modified source fails validation.
-
-Snapshot Git state is offline. It must contain no remotes, branch-upstream
-configuration, credential helpers, config includes, hooks, worktree links,
-alternates, shallow, replace, or graft state, reflogs, `FETCH_HEAD`, extra refs,
-unreachable objects, or credential-bearing configuration. Physical `.git`
-entries and bytes count toward acquisition and retained-generation limits even
-though their volatile representation is excluded from the source-visible
-manifest.
-
-### Canonical workspace manifest
-
-Both source modes produce the same versioned canonical manifest. Its RFC 8785 bytes enumerate every source-visible directory, regular file, and symbolic link in logical path order, including normalized mode, size, content digest, or link target.
-
-Repository roots are identified by unique, pairwise non-overlapping
-destinations. A declared, separately verified `.git` subtree is omitted from
-source-visible entries in either source mode; any undeclared `.git` path is
-invalid. The runner verifies the manifest digest, walks staging without following
-links, reconstructs the same source-visible entries, and requires byte-for-byte
-canonical equality. It separately verifies every omitted Git root against its
-declared commit and object-set digest. The manifest never appears inside the
-published source tree.
-
-### Generation identity
-
-The private generation key is computed before materialization. It includes every input that can change source-visible bytes, filesystem semantics, or sharing authorization.
-
-| Included | Excluded |
-|---|---|
-| Descriptor and hook contract versions | Access and retention |
-| Deployment authorization scope | Working directory |
-| Normalized caller Git URLs | Harness, profile, and session identity |
-| Resolved commits or exact OCI image and workspace-manifest digests | Physical paths |
-| Normalized destinations | Credential values |
-| Selected credential-reference identities | Caller ref spelling after it resolves to the same commit |
-| Snapshot identity when applicable | Repository-mode volatile Git pack, index, and stat representation |
-| Acquisition and egress policy version | |
-
-OCI generation reuse is artifact-exact. Repacking snapshot `.git` data changes
-the image digest, generation key, and public OCI identity even when the semantic
-Git state is unchanged. Semantic Git verification proves what one artifact
-contains; it does not deduplicate distinct OCI artifacts.
-
-Publication binds one private key and one internal epoch to one verified workspace-manifest digest and every declared semantic Git-state record, whether Git was acquired from a remote or carried offline in an OCI snapshot. Materialization receives the exact private resolved plan and never resolves source again.
-
-## Generation publication and attachments
-
-A generation is immutable source content identified by its private generation key, manifest digest, and unique internal epoch. At most one live epoch may exist for a key. A replacement epoch cannot begin until durable logical and physical eviction of the prior epoch completes.
-
-Concurrent cache misses for the same key join one runner-owned build claim. Each
-waiter keeps its own deadline and cancellation. Cancelling one waiter does not
-cancel the build while another waiter remains; the runner cancels it when no
-waiter remains. Failed or partial staging is never attachable, and a failed
-competing build does not poison an existing verified generation.
-
-Before attaching a view, the runner acquires a provisional pin under the generation lock. Garbage collection cannot race that pin.
-
-The generation backing store remains owner-writable and is never exposed writable to a session. Publication is a recoverable same-filesystem atomic transition. Editable views may not share mutable state with the generation or another session.
-
-Read-only sessions share source bytes but keep their operating-system identity,
-conversation, home, temporary files, logs, outputs, and response state separate.
-
-
-The gateway and runner commit an attachment in three steps:
-
-1. The runner prepares the read-only mount or private writable view and returns opaque evidence.
-2. The gateway commits attachment state as `ready`.
-3. The runner acknowledges that commit, creates the durable reference or transfers the private reservation, and releases the provisional pin exactly once.
-
-Restart preserves a gateway-committed attachment. It rolls back an uncommitted prepare.
-
-`lastUsedAt` changes only when the gateway commits `ready`. Its initial value is null. A ready commit sets it to the later of the existing value and commit timestamp under the generation lock. Replay is idempotent. Publication and failed prepare do not count as use.
-
-Garbage collection orders candidates as follows:
-
-1. Generations with null `lastUsedAt`, ordered by `publishedAt`.
-2. Other generations, ordered by `lastUsedAt`, then `publishedAt`.
-3. Ties use ascending generation-key bytes, then epoch-ID bytes.
-
-Only ready generations with zero references and zero provisional pins are candidates.
-
-## Session lifecycle, retention, and recovery
-
-### Session binding and continuation
-
-Deployment configuration gives each harness exactly one authentication binding.
-A proxy binding is a closed server-side record containing its private HTTPS base
-URL, expected TLS identity or CA, supported API format and endpoint set,
-gateway-only client-key handle, broker audience, and requested-to-proxy model
-map. Callers cannot override these fields.
-
-A target is advertised only after its binding passes readiness checks. Native
-OAuth checks login, refresh, and a live turn. Proxy mode checks schema, TLS,
-broker, model mapping, endpoints, and live compatibility.
-
-The first response binds one normalized descriptor, generation key and epoch,
-access mode, retention class, working directory, harness target, authentication
-mode, binding identity, and canonical binding-configuration digest.
-
-A continuation uses `previous_response_id`, omits workspace metadata input,
-requires the exact bound attachment and binding-configuration digest, and
-succeeds only when retention is persistent or the session idle deadline is still
-in the future.
-
-A changed ref, resolved source, working directory, access, retention, harness,
-authentication mode, binding identity, or binding-configuration digest requires
-a new session. A continuation never re-resolves source, follows a changed
-same-named connection, or substitutes a later generation epoch.
-
-Missing or corrupt generation, reference, publication, private workspace, or checkpoint evidence returns `allagents_workspace_non_resumable`. The system does not rebuild the missing state for that session.
-
-### Turn admission and idle expiry
-
-Every active operation holds a durable lease and has no idle expiry.
-
-One gateway compare-and-swap checks `session_busy`, exact binding, and expiry or
-deletion together. A busy or invalid turn changes no deadline.
-
-For an eligible continuation, the gateway saves and clears the current idle
-deadline in a provisional admission fence before the runner checks profile
-readiness and reserves one configured concurrent-turn slot for that profile.
-Success commits the session as active. A pre-allocation profile failure restores
-the exact saved deadline when it is still future, or tombstones the session if
-that deadline elapsed.
-
-After terminal acknowledgement, a `session` workspace receives one idle deadline. GET, polling, background completion, and replay never extend it. Persistent sessions keep `expiresAt: null`.
-
-### Capacity
-
-Every deployment limit must be finite and nonzero:
-
-| Capacity | Required limit |
-|---|---|
-| Sessions | Total active and retained sessions |
-| Failed identity | Tombstone count, bytes, and TTL |
-| Builds | Concurrent builds and staging bytes |
-| Native authentication | At least two concurrent turns per profile; finite renewal timeout |
-| Generations | Published count and bytes |
-| Editable workspaces | Per-session hard bytes and inodes |
-| Private storage | Total reserved bytes and inodes |
-| Persistence | Persistent session count |
-| Idle retention | Session idle TTL |
-
-Before a response is visible, one idempotent admission token reserves a generic session slot and a fixed-size tombstone slot. Invalid descriptors remain charged through failed-response retention, tombstoning, and purge.
-
-After validation and before source resolution, the runner authorizes persistence
-and reserves its slot. Editable access also receives one stable private-view
-reservation ID. Its hard byte and inode allowance covers the writable view, UHP
-overlays, root and nested-repository checkpoints, and produced-file state across
-every turn and continuation.
-
-A cache miss reserves staging and prospective generation capacity before byte acquisition. Independent full-tree accounting converts that reservation to actual retained usage before publication.
-
-A waiter receives an editable view only when the complete generation fits its private allowance. A non-fitting waiter fails alone and does not invalidate the shared generation or another waiter.
-
-Protected state is never evicted. If leases, references, pins, or other protected resources consume capacity, admission fails instead.
-
-### Expiry and deletion
-
-Expiry and authenticated deletion follow this order:
-
-1. Atomically tombstone the session and reject new continuations.
-2. Wait for active work, credential projections, and mounts to quiesce.
-3. Remove private state.
-4. Release every generation reference and reservation exactly once.
-5. Record successful deletion, or keep failed physical deletion quarantined and counted for retry.
-
-A retained tombstone lives at least as long as matching response and idempotency records and returns `allagents_workspace_expired`. Bounded compaction removes the identity and reserved tombstone slot only after those records expire. Later requests receive the stock non-disclosing unknown-predecessor error.
-
-Neither path rematerializes source.
-
-### Restart recovery
-
-Completed unexpired or persistent sessions and ready generations survive restart.
-
-Before readiness or garbage collection, the gateway and runner reconcile generic
-admission tokens and reservations, active leases, turn-admission fences, build
-claims and waiters, staging and generation reservations, publications, pins,
-references, mounts, editable usage, attachment prepare and acknowledgement,
-credential projections, tombstones, compaction, quarantine, and interrupted
-deletion.
-
-An internal `containment_pending` session remains non-terminal until its recorded cgroup is empty. Whole-container termination does not preserve agent processes; interrupted turns fail and are not replayed.
-
-## Provider authentication
-
-| | Native OAuth | Authenticated proxy |
-|---|---|---|
-| Default | Yes | No; explicit configuration only |
-| Provider credential owner | Codex or Pi harness profile | Proxy service |
-| Harness receives | Selected turn-scoped view of the shared profile | Non-refreshable scoped turn credential |
-| Refresh | Harness-native through the per-profile renewal coordinator | Not allowed for the turn credential |
-| Automatic fallback | Never | Never |
-
-Promptfoo's HarnessRouter API key authenticates the UHP caller only. HarnessRouter never translates it into provider credentials.
-
-Each configured native profile has one dedicated durable authentication root
-outside generations, editable workspaces, session checkpoints, and conversation
-state. Compatible harness targets may reference the same profile. Codex uses
-file credential storage under `CODEX_HOME`. Pi uses
-`~/.pi/agent/auth.json` after controlled `/login`.
-
-Missing, revoked, or unrefreshable native OAuth disables that harness target. An
-expired but refreshable token is renewed through the coordinator. HarnessRouter
-does not switch to another profile or provider route.
-
-Native OAuth uses an owner-trust boundary. During an active turn, the selected harness and same-operating-system-identity tools may read or emit that profile's credential. Operators that require stronger isolation must use the explicit proxy route or isolate the whole deployment more strongly.
-
-Multiple turns may use one native profile at the same time. Reading a valid token
-does not require a lock. Renewal does, because two provider refresh calls using
-the same old token can invalidate or overwrite each other.
-
-The pinned auth adapter remembers which credential contents a turn used and must
-enter the runner-owned renewal coordinator before calling the provider's refresh
-endpoint. Waiting for the renewal lock stops at the turn deadline. Once the
-coordinator records a pending renewal, it—not the turn—owns the transaction:
-
-1. Acquire the renewal lock and reread the current credential file.
-2. If its contents changed since the turn last read them, reload the saved
-   credential, release the lock, and skip the provider refresh call.
-3. Otherwise, record the renewal attempt before the provider call.
-4. Renew once and replace the credential file with a same-filesystem temporary
-   file, file `fsync`, atomic rename, parent-directory `fsync`, and validation.
-5. Mark the renewal complete and release the lock as soon as the valid credential
-   is visible.
-
-Cancellation or the turn deadline cannot release a recorded renewal. The
-coordinator uses its own finite renewal timeout. On timeout or process failure,
-it stops the refresh process, waits until that process tree is gone, marks the
-profile `repair-required`, and only then releases the lock. The turn cannot reach
-terminal acknowledgement before that outcome is durable.
-
-A turn must never call the provider's refresh endpoint outside that coordinator.
-If the pinned Codex or Pi version cannot acquire the renewal lock before calling
-the provider, that target fails the phase-zero gate.
-
-A `repair-required` profile accepts no new turns or renewal attempts. A turn
-already running may finish if its current access token still works; otherwise it
-returns the normal provider-authentication failure. It never switches profiles or
-activates the proxy.
-
-Login, logout, and repair use a separate durable maintenance fence. Its
-`pending` state stops new admissions and waits for active turns to finish. While
-the fence is pending or active, a new turn receives the retryable
-`allagents_auth_profile_unavailable` error. If the operator deadline expires
-before maintenance starts, the runner removes the pending fence and normal
-admission resumes.
-
-Once maintenance becomes `active`, timeout or cancellation requests process
-termination but never releases the fence. The runner waits for the process tree
-to stop, validates the profile or marks it `repair-required`, records the
-outcome, and only then resumes admission. Startup reconciles every pending or
-active maintenance record before that profile becomes ready.
-
-A native turn follows this order:
-
-1. Reserve one configured concurrent-turn slot for the profile.
-2. Project only that profile through a turn-scoped mount namespace or equivalent
-   same-filesystem view. Concurrent turns see the same atomically replaced
-   credential file.
-3. Run the harness and descendants. The auth adapter coordinates renewal only
-   when needed.
-4. After descendants stop, verify that turn has no incomplete renewal record.
-   Reconcile uncertain state or mark the profile `repair-required`.
-5. Remove the projection and verify the retained session home is clean.
-6. Persist terminal acknowledgement, then release the profile turn slot.
-
-HarnessRouter claims each `Idempotency-Key` atomically. Requests with the same
-key share one result. Same-session overlap still returns `session_busy`.
-
-Different sessions may run concurrently with the same or different profiles.
-Each profile has a finite concurrent-turn limit of at least two. Saturation fails
-before response allocation with HTTP 503 `harness_unavailable` and reason
-`allagents_auth_profile_capacity_exceeded`.
-
-The runner supervisor holds each turn's admission token and credential projection
-through descendant termination, credential validation, projection teardown, and
-terminal acknowledgement. It holds renewal ownership from the durable pending
-record through commit or a durable `repair-required` fence. Gateway failure
-cannot release the turn token. Runner failure leaves durable state. Startup
-blocks that profile's admission until it reconciles every turn token, renewal
-record, maintenance record, and stale projection.
-
-In proxy mode, the gateway issues a non-refreshable credential bound to one proxy
-audience, harness target, model allowlist, response and turn ID, and the UHP
-deadline plus minimal clock skew. It may authorize only the bounded provider
-calls, compaction, and retries needed by that turn. Cancellation or terminal
-completion revokes it. The broker rejects wrong audience, model, turn, expiry, or
-revocation. Checkpoints, logs, artifacts, stored responses, and retained session
-state never persist the proxy turn credential.
-
-## Fork boundary
-
-The HarnessRouter fork is limited to two generic seams:
-
-1. A pre-turn workspace hook with typed `preflight`, `validate`, `resolve`, and `materialize` operations.
-2. A harness-authentication-state seam that keeps provider profiles separate from conversation and workspace state.
-
-| Hook operation | Responsibility |
-|---|---|
-| `preflight` | Validate contract and policy versions, configured credential references, and required tools without request URLs, network access, or secret values |
-| `validate` | Apply descriptor defaults, validate URL, ref, destination, access, retention, and working-directory syntax, and select bounded credential references without source access |
-| `resolve` | Resolve immutable Git commits or OCI identity and return the private resolved plan, generation key, effective working directory, and public provenance without writing source bytes |
-| `materialize` | Consume the exact resolved plan on a cache miss, write only private staging and result roots, and return the manifest without publishing or re-resolving source |
-
-The generic fork understands only the configured metadata key, generic JSON and byte limits, immutable first-turn binding, the typed hook envelope, runner resource ownership, lifecycle state, and the response namespace. It does not understand the AllAgents schema, Git, OCI, or credential-selection policy.
-
-Requests without the extension keep stock behavior. Upstream UHP conformance must stay green. Production pins an upstream commit and carries a focused patch series with no unrelated changes.
-
-The upstream proposal should contain only the generic workspace and authentication-state seams. If upstream accepts an equivalent interface, remove the corresponding fork patch rather than keeping a compatibility layer.
-
-### Upstream status
-
-We rechecked upstream on 2026-09-27 at HarnessRouter
-[`5f82db1d`](https://github.com/HarnessRouter/harnessrouter/commit/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3),
-also released as
-[`v0.25.4`](https://github.com/HarnessRouter/harnessrouter/releases/tag/v0.25.4).
-Upstream now has a session lease before workspace hydration, per-session
-workspaces, durable checkpoints, safe input and plugin-package writes, and
-per-turn API-key brokering. We will reuse those pieces rather than replace them.
-
-The two required seams are still missing at that pin. Ordinary request metadata
-does not reach the runner; the source says that only its System One probe is
-forwarded
-([gateway source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/gateway/app.py#L7289-L7293)).
-The runner's authentication shape contains API keys, endpoints, and cloud
-credentials, but no native profile identity or OAuth state
-([authentication source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L1386-L1405)).
-Codex and Pi credential files are deliberately excluded from session checkpoints
-([checkpoint source](https://github.com/HarnessRouter/harnessrouter/blob/5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3/runner/server.py#L476-L503)),
-with no separately durable profile store or projection contract to replace them.
-Upstream therefore does not provide the native-profile renewal coordination,
-repair fencing, or profile-local readiness required here.
-
-Therefore stock HarnessRouter still cannot implement this decision. The maintained
-fork remains necessary, but only for the two seams above. Every upstream pin
-change must repeat this inspection. If upstream supplies either equivalent seam,
-we delete that downstream patch.
-
-### Materializer containment
-
-Each hook invocation receives one runner-owned cgroup-v2 leaf under the delegated
-subtree.
-
-| Property | Requirement |
-|---|---|
-| Placement | Put the child in the leaf atomically with `clone3(CLONE_INTO_CGROUP)`, or use a stopped, secret-free pre-exec move-and-verify handshake |
-| Authority | The child and its descendants cannot administer or escape the leaf |
-| Termination | Cancellation, deadline, or parent exit with live descendants fails the invocation; use `cgroup.kill` when descendants remain |
-| Proof | Require `cgroup.events` to report `populated 0` before reading a result, publishing, releasing a secret, cleaning roots, or exposing terminal state |
-
-If the leaf cannot be emptied, internal state becomes `containment_pending`.
-Readiness and terminal visibility remain blocked until restart reconciliation
-proves it empty and records the preserved outcome once.
-
-## Trust, deployment, and release
-
-HarnessRouter API authentication is mandatory on every externally reachable
-create, continuation, retrieval, stream, cancellation, file, artifact,
-persistence, deletion, and lifecycle-administration endpoint. This remains true
-on a private network. Authentication fails before resource lookup, disclosure, or
-mutation, so an unauthenticated request reveals neither session existence nor
-retention state.
-
-The gateway-to-runner channel is mutually authenticated and not externally routable. The service binds to loopback or a private network with equivalent ACL or firewall controls. Version one is not a public multi-tenant service.
-
-HarnessRouter supplies per-session operating-system identities. It is not a hostile-code sandbox. No session identity may write the generation backing store. Editable workspaces, homes, temporary files, output, and checkpoints remain session-private.
-
-The pinned production image contains:
-
-- an OCI base image pinned by digest;
-- the pinned HarnessRouter CE commit and reviewed patch series;
-- the AllAgents materializer and locked runtime dependencies;
-- version-locked OS packages and Git or OCI tools; and
-- pinned HarnessRouter-supported Codex and Pi versions.
-
-Only the runner receives the delegated cgroup v2 subtree. The container uses `on-failure` restart policy.
-
-Startup begins in non-serving mode. Readiness requires all of the following:
-
-- verified image attestations and mounted inputs;
-- usable cgroup delegation and cleanup of orphaned materializer cgroups;
-- removal or quarantine of stale credential projections;
-- finite lifecycle and capacity limits;
-- writable staging and editable volumes;
-- a protected generation store;
-- verified mount, same-filesystem, quota, and isolation relationships;
-- successful materializer preflight and native or proxy authentication checks; and
-- complete startup reconciliation before serving or garbage collection.
-
-Operators must be able to observe aggregate generation, editable-workspace, persistent-session, tombstone, quarantine, and failed-deletion capacity without exposing source paths or credentials.
-
-AllAgents publishes the public `linux/amd64` image as `ghcr.io/allagentsdev/harnessrouter`. Version and commit tags are discovery labels, not immutable deployment identities. Deployments pin the manifest digest.
-
-The release workflow uses commit-pinned actions and separates untrusted,
-credential-free pull-request testing from protected release testing. A
-credential-bearing job never runs for a pull-request event or PR-controlled ref.
-It accepts only an image artifact whose recorded digest, source commit, and
-workflow identity match the approved release ref.
-
-Green release verification runs the service, not just its build. A GitHub Actions
-job starts the exact image as a local container on loopback or a private Docker
-network, waits for readiness, and runs the AI Evals repository's locked Promptfoo
-CLI and provider against it. This is an ephemeral test deployment, not a public
-HarnessRouter service. A hand-written HTTP call may provide an additional smoke
-test, but it cannot replace the real Promptfoo path.
-
-Pull-request jobs use a deterministic local provider fixture and receive no real
-provider credentials. An environment-approved release job mounts the real Codex
-and Pi profiles and proves native login, continuation, concurrency, renewal, and
-cleanup. If a standard GitHub-hosted runner cannot provide the required mount or
-cgroup behavior, the job receives a dedicated one-job self-hosted runner. That
-runner is destroyed after credential teardown and is never reused for an
-untrusted job; the workflow may not weaken or skip checks to fit a runner.
-
-The protected workflow pushes an untagged candidate by digest, creates
-GitHub/Sigstore build-provenance and SBOM attestations, and anonymously pulls that
-digest into a fresh protected job. That job repeats the complete Promptfoo path,
-including native Codex and Pi cases, then creates a signed green-E2E attestation
-for the same digest. Only after all three attestations verify does the workflow
-apply version and commit discovery tags or mark the release complete. Deployment
-requires the expected repository, workflow, approved ref, subject digest,
-predicate, base-image digest, lockfiles, OS packages, source tools, Codex and Pi
-versions, pinned AI Evals commit, Promptfoo lockfile identity, and successful
-green-E2E attestation. A candidate without that final attestation is not
-deployable.
-
-Promptfoo and AI Evals are pinned by the AI Evals lockfile and commit; the
-workflow never downloads a floating `promptfoo@latest`. GitHub package
-permission replaces third-party registry credentials.
+HarnessRouter's per-session process isolation remains useful, but this deployment is not represented as a hostile-code sandbox. The service binds to loopback by default and requires an explicit operator decision and network controls before broader exposure.
 
 ## Failure behavior
 
-The system fails closed. Source, access mode, retention, credentials, and provider route never change as a recovery shortcut.
+The gateway fails closed without changing source, checkout, harness, model route, or provider protocol as a recovery shortcut.
 
-| Failure | Public behavior | Required effect |
-|---|---|---|
-| Non-object workspace extension | HTTP 400 `invalid_input` before allocation | Reject before session lookup or durable admission |
-| Extension exceeds 64 KiB or 32 levels | HTTP 413 `allagents_workspace_too_large` before allocation | Reject before canonicalization, session lookup, or durable admission |
-| Invalid bounded descriptor shape, URL syntax, ref syntax, destination, or working-directory syntax | `allagents_workspace_invalid` after allocation | Reject without source access |
-| Unknown or unadvertised ref | Failed response during resolution | Allow only bounded remote ref resolution; acquire no source bytes and create no attachment or agent |
-| `workspacePath` is missing or not a directory | `allagents_workspace_invalid` after checking the verified manifest | Reject before attachment or agent launch |
-| Unauthorized `persistent` retention | `allagents_workspace_persistence_forbidden` | No source resolution or byte acquisition; no downgrade |
-| Initial files with `readOnly` | `allagents_workspace_read_only` | No source acquisition and no writable shadow layer |
-| Workspace extension on a continuation | Invalid request | No session mutation, lease, or deadline change |
-| Expired or deleted retained session | HTTP 410 `allagents_workspace_expired` | No runner or profile work; no rematerialization |
-| Purged predecessor | Stock non-disclosing unknown-predecessor error | No rematerialization |
-| Missing or corrupt bound attachment evidence | HTTP 409 `allagents_workspace_non_resumable` | No profile admission or epoch substitution; return committed workspace metadata |
-| Native profile reaches its configured concurrent-turn limit after replay and `session_busy` checks | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_capacity_exceeded` | Fail before allocation, runner work, or materialization |
-| Native profile is unavailable, `repair-required`, or under maintenance | HTTP 503 `harness_unavailable`, reason `allagents_auth_profile_unavailable` | Fail before allocation without switching profile or activating the proxy |
-| Generic capacity unavailable | HTTP 503 `allagents_workspace_capacity_exceeded` | Admit no response or source work |
-| Editable view or later growth exceeds its allowance | `allagents_workspace_private_quota_exceeded` | Fail only that waiter or turn; preserve mode and retention |
-| Source policy, authentication, or transport failure | Coded failed response | Remove unpublished staging; publish nothing; start no agent or provider fallback |
-| Generation, attachment, or private-view failure | Coded failed response | Quarantine incomplete state and release reservations and pins exactly once |
-| Materializer timeout, crash, malformed output, or live descendant | Coded materializer or containment failure | Wait for cgroup quiescence before result handling, secret release, or cleanup |
-| Provider authentication failure | Normalized UHP failure | Do not switch profile or activate proxy; validate credentials, remove the projection, and release turn capacity |
-| Provider execution failure | Normalized UHP failure | No source fallback and no credential material in output |
+| Failure | Behavior |
+|---|---|
+| Malformed, oversized, nested too deeply, or unknown workspace field | Reject as invalid UHP input before source access. |
+| Disallowed URL, DNS answer, redirect, protocol, ref, or Git feature | Fail the response before attachment; remove bounded staging; do not start a harness or provider call. |
+| Ref does not resolve to one permitted commit | Fail with source-resolution error; do not guess a default or fetch arbitrary objects. |
+| Resource or concurrency limit unavailable | Reject or fail with a retryable capacity error before starting unbounded work. |
+| Materializer timeout, crash, cancellation, or live descendant | Terminate and reap the process tree, clean staging idempotently, and return a coded failure. |
+| Working directory missing, not a directory, or escaping through traversal/symlink | Fail before harness execution. |
+| Workspace metadata present on any reused session | Reject the request without changing the existing session or extending its TTL. |
+| Bound checkout expired, missing, corrupt, or mismatched | Fail continuation; do not clone, substitute, or resurrect it. |
+| External OAuth gateway authentication or provider failure | Return the normalized UHP failure; do not switch endpoint, protocol, credential, or harness. |
+| Cleanup failure | Keep the allocation unavailable, report operational failure, and retry the same idempotent cleanup path. |
 
-Capacity is reserved in order: generic session and tombstone before response visibility; persistence and editable allowance after validation and before source resolution; staging and prospective generation after resolution and before byte acquisition; actual retained usage before publication. Each reservation is released or transferred exactly once.
+Promptfoo treats non-success as an evaluation error. It does not turn gateway failures into empty successes or implicit retries.
 
-A failed physical deletion remains quarantined and counted. The system never advertises that capacity as free, resurrects the resource, or permits a same-key replacement before physical deletion completes.
+## Repository, deployment, and release boundary
 
-New vendor codes use the `allagents_` prefix. Promptfoo maps every non-success to a coded error and never converts failure into empty success or automatic retry.
+`allagentsdev/allagents-gateway` is the implementation product. The repository contains the preserved HarnessRouter downstream, narrow workspace patch, materializer, Docker Compose deployment, pinned Promptfoo dependency and scenarios, and image release workflow. `allagentsdev/allagents` remains the local Bun CLI repository and contains only this integration decision and planning material; v1 adds no `allagents gateway start` command or other CLI coupling.
 
-## Consequences
+Once the existing fork has been renamed and `allagentsdev/allagents-gateway` exists, that repository's code, lockfiles, Compose file, limits, runbooks, and implementation documentation are authoritative for implementation detail. This ADR remains authoritative for the integration and product boundary. An implementation need that contradicts this boundary requires reconsidering the decision, not silently expanding the downstream.
 
-HarnessRouter remains the sole execution and session control plane. AllAgents adds workspace preparation and source policy without adding another streaming API, process supervisor, artifact service, provider adapter, or task engine.
+The supported deployment is one container started by Docker Compose, bound to loopback by default, with durable `/data` and `HR_BACKENDS=codex,omp`. The materializer ships in that image; it is not another service.
 
-Shared read-only generations avoid repeated acquisition and may serve concurrent sessions using the same or different harness profiles. Editable sessions trade that reuse for a reserved private byte and inode envelope.
+The public image is `ghcr.io/allagentsdev/allagents-gateway`. It has its own versions and release cadence, independent of the `allagents` npm CLI. Deployments pin image digests. Releases produce standard SBOM and build-provenance attestations and run upstream UHP conformance against the built image.
 
-Persistent sessions, active references, provisional pins, retained tombstones, and quarantined deletion failures consume finite capacity. Crash-consistent accounting and admission rejection are operational requirements, not optional optimizations.
-
-Native OAuth deliberately trusts the selected harness and same-identity tools during an active turn. Source-acquisition credentials remain outside that boundary and never enter a generation or agent environment.
-
-The maintained fork must be rebased and tested against selected upstream releases until equivalent supported seams exist.
+Promptfoo is lockfile-pinned in the gateway repository and calls the built image directly over UHP. Release verification exercises both Codex and OMP through the configured external provider gateway. No intermediate evaluation repository or custom green-E2E attestation format is part of the product.
 
 ## Alternatives rejected
 
 | Alternative | Why rejected |
 |---|---|
-| Custom execution gateway | Duplicates mature UHP session, streaming, cancellation, authentication, artifact, and provider behavior |
-| Proxy-first provider authentication | Adds a mandatory API key and network hop when native Codex or Pi authentication works |
-| Thin adapter in front of stock HarnessRouter | Adds another network service and pushes source lifecycle outside the session control plane |
-| Descriptor in the prompt | Lets the model control acquisition and is neither deterministic nor safe |
-| Acquisition through an MCP tool | Runs only if the model chooses it and cannot define the initial working directory |
-| Upload every source file as UHP input | Loses exact Git history, symlink, mode, and OCI layer semantics and moves acquisition to every caller |
-| Rematerialize a private tree for every trial | Repeats network, CPU, and storage work and prevents safe immutable sharing |
-| Wait for upstream | Makes delivery depend on a project we do not maintain |
+| Build a new execution gateway | Duplicates HarnessRouter's UHP, sessions, streaming, cancellation, files, artifacts, and harness supervision. |
+| Put a thin service in front of stock HarnessRouter | Splits checkout and session ownership across services and still cannot place the workspace at the correct runner lifecycle point. |
+| Create a third repository that consumes the HarnessRouter fork | Loses the clear downstream history and adds a release/rebase boundary without adding product isolation. |
+| Wait for stock HarnessRouter | The pinned version accepts arbitrary metadata but forwards only the System One probe; it has no workspace lifecycle semantics. |
+| Add a general metadata extension or materializer framework | V1 has one object and one implementation. A framework would enlarge the fork before a second use case exists. |
+| Put repository instructions in the prompt or a model tool | Makes acquisition model-dependent, non-deterministic, too late to set the initial working directory, and unsafe for credentials and provenance. |
+| Make the local AllAgents CLI or its profiles the remote control plane | Couples a local developer tool to an independently deployed service and duplicates HarnessRouter custom harnesses. |
+| Manage provider login inside AllAgents Gateway | Duplicates the external OAuth gateway's ownership of login, refresh, and repair and expands the credential attack surface. |
+| Upload every source file through UHP | Pushes acquisition to every caller and loses authoritative Git ref-to-commit provenance and repository behavior. |
 
-## Deliberate limits
+## Deliberate v1 limits
 
-Version one does not add evaluation datasets, Harbor task ingestion, SWE-bench/Hugging Face ingestion, caller-selected runtime images or verifiers, scoring, assertions, automatic retries, session branching, concurrent turns within one session, caller-supplied credentials, non-HTTPS or private-network Git origins, public multi-tenancy, arbitrary materializer commands, mutable OCI tags, transparent source-mode fallback, or guaranteed provider prompt-cache hits.
+V1 supports one anonymous public HTTPS Git repository using SHA-1 object IDs, one private editable checkout per session, an optional advertised branch/tag ref, an optional safe working directory, exact 40-hex commit provenance, and bounded ephemeral retention.
 
-Read-only attachments never copy up or become editable. Editable sessions never share mutations. Callers cannot choose arbitrary TTLs, bypass persistence quotas, or change retention on continuation. Leased, referenced, or pinned state is never evicted. Default retention is always bounded.
+V1 does **not** include raw commit-ID requests, SHA-256 repositories, multiple repositories, private-source credentials, OCI sources, caller-selected runtime images, shared or read-only generations, cross-session caching, persistent workspaces, user-selected TTLs, session branching, checkout migration, or elaborate tombstone and garbage-collection machinery beyond minimal idempotent cleanup. It uses HarnessRouter's existing file and artifact behavior rather than inventing produced-file tracking.
+
+Only Codex and OMP are required and release-validated. Other upstream backends and a future Copilot harness are outside this decision. There is no local-profile import, host-profile projection, provider-route override, automatic provider fallback, public multi-tenant authorization model, scoring service, dataset service, or evaluation task engine.
+
+## Consequences
+
+AllAgents Gateway inherits a mature UHP execution plane and keeps the maintained patch reviewable. The cost is an ongoing rebase obligation against pinned HarnessRouter releases and ownership of a security-sensitive Git materializer.
+
+Each session pays for a private checkout and cannot reuse a shared generation. That is intentionally less efficient than a source platform, but it makes mutability, provenance, continuation, quota, and cleanup ownership understandable for v1.
+
+Provider credential lifecycle stays outside the gateway. This reduces credential code and operational states in the downstream, at the cost of requiring a compatible external OAuth gateway and making its availability part of the service's readiness.
+
+The gateway and CLI can release independently. Promptfoo tests the same image and UHP surface that operators deploy.
 
 ## Reconsider when
 
-Revisit this decision when:
+Revisit this decision if:
 
-- either required native harness fails the phase-zero gate;
-- the host cannot enforce immutable read-only generation mounts across sessions;
-- continuation, expiry, deletion, and lease acquisition cannot be linearized and recovered safely;
-- generation churn or authorized persistent demand cannot fit practical finite quotas;
-- editable derivation requires stronger filesystem semantics than a private writable view with no shared mutable state;
-- upstream HarnessRouter accepts the generic workspace or authentication-state seam;
-- UHP adopts a standard workspace attachment or retention contract that replaces this extension;
-- the maintained patch grows beyond the narrow integration boundary;
-- HarnessRouter removes required UHP, session, or provider behavior;
-- exact per-turn workspace rollback becomes a requirement;
-- the host cannot enforce public-address egress validation, address pinning, redirect revalidation, and out-of-scope credential stripping;
-- source acquisition needs a stronger isolation boundary;
-- callers require a public multi-tenant authorization model; or
+- UHP standardizes a workspace attachment with equivalent first-turn and continuation semantics;
+- upstream HarnessRouter adds an equivalent narrow post-hydration, pre-execution workspace seam;
+- the downstream patch grows beyond metadata recognition, binding, and one fixed materializer invocation;
+- a second materializer is approved and proves that a registry is simpler than explicit code;
+- private repositories, multiple repositories, OCI sources, persistent workspaces, or shared immutable caching become validated product requirements;
+- public multi-tenancy or stronger hostile-code isolation becomes a requirement;
+- Codex can no longer use the external gateway's Responses surface, or OMP cannot use its configured compatible surface;
+- the external gateway can no longer own provider login, refresh, and repair;
+- private editable checkouts cannot meet practical storage and cleanup bounds; or
 - another UHP implementation offers a materially smaller and more stable integration surface.

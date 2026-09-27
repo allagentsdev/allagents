@@ -129,8 +129,9 @@ There is no provider-specific workspace implementation phase.
 - A strict, closed, first-turn-only `metadata.workspace` request extension.
 - An ordered array of 1 to 128 Git, OCI, or mixed source entries.
 - Exactly one tree and one required non-root destination per source.
-- Canonical public HTTPS Git acquisition at an exact resolved commit with fixed
-  depth 2 and safe bounded `.git` metadata for agent convenience.
+- Canonical public HTTPS Git acquisition at an exact resolved commit with full
+  reachable ancestry by default, optional explicit shallow depth, and safe
+  self-contained `.git` metadata for regression analysis.
 - Operator-cataloged OCI source trees selected by exact image-manifest and
   source-manifest digests, including Git-free trees.
 - Per-component cache/singleflight followed by one session-local resolved plan.
@@ -146,8 +147,9 @@ There is no provider-specific workspace implementation phase.
   resource limits.
 - A public component-cache or composition API, a global composition record,
   cache, identifier, or compatibility aliases for obsolete workspace schemas.
-- Git-to-OCI, OCI-to-Git, ref, digest, registry, provider, deepening, full-clone,
-  or history fallback.
+- Git-to-OCI, OCI-to-Git, ref, digest, registry, provider, or history-mode
+  fallback. A failed full fetch never silently becomes shallow, and a failed
+  shallow fetch never deepens.
 - Git submodule initialization, LFS hydration, checkout filters, or hook
   execution.
 - Requiring Git at workspace root or in OCI trees.
@@ -193,6 +195,7 @@ metadata.workspace = {
         kind: "git",
         url: string,
         ref?: string,
+        depth?: integer,
         destination: string
       }
     | {
@@ -206,6 +209,11 @@ metadata.workspace = {
   working_directory?: string
 }
 ```
+
+For a Git source, omitted `depth` means the complete ancestry reachable from the
+resolved commit. A supplied `depth` is an integer from 1 through 1,000,000 and
+requests exactly that shallow boundary. Full history does not fetch unrelated
+refs or tags merely for completeness.
 
 There is no request `retention` field and no `persistent` mode. The obsolete
 singular `source`, `kind: "repositories"`, `repositories`,
@@ -229,7 +237,7 @@ metadata.workspace = {
         url: string,
         destination: string,
         resolved_commit: string,
-        depth: 2,
+        depth?: integer,
         source_manifest_digest: "sha256:<64 lowercase hex>",
         requested_ref?: string
       }
@@ -243,6 +251,9 @@ metadata.workspace = {
   >
 }
 ```
+
+Git response provenance mirrors the selected history: omitted `depth` means full
+reachable ancestry, while a present value is the exact requested shallow depth.
 
 `working_directory` is always present and uses `.` for the outer root. There is
 no public `retention`, `effective_descriptor_digest`, `composition_id`, or
@@ -271,7 +282,9 @@ traffic, cache lookup, component claim, workspace write, or expiry mutation:
 6. Accept only canonical public HTTPS Git URLs allowed by deployment egress
    policy. Reject userinfo, query, fragment, ambiguous encodings, alternate
    transports, and caller Git options. A ref resolves only through advertised
-   default, branch, or tag semantics.
+   default, branch, or tag semantics. Omitted `depth` means complete ancestry
+   reachable from the resolved commit; a supplied `depth` MUST be an integer
+   from 1 through 1,000,000.
 7. For OCI require a catalog `snapshot_name` and direct SHA-256 image/source
    manifest digests. Reject tags, indexes/lists, caller registry coordinates,
    and mutable references.
@@ -290,6 +303,7 @@ contract revision:
 | Expanded bytes | 32 GiB | 64 GiB |
 | Source-visible entries | 500,000 | 1,000,000 |
 | Compressed Git pack or OCI layer bytes | 8 GiB | 16 GiB |
+| Reachable Git objects | 5,000,000 | 10,000,000 |
 | Regular-file bytes | 4 GiB | 4 GiB per file |
 | Path | 4096 UTF-8 bytes / 128 components | same per path |
 | Acquisition/materialization time | bounded operator policy | bounded session policy |
@@ -339,7 +353,8 @@ materialized as ordinary files and are not a manifest type. `.git` entries MAY
 be covered by source integrity manifests, but `.git` is always excluded from
 public change reporting.
 
-Git acquisition computes this manifest from the verified detached depth-2 tree.
+Git acquisition computes this manifest from the verified detached tree with the
+selected full or shallow history.
 OCI fetches and validates the named source manifest before requesting any layer,
 applies standard OCI image/layer/whiteout semantics, and requires the extracted
 final tree to match exactly.
@@ -409,8 +424,8 @@ verifies.
 
 Private component keys MUST be computable before materialization:
 
-- Git key: canonical URL + exact resolved commit + depth `2` + one
-  cache-schema revision.
+- Git key: canonical URL + exact resolved commit + history selector (`full` or
+  exact requested depth) + one cache-schema revision.
 - OCI key: catalog entry identity + exact image-manifest digest + exact
   source-manifest digest + one cache-schema revision.
 
@@ -422,18 +437,24 @@ epoch, or baseline-digest dimensions to the key.
 
 ### Git acquisition
 
-Maintain one operator-only bare shallow acquisition mirror per canonical URL and
+Maintain one operator-only bare acquisition mirror per canonical URL and
 serialize its writes. Resolve the advertised default, branch, or lightweight or
-annotated tag to an exact commit, fetch with fixed depth 2, verify tip and shallow
-boundary, and export a self-contained detached checkout with no alternates or
-writable mirror links. Preserve safe bounded `.git` metadata sufficient for
-recent offline log, parent inspection, blame where shallow history permits, and
-diff. Preserve available merge parents within depth 2.
+annotated tag to an exact commit. With omitted `depth`, fetch the complete
+ancestry reachable from that commit without fetching unrelated refs merely for
+completeness. With supplied `depth`, fetch exactly that shallow ancestry.
+Verify the tip and requested history boundary, then export a self-contained
+detached checkout with no alternates or writable mirror links. Preserve safe
+`.git` metadata for offline log, parent inspection, blame, and diff within the
+selected history. Editable private copies additionally support bisect; read-only
+mounts do not promise Git operations that mutate the worktree or repository.
 
 Disable interactive credentials, hooks, filters, alternates, alternate
 protocols, submodules, and LFS hydration. Reject gitlinks and LFS pointer-backed
-content. Never deepen, unshallow, full-clone, fetch arbitrary object IDs, choose
-another ref, or fall back to OCI.
+content. Never change the requested history mode, fetch arbitrary object IDs,
+choose another ref, fetch unrelated refs as a completeness shortcut, or fall
+back to OCI. Contractual pack, expanded-byte, object, time, process, and output
+limits apply to full and shallow acquisition; exceeding one fails without
+publishing a component.
 
 ### OCI acquisition
 
@@ -564,10 +585,10 @@ errors retain stock codes only where their meaning is exact.
 
 | Detail code | Condition | HTTP | Retryable | Required behavior |
 |---|---|---:|:---:|---|
-| `workspace_invalid_request` | Closed-schema, count, field, URL, digest syntax, path, cwd, first-turn, or reused-session violation | 400 | no | Fail before cache, network, workspace write, claim, or lifecycle mutation. |
+| `workspace_invalid_request` | Closed-schema, count, field, URL, depth syntax/range, digest syntax, path, cwd, first-turn, or reused-session violation | 400 | no | Fail before cache, network, workspace write, claim, or lifecycle mutation. |
 | `workspace_path_collision` | Equal/overlapping destinations or input/generated/reserved/ancestor collision | 409 | no | Fail before cache or network; report only sanitized conflicting workspace-relative fields. |
 | `workspace_source_unknown` | Unknown OCI catalog entry or missing/ambiguous/unsupported Git ref identity | 404 | no | Fail that source with no alternate ref, catalog entry, or source kind. |
-| `workspace_source_invalid` | Moved/non-commit Git target, depth-2 refusal, gitlink/LFS content, OCI media/digest/source-manifest/layer/final-tree failure, or unsafe source content | 422 | no | Publish no failed component and perform no fallback; invalid OCI source manifest fails before layer requests. |
+| `workspace_source_invalid` | Moved/non-commit Git target, requested-history refusal, gitlink/LFS content, OCI media/digest/source-manifest/layer/final-tree failure, or unsafe source content | 422 | no | Publish no failed component and perform no ref, history-mode, or source-kind fallback; invalid OCI source manifest fails before layer requests. |
 | `workspace_acquisition_unavailable` | Timeout, DNS, registry/Git service, or other transient source transport failure | 503 | yes | Detach request-local work, preserve independently valid shared components, and expose no partial workspace. |
 | `workspace_contract_limit_exceeded` | A fixed v1 per-source or aggregate count/byte/path/ratio/time/output ceiling is exceeded | 413 | no | Stop bounded work, clean/quarantine staging, and expose no partial workspace. |
 | `workspace_capacity_exceeded` | Operator concurrency, disk, inode, mount, or lower policy capacity is temporarily unavailable | 503 | yes | Admit no partial binding; capacity policy must not masquerade as a schema limit. |
@@ -626,10 +647,13 @@ exact fork point.
   shape after ready.
 - Reject workspace metadata on every reuse/continuation path before hydration.
 
-**Exit proof:** 1 and 128 Git/OCI/mixed entries pass; 0/129, obsolete fields,
-unknown fields, root/overlap/collision, malformed identities, and reused-session
-injection return their exact coded errors with zero source/cache activity. Stock
-traces remain unchanged.
+**Exit proof:** omitted depth and depths 1 and 1,000,000 parse and persist; depth
+0, 1,000,001, fractional, and wrong-type values return
+`400 workspace_invalid_request` with zero source/cache activity. One and 128
+Git/OCI/mixed entries pass; 0/129, obsolete fields, unknown fields,
+root/overlap/collision, malformed identities, and reused-session injection
+return their exact coded errors with zero source/cache activity. Stock traces
+remain unchanged.
 
 ### Phase 3: Implement canonical manifests and produced projection
 
@@ -667,20 +691,28 @@ without source traversal during collection and require fresh mount evidence;
 editable sessions cannot mutate cache/sibling content. Restart discards or
 reconciles uncertain publications without persisted mount/inode facts.
 
-### Phase 5: Implement depth-2 Git acquisition
+### Phase 5: Implement full-by-default Git acquisition
 
 **Work**
 
 - Implement canonical HTTPS validation, advertised ref resolution, the per-URL
-  serialized mirror, fixed depth-2 fetch, detached self-contained export,
-  bounded safe `.git`, and source-manifest publication evidence.
-- Enforce egress/redirect policy, limits, disabled helpers, and no fallback.
+  serialized mirror, full reachable ancestry by default, exact optional shallow
+  depth, detached self-contained export, safe `.git`, and source-manifest
+  publication evidence.
+- Enforce egress/redirect policy, limits, disabled helpers, and no ref,
+  history-mode, or source-kind fallback.
 
 **Exit proof:** default/branch/lightweight-tag/annotated-tag/merge cases resolve
-to exact commits; recent shallow offline log/blame/diff works within depth 2;
-moved refs, unsupported shallow servers, malicious redirects, gitlinks, LFS,
-limits, cancellation, and restart fail with exact codes. An exact key hit does
-no pack acquisition or materialization.
+to exact commits. Omitted depth provides offline log/blame/diff across complete
+fetched ancestry in both access modes and bisect in editable mode. A fixture
+with unrelated branches and tags proves they are neither requested for the
+selected full ancestry nor exposed in the published component. Depths 1 and 2
+expose exactly their shallow boundaries, publish distinct components, and each
+reuses only its exact-depth component on repetition. Different ref spellings
+resolving to one commit and the same history selector reuse one component; full,
+depth 1, and depth 2 remain distinct. Moved refs, unsupported history requests,
+malicious redirects, gitlinks, LFS, limits, cancellation, and restart fail with
+exact codes. An exact key hit performs no pack acquisition or materialization.
 
 ### Phase 6: Implement OCI source-tree acquisition
 

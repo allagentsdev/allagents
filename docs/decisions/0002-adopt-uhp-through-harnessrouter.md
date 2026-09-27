@@ -19,7 +19,7 @@ The existing extension seams are sufficient:
 - `BACKING.workspace` exposes either `RunnerWorkspaceFiles` or `CheckpointWorkspaceFiles`; and
 - the `HarnessSession` vertex owns session identity, while checkpoint, artifact, and control records remain separate.
 
-The missing capability is first-turn initialization from one or more independently identified Git or OCI source trees. Git depth `2` bounds history but not working-tree transfer, so OCI transport and independent immutable component reuse are required in v1.
+The missing capability is first-turn initialization from one or more independently identified Git or OCI source trees. Git sources preserve the complete ancestry reachable from the selected commit by default so agents can perform regression analysis; callers MAY request bounded shallow history explicitly. Full Git history can still be large, so OCI transport and independent immutable component reuse remain required in v1.
 
 ## Decision
 
@@ -63,7 +63,7 @@ A workspace-backed first turn uses the normal `POST /v1/responses` endpoint. `me
 | `sources` | yes | Ordered closed array of 1 to 128 Git or OCI entries. |
 | `working_directory` | no | Workspace-relative POSIX directory; omission means `.`. |
 
-A Git entry contains only `kind: "git"`, canonical public HTTPS `url`, optional `ref`, and `destination`. Userinfo, query, fragment, local paths, alternate transports, and private or otherwise disallowed network targets are forbidden. `ref` is an advertised full ref or unambiguous branch/tag shorthand; omission selects the advertised default. Resolution produces one exact commit. Depth is always `2` and is not caller-selectable.
+A Git entry contains only `kind: "git"`, canonical public HTTPS `url`, optional `ref`, optional `depth`, and `destination`. Userinfo, query, fragment, local paths, alternate transports, and private or otherwise disallowed network targets are forbidden. `ref` is an advertised full ref or unambiguous branch/tag shorthand; omission selects the advertised default. Resolution produces one exact commit. Omitted `depth` means the complete ancestry reachable from that commit; a supplied `depth` is an integer from 1 through 1,000,000 and requests exactly that shallow history. Unrelated refs and tags are not fetched merely to satisfy full history.
 
 An OCI entry contains only `kind: "oci"`, `snapshot_name`, exact `image_manifest_digest`, exact `source_manifest_digest`, and `destination`. `snapshot_name` resolves through an operator-owned catalog to a fixed registry repository, catalog-entry identity, allowed media types, trust policy, and server-side credential reference. Callers cannot supply registry origins, repositories, tags, indexes, headers, redirects, or credentials.
 
@@ -87,7 +87,6 @@ After the binding reaches `ready`, terminal events, response retrieval, replay, 
       "url": "https://github.com/acme/api.git",
       "requested_ref": "refs/heads/main",
       "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
-      "depth": 2,
       "destination": "services/api",
       "source_manifest_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     },
@@ -103,7 +102,7 @@ After the binding reaches `ready`, terminal events, response retrieval, replay, 
 }
 ```
 
-`working_directory` is always present and uses `.` for the workspace root. Git provenance contains normalized `url`, optional `requested_ref`, exact `resolved_commit`, `depth: 2`, `destination`, and the verified source-manifest digest. OCI provenance contains the catalog key, exact image and source-manifest digests, and `destination`. Registry details, credentials, private cache keys, backing paths, and live attachment details are never public.
+`working_directory` is always present and uses `.` for the workspace root. Git provenance contains normalized `url`, optional `requested_ref`, exact `resolved_commit`, optional `depth`, `destination`, and the verified source-manifest digest. Omitted `depth` explicitly means full reachable ancestry; a present value records the requested shallow depth. OCI provenance contains the catalog key, exact image and source-manifest digests, and `destination`. Registry details, credentials, private cache keys, backing paths, and live attachment details are never public.
 
 Every workspace-backed session receives one operator-configured finite expiry at creation. `expires_at` is always a timestamp; polling, replay, and continuation do not extend it. Explicit deletion remains supported. Failures before `ready` omit workspace metadata; failures after `ready` return the stored sanitized object.
 
@@ -137,7 +136,7 @@ The gateway walks without following links and recomputes the canonical manifest 
 
 ## Resolution, caching, and visibility
 
-A private Git component key is exactly the canonical URL, exact resolved commit, depth `2`, and one cache-schema revision. A private OCI component key is exactly the catalog-entry identity, exact image-manifest digest, exact source-manifest digest, and one cache-schema revision. Recomputing a baseline digest proves publication integrity; it is not a cache-key input.
+A private Git component key is exactly the canonical URL, exact resolved commit, history selector (`full` or exact requested depth), and one cache-schema revision. A private OCI component key is exactly the catalog-entry identity, exact image-manifest digest, exact source-manifest digest, and one cache-schema revision. Recomputing a baseline digest proves publication integrity; it is not a cache-key input.
 
 Components cache independently and exact-key misses singleflight independently. Git retains the accepted operator-only acquisition mirror per canonical URL, then publishes an immutable verified generation. OCI MAY use standard registry-client, image, and layer caches; this decision does not require a separate gateway-managed blob-cache lifecycle. There is no request-wide composition cache, record, or public identity.
 
@@ -149,7 +148,7 @@ The ordered plan remains `pending` until every component is verified, each desti
 
 For `read_only`, each immutable component root is exposed at its destination through a namespace-confined read-only bind mount with `nodev` and `nosuid`, without a writable alias or copy-up path. For `editable`, each destination is a quota-bounded, inode-independent private reflink or copy. Git and OCI receive identical write semantics. The outer workspace remains private and writable in both modes.
 
-Git acquisition resolves only advertised refs, fetches the selected commit at depth `2`, and verifies the fetched tip, bounded object graph, checkout, and source manifest. Commands run without a shell in a sanitized, isolated configuration; credentials, inherited proxies, hooks, filters, LFS hydration, submodule recursion, alternates, and non-HTTPS helpers are disabled. The published tree may retain safe shallow `.git` metadata and bounded recent history for agent convenience, but removes credential-bearing remotes and unsafe or transient state. Git metadata never defines evaluation correctness.
+Git acquisition resolves only advertised refs, fetches either the complete ancestry reachable from the selected commit or the exact requested shallow depth, and verifies the fetched tip, bounded object graph, checkout, and source manifest. Full history does not imply unrelated branches or tags. Commands run without a shell in a sanitized, isolated configuration; credentials, inherited proxies, hooks, filters, LFS hydration, submodule recursion, alternates, and non-HTTPS helpers are disabled. The published tree retains safe self-contained `.git` metadata for the selected history while removing credential-bearing remotes and unsafe or transient state. Git metadata never defines evaluation correctness. Every fetch remains subject to contractual byte, object, time, and process limits; exceeding one fails rather than silently reducing history.
 
 OCI acquisition uses the catalog-selected direct image manifest and the declared source manifest. It verifies descriptor media types, sizes, and digests; applies layers in order with standard whiteout and opaque-directory behavior; and extracts with rooted no-follow operations. Traversal, out-of-root links, devices, sockets, FIFOs, sparse-file tricks, undeclared or missing entries, unsupported types, and digest or type mismatches fail closed. OCI sources need not contain Git metadata.
 
@@ -250,7 +249,7 @@ AllAgents Gateway remains one execution, workspace, and session control plane. I
 
 Canonical manifests and change artifacts add bounded filesystem scanning and hashing, but give Git and OCI one evaluator-visible definition of state. Promptfoo can reconstruct results entirely from ordered UHP artifacts, regardless of Git metadata or index state.
 
-Mandatory OCI support and Linux mount/copy capabilities make v1 substantial, but they satisfy the large-source requirement while preserving safe shallow Git history for agent convenience and Git-free OCI operation.
+Mandatory OCI support and Linux mount/copy capabilities make v1 substantial, but they satisfy the large-source requirement while preserving full Git ancestry by default, explicit shallow acquisition when requested, and Git-free OCI operation.
 
 ## Reconsider when
 

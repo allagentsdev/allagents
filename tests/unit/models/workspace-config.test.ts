@@ -268,4 +268,27 @@ describe('RepositorySchema', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.skills).toBeUndefined();
   });
+
+  it('accepts ref and preserves its value', () => {
+    const result = RepositorySchema.safeParse({
+      path: '../repo',
+      managed: true,
+      ref: 'release-1.x',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.ref).toBe('release-1.x');
+  });
+
+  it('rejects the removed branch key instead of silently dropping it', () => {
+    const result = RepositorySchema.safeParse({
+      path: '../repo',
+      managed: true,
+      branch: 'release-1.x',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path[0] === 'branch');
+      expect(issue?.message).toBe("has been renamed to 'ref'");
+    }
+  });
 });

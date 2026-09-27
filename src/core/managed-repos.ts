@@ -78,10 +78,11 @@ export function buildCloneUrl(source: string, repo: string): string {
 /**
  * Clone a repository to the specified path.
  */
-async function cloneRepo(url: string, dest: string, branch?: string): Promise<void> {
+async function cloneRepo(url: string, dest: string, ref?: string): Promise<void> {
   await mkdir(dirname(dest), { recursive: true });
   const git = createGit(undefined, CLONE_TIMEOUT_MS);
-  const cloneOptions = branch ? ['--branch', branch] : [];
+  // Git accepts a branch or a tag here; a tag leaves the checkout detached.
+  const cloneOptions = ref ? ['--branch', ref] : [];
   await git.clone(url, dest, cloneOptions);
 }
 
@@ -89,7 +90,7 @@ async function cloneRepo(url: string, dest: string, branch?: string): Promise<vo
  * Pull latest changes in an existing repository.
  * Returns a skip reason if pull is unsafe, or undefined on success.
  */
-async function pullRepo(repoPath: string, branch?: string): Promise<string | undefined> {
+async function pullRepo(repoPath: string, ref?: string): Promise<string | undefined> {
   const git = createGit(repoPath, CLONE_TIMEOUT_MS);
 
   // Check for uncommitted changes
@@ -98,11 +99,13 @@ async function pullRepo(repoPath: string, branch?: string): Promise<string | und
     return 'uncommitted changes';
   }
 
-  // If branch is specified, check we're on it
-  if (branch) {
-    const currentBranch = status.current;
-    if (currentBranch !== branch) {
-      return `on branch '${currentBranch}', expected '${branch}'`;
+  // If ref is specified, check we're on it. A tag checkout is detached, which
+  // simple-git reports as 'HEAD', so a tag ref never matches here and pull is
+  // skipped rather than run against the wrong revision.
+  if (ref) {
+    const currentRef = status.current;
+    if (currentRef !== ref) {
+      return `on ref '${currentRef}', expected '${ref}'`;
     }
   }
 
@@ -149,7 +152,7 @@ export async function processManagedRepos(
 
       try {
         const url = buildCloneUrl(repo.source, repo.repo);
-        await cloneRepo(url, absolutePath, repo.branch);
+        await cloneRepo(url, absolutePath, repo.ref);
         results.push({ path: repo.path, repo: repo.repo, action: 'cloned' });
       } catch (error) {
         results.push({
@@ -162,7 +165,7 @@ export async function processManagedRepos(
     } else if (shouldPull(repo.managed)) {
       // Pull
       try {
-        const skipReason = await pullRepo(absolutePath, repo.branch);
+        const skipReason = await pullRepo(absolutePath, repo.ref);
         if (skipReason) {
           results.push({
             path: repo.path,

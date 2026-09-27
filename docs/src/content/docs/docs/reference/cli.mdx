@@ -31,7 +31,7 @@ Field selection with `--json=<fields>` is not supported for help output.
 ## Top-Level Commands
 
 ```bash
-allagents update [--offline] [--dry-run] [--client <client>] [--profile <name>...]
+allagents update [--offline] [--dry-run] [--force] [--verbose] [--no-managed] [--profile <name>...]
 allagents status
 ```
 
@@ -42,8 +42,10 @@ Updates plugins in the workspace using non-destructive sync. By default, remote 
 | Flag | Description |
 |------|-------------|
 | `--offline` | Use cached plugins without fetching latest from remote |
-| `--dry-run` | Preview changes without applying them |
-| `-c, --client <client>` | Sync only the specified client (e.g., `opencode`, `claude`) |
+| `-n, --dry-run` | Preview changes without applying them |
+| `-f, --force` | Overwrite existing MCP server entries that differ from plugin config |
+| `-v, --verbose` | Show informational sync messages |
+| `--no-managed` | Skip managed repository clone/pull operations |
 | `--profile <name>` | Reconcile only this installed global profile; repeatable |
 
 Ordinary user, installed profile, and current project reconciliation are selected automatically; `allagents update` does not take a scope flag.
@@ -55,7 +57,14 @@ the command exits nonzero after all applicable work completes.
 
 Using one or more `--profile` filters validates the entire selected set before
 mutation, updates only those installed and still-declared profiles, and skips
-ordinary user and project sync. `--profile` cannot be combined with `--client`.
+ordinary user and project sync.
+
+Repositories declared with [`managed`](/docs/reference/configuration/#managed-repositories)
+are cloned or pulled before plugin sync. Pass `--no-managed` to skip that step
+for a single run — for example in CI, where another tool has already materialized
+the repository directories and a stray `managed` entry must not move them.
+`--offline` and `--dry-run` skip managed operations too; `--dry-run` does not
+preview them.
 
 **Non-destructive behavior:**
 - First sync overlays files without deleting existing user files

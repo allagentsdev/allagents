@@ -26,22 +26,26 @@ protocol, global composition cache, or materializer service.
 
 ## Implementation-handoff prerequisites
 
-### Target bootstrap: operator-owned and required before code work
+### Target rename: operator-owned and required before code work
 
-`allagentsdev/allagents-gateway` does not exist yet. An organization repository
-administrator, not the implementation agent, MUST complete this bootstrap:
+`allagentsdev/harnessrouter` already exists and GitHub reports it as a fork of
+`HarnessRouter/harnessrouter`. Do not create or bootstrap a second repository.
+An organization repository administrator, not the implementation agent, MUST:
 
-1. Rename/bootstrap the current `allagentsdev/harnessrouter` repository as
-   `allagentsdev/allagents-gateway` from pinned HarnessRouter commit
-   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`.
-2. Preserve the complete available history, Apache-2.0 `LICENSE`, `NOTICE`,
-   copyright and attribution. HarnessRouter is Apache-2.0 with a NOTICE; it is
-   not MIT.
-3. Set `origin` to the renamed writable repository and retain
-   `HarnessRouter/harnessrouter` as `upstream`. Record the pinned commit as the
-   downstream fork point. Upstream acceptance is not a dependency.
-4. Create writable branch `feat/workspace-composition` at that commit and grant
-   the implementation agent normal pull-request rights to the branch.
+1. Rename `allagentsdev/harnessrouter` in place to
+   `allagentsdev/allagents-gateway`. Preserve its repository identity, fork
+   network, complete history, settings, redirects, Apache-2.0 `LICENSE`,
+   `NOTICE`, copyright, and attribution.
+2. Verify GitHub still identifies `HarnessRouter/harnessrouter` as the parent.
+   Set `origin` to the renamed writable repository and retain that parent as
+   `upstream`. Record upstream commit
+   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3` as the characterized baseline;
+   upstream acceptance is not a dependency.
+3. Create writable branch `feat/workspace-composition` from downstream `main`
+   commit `fbcb73132423c8c4575113fc8943c6a6280a4746`. That commit is the pinned
+   upstream baseline plus the existing three downstream commits; implementation
+   MUST NOT discard them by branching directly from the older upstream commit.
+4. Grant the implementation agent normal pull-request rights to that branch.
 5. Keep the downstream distribution names fixed:
    - repository: `allagentsdev/allagents-gateway`;
    - image: `ghcr.io/allagentsdev/allagents-gateway`;
@@ -745,8 +749,9 @@ release matrix proves the exact distributed digest.
 
 ### Implementation agent
 
-- PR targets bootstrapped `allagentsdev/allagents-gateway` branch
-  `feat/workspace-composition` at the pinned fork point and preserves
+- PR targets renamed `allagentsdev/allagents-gateway` branch
+  `feat/workspace-composition` at downstream commit `fbcb73132423c8c4575113fc8943c6a6280a4746`
+  and preserves the fork network, existing downstream commits,
   Apache-2.0/NOTICE/history/upstream.
 - Stock seams remain the integration points, and stock requests retain their
   pinned behavior.

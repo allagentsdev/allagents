@@ -1,5 +1,5 @@
 ---
-title: "HarnessRouter Workspace Execution - Implementation Plan"
+title: "HarnessRouter Workspace Composition - Implementation Plan"
 date: 2026-09-18
 updated: 2026-09-27
 type: feat
@@ -8,994 +8,1047 @@ artifact_readiness: implementation-ready
 execution: code
 ---
 
-# HarnessRouter Workspace Execution - Implementation Plan
+# HarnessRouter Workspace Composition - Implementation Plan
+
+## Stock behavior inventory
+
+The pinned HarnessRouter baseline already owns the session workspace lifecycle.
+The fork must extend that lifecycle rather than introduce another workspace
+abstraction:
+
+1. Session identity implicitly selects the session workspace; callers do not
+   currently describe a source workspace.
+2. Fresh hydration creates the session workspace as an empty root Git
+   repository.
+3. Continuation restores the session checkpoint selected by the existing
+   response/session identity.
+4. Attached files, `.harness` state, generated root instructions, plugins,
+   skills, MCP configuration, HOME, and conversation state are materialized
+   under the hydrated workspace before the harness turn starts.
+5. Produced-file collection uses a cursor over the root Git repository.
+6. Stock checkpointing mutates that root Git repository and archives the entire
+   workspace; stock hydration clears the workspace before restoring the archive.
+7. No stock UHP request field names a Git source, an OCI source, or a reusable
+   immutable generation.
+
+These are the starting facts and the integration constraints. The implementation
+keeps the existing session allocation, hydrate/checkpoint cycle, file and
+artifact APIs, user/sandbox isolation, cancellation, TTL, cleanup, and harness
+supervision. It adds first-turn source composition at the existing hydration
+boundary, stores the resulting attachment in the existing session state, and
+adapts the existing produced-file cursor for nested repositories. It does not
+create a second workspace, second session database, second Files API, external
+materializer service, or parallel lifecycle.
 
 ## Goal
 
-Add a generic workspace contract and the runner capabilities needed to execute
-Codex or OMP in a caller-selected public Git repository. Propose the protocol,
-schema, implementation, conformance cases, changelog, and documentation through
-HarnessRouter's upstream governance process first. If upstream declines or
-defers the contribution, carry the same bounded behavior as a clearly labeled
-downstream HarnessRouter extension. Keep the existing GitHub fork at
-[`allagentsdev/harnessrouter`](https://github.com/allagentsdev/harnessrouter) and
-publish an AllAgents-maintained image at
-`ghcr.io/allagentsdev/harnessrouter`.
+Extend `allagentsdev/harnessrouter` so a new UHP session can compose its existing
+HarnessRouter workspace from either multiple Git repositories or a mandatory OCI
+workspace snapshot. Bind the verified immutable generation and its access mode
+to the session before the first harness turn. Continuations omit the descriptor
+and recover the exact attachment through the access-specific workspace-aware
+checkpoint path.
 
-A new session may supply `metadata.workspace`. HarnessRouter securely resolves
-one anonymous public HTTPS Git repository to an advertised SHA-1 commit,
-materializes one private editable checkout, binds that exact checkout to the
-session, and starts the selected harness in the requested safe working
-directory. A continuation reuses the checkout and its mutations without
-resolving or cloning again.
+OCI workspace snapshots are a release-blocking v1 source, not a later
+optimization. Large repositories are part of the minimum deliverable. The Git
+path limits history transfer with a fixed shallow fetch, but it still transfers
+and checks out every working-tree byte; it therefore does not replace OCI for
+large workspaces.
 
-Everything else remains HarnessRouter behavior: caller authentication, UHP
-request and response handling, session hydration, streaming, idempotency,
-cancellation, provider and harness execution, artifacts, and ordinary lifecycle
-state.
+Keep all other boundaries unchanged:
 
-## Governance and repository boundary
+- UHP is the only northbound execution protocol.
+- Requests without `metadata.workspace` take the stock path without new source,
+  generation, attachment, or response semantics.
+- Codex and OMP are the supported harnesses.
+- Both use the existing separately operated OAuth-to-OpenAI-compatible provider
+  gateway through server-owned, brokered credentials.
+- `allagentsdev/harnessrouter` remains the existing GitHub fork and
+  `ghcr.io/allagentsdev/harnessrouter` remains the image name.
+- There is no AllAgents CLI implementation, profile import, local gateway
+  command, or `workspace.yaml` change.
 
-### Upstream-first gate
-
-`metadata.workspace` and the associated runner behavior solve a generic
-HarnessRouter problem, so upstream gets the first opportunity to own them. The
-fork may ship the contract after an upstream decision, but must label it as a
-downstream HarnessRouter extension unless UHP governance standardizes it. Before
-substantial implementation work:
-
-1. Open an issue in `HarnessRouter/harnessrouter` that describes the use case,
-   request and response shapes, security boundary, session semantics, runner
-   seam, lifecycle, error categories, and intended conformance coverage.
-2. Ask maintainers to confirm the required governance path and ownership of the
-   metadata key, configuration names, and runner interfaces.
-3. Write or amend the required UHP Enhancement Proposal (UEP) before changing
-   protocol semantics. Follow the repository's contribution and UHP governance
-   rules for discussion, review, compatibility, and approval.
-4. Record the issue and UEP links in the implementation pull requests and in the
-   downstream release notes.
-
-The gate is passed when maintainers have selected the governance and ownership
-path for `metadata.workspace`. Acceptance starts the coordinated upstream
-contract; rejection or deferral starts the downstream-extension path. If no
-maintainer decision arrives within 30 calendar days after the issue opens and a
-follow-up is posted after day 14, record the proposal as deferred. A downstream
-release must not claim that its workspace behavior is part of UHP or covered by
-UHP conformance. If a later UHP release reserves an incompatible key or shape,
-the fork migrates cleanly instead of retaining conflicting aliases.
-
-### Upstream deliverables when accepted
-
-An accepted upstream change is complete only when the same reviewed contract
-appears in all relevant surfaces:
-
-- the UHP specification;
-- the machine-readable UHP schema;
-- the HarnessRouter reference implementation;
-- the UHP conformance suite;
-- the HarnessRouter changelog; and
-- user and operator documentation.
-
-Generic workspace parsing, session binding, runner root separation,
-materialization, lifecycle, errors, and conformance behavior are proposed
-upstream together. If maintainers decline or defer that ownership, the fork
-carries the smallest complete patch in the corresponding HarnessRouter paths,
-with separate extension tests and release notes. The implementation remains
-generic and must not couple lifecycle behavior to AllAgents harness IDs.
-
-### Downstream repository
-
-Keep `allagentsdev/harnessrouter` as the GitHub fork of
-`HarnessRouter/harnessrouter`, preserving its fork relationship, history,
-issues, settings, protections, and upstream remote. Do not create another
-repository and do not add a wrapper repository.
-
-The preferred fork delta contains only the downstream pieces specific to the
-AllAgents deployment:
-
-- deployment defaults;
-- custom Codex and OMP harness definitions;
-- provider connection and policy wiring;
-- direct Promptfoo scenarios and sanitized reports; and
-- image build and publication for `ghcr.io/allagentsdev/harnessrouter`.
-
-If upstream declines or defers workspace ownership, the fork also carries the
-smallest complete workspace contract and runner/materializer patch. Source
-metadata, tests, and release notes distinguish that extension from standard UHP.
-
-The initial examined baseline is HarnessRouter v0.25.4 at commit
-`5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`, with UHP `2026-09-12`.
-Development records that baseline exactly. The release baseline must be an exact
-upstream tag and commit. Workspace behavior then comes either from an accepted
-upstream release or from explicitly identified downstream commits applied to
-that baseline.
-
-The `allagentsdev/allagents` repository remains the local Bun CLI. This plan
-adds no server, materializer, provider adapter, CLI command, local-profile
-synchronization, or `workspace.yaml` behavior there. HarnessRouter custom
-harness definitions are the complete remote configuration surface for Codex and
-OMP.
-
-## Product boundary
+## Product and ownership boundary
 
 ### In scope
 
-- The UHP baseline selected through the upstream issue and UEP process, plus the
-  accepted upstream workspace contract or documented downstream extension.
-- Caller authentication through HarnessRouter's existing API-key behavior.
-- One generic workspace object at `metadata.workspace`.
-- Exactly one anonymous, public, HTTPS Git repository per new session.
-- An optional advertised `refs/heads/*` or `refs/tags/*`, or unambiguous
-  branch/tag shorthand. Omission means the remote default branch; raw object IDs
-  and other ref namespaces are rejected.
-- SHA-1 repositories only, with resolution to and recording of one exact 40-hex
-  commit object ID.
-- One private editable checkout per session.
-- Immutable first-turn binding and exact-checkout continuation reuse.
-- A finite server-owned idle TTL and deterministic, idempotent cleanup.
-- Codex and OMP harnesses using one server-configured external
-  OAuth-to-OpenAI-compatible gateway.
-- One container, one `/data` volume, and Docker Compose startup bound to
-  loopback by default.
-- Direct Promptfoo evaluation of the built image.
-- Upstream UHP conformance, separate downstream-extension coverage when needed,
-  image SBOM/provenance, and digest-pinned releases.
+- A strict first-turn-only `metadata.workspace` HarnessRouter extension.
+- Repository composition from one or more caller-declared repositories at
+  pairwise non-overlapping workspace-relative destinations.
+- Fixed depth-2 Git acquisition with exact resolved-commit provenance and useful
+  recent offline history.
+- Operator-cataloged OCI workspace snapshots selected by direct image-manifest
+  and workspace-manifest digests.
+- One immutable generation store shared by Git and OCI sources.
+- Reuse of a verified immutable generation across sessions.
+- Shared immutable bytes for `read_only` sessions and inode-independent private
+  copies for `editable` sessions.
+- Existing session continuation, checkpoint, cancellation, TTL, deletion,
+  restart reconciliation, files, artifacts, and produced-file behavior adapted
+  to the attachment.
+- Authorized persistent retention through the existing session lifecycle.
+- Exact source provenance and bounded, coded failures.
+- Direct Promptfoo coverage against the built image, including a large OCI
+  workspace and second-session cache reuse.
+- Digest-pinned publication to GHCR with SBOM and build provenance.
 
-### Non-goals
+### Explicit non-goals
 
-- More than one repository, destination mapping, or repository composition.
-- Non-Git workspace sources, private source credentials, SSH Git transports, or
-  caller-provided source headers.
-- Raw commit-ID requests and SHA-256 Git repositories.
-- Read-only workspaces, cross-session checkout reuse, prewarming, or shared
-  source object stores.
-- Caller-selected lifetime, indefinite sessions, recovery after configured
-  expiry, or a separate lifetime subsystem.
-- A generic extension registry, plugin framework, or multiple materializers.
-- Provider login, token refresh, credential repair, or credential projection in
-  HarnessRouter. Those belong to the external provider gateway.
-- A caller-selected provider base URL, provider API key, transport, or fallback
-  chain.
-- Importing local profiles, synchronizing profile state, changing
-  `workspace.yaml`, or adding an AllAgents CLI command.
-- Replacing HarnessRouter sessions, task execution, artifacts, streaming,
-  cancellation, or idempotency.
-- New validation commitments for unrelated HarnessRouter backends.
-- Kubernetes, multi-container worker orchestration, or a separately deployed
-  materializer service.
-- A custom attestation or green-build framework.
+- A separate workspace service, workspace database, scheduler, Files API, or
+  task protocol.
+- Caller-selected runtime/container images or benchmark environments. An OCI
+  workspace snapshot is source content only.
+- Caller-provided registry origins, registry credentials, headers, proxy
+  settings, or source commands.
+- Arbitrary materializer plugins, hook discovery, or a public generation API.
+- Silent Git fallback for an OCI failure, silent OCI fallback for a Git failure,
+  or silent deepening/full-clone fallback for a bounded Git failure.
+- Submodule initialization, Git LFS hydration, checkout filters, or repository
+  hook execution.
+- Provider login, refresh, or repair in HarnessRouter; the external provider
+  gateway retains that responsibility.
+- A caller-selected provider route, API key, transport, or fallback chain.
+- Upstream acceptance as a release condition. Upstreaming is considered only
+  after downstream release evidence exists.
 
-## External contracts
+## Request contract
 
-### UHP request
-
-The proposed generic request shape is:
+`metadata.workspace` is accepted only when the request creates a new session. It
+uses snake_case and has no nested schema version:
 
 ```json
 {
-  "model": "gpt-5.4",
-  "input": "Inspect the project and fix the failing command.",
   "metadata": {
     "harness_id": "allagents-codex",
     "workspace": {
-      "repository": {
-        "url": "https://github.com/example/project.git",
-        "ref": "refs/heads/main"
+      "access": "editable",
+      "retention": "session",
+      "source": {
+        "kind": "repositories",
+        "repositories": [
+          {
+            "url": "https://github.com/example/service.git",
+            "ref": "refs/heads/main",
+            "destination": "service"
+          },
+          {
+            "url": "https://github.com/example/shared.git",
+            "destination": "libraries/shared"
+          }
+        ]
       },
-      "working_directory": "packages/service"
+      "working_directory": "service"
     }
   }
 }
 ```
 
-The exact request object proposed to UHP is:
+The exact shape is:
 
 ```text
 metadata.workspace = {
-  repository: {
-    url: string,
-    ref?: string
-  },
+  access: "read_only" | "editable",
+  retention?: "session" | "persistent",
+  source:
+    | {
+        kind: "repositories",
+        repositories: Array<{
+          url: string,
+          ref?: string,
+          destination: string
+        }>
+      }
+    | {
+        kind: "workspace_snapshot",
+        snapshot_name: string,
+        image_manifest_digest: string,
+        workspace_manifest_digest: string
+      },
   working_directory?: string
 }
 ```
 
-The workspace object has no independent schema marker. An accepted UHP release
-owns its standard schema; while it is downstream-only, the fork release owns the
-extension shape.
-
 Rules:
 
-1. `workspace` and `repository` must be JSON objects, not arrays or strings.
-2. `repository.url` is required. It must be an anonymous public `https://` Git
-   URL with no user info, query, fragment, alternate transport, or embedded
-   credential.
-3. `repository.ref` is optional and non-empty when present. It must identify an
-   advertised `refs/heads/*` or `refs/tags/*`, or unambiguous branch/tag
-   shorthand. Raw object IDs and other ref namespaces are rejected. Only SHA-1
-   repositories are accepted, and the exact resolved 40-hex commit is recorded
-   as provenance.
-4. `working_directory` is optional. Omission means the checkout root. When
-   present it is a normalized relative POSIX path to a directory within the
-   checkout.
-5. Unknown fields at every level are rejected. There are no aliases, commands,
-   environment variables, access modes, lifetime fields, destination paths,
-   materializer selectors, or provider settings.
-6. HarnessRouter applies a small fixed metadata byte/depth bound before session
-   allocation. The materializer applies field-specific length bounds before
-   network or filesystem work.
-7. A request without `metadata.workspace` follows ordinary upstream behavior.
+1. `access` and `source` are required. `retention` defaults to `session`.
+2. `persistent` is accepted only after existing caller/session authorization
+   succeeds and before source resolution, network traffic, or generation claims.
+3. `working_directory` and every repository `destination` are normalized
+   workspace-relative POSIX paths. The effective working directory must be a real
+   directory inside the final attached workspace without traversal or link
+   escape.
+4. Repository destinations must be unique and pairwise non-overlapping: no two
+   destinations may be equal, and neither may be an ancestor of another.
+5. The repository array contains 1 to 128 entries. Each URL, optional ref, and
+   destination is bounded before network or filesystem work. Lower runtime
+   capacity fails with the coded capacity error; it does not change schema
+   validity.
+6. `source` is a closed discriminated union. Unknown fields and mixed Git/OCI
+   fields fail validation.
+7. `snapshot_name` selects an operator-owned HarnessRouter deployment catalog
+   entry. The request supplies only the two `sha256:` digests; it never supplies
+   a registry, repository, credential, certificate, or mirror.
+8. A continuation selected through `previous_response_id` or the existing
+   session recovery mechanism omits `metadata.workspace`. Supplying it on a
+   reused session fails before hydrate, source access, generation lookup, or
+   provider traffic, even when it is identical to the stored value.
+9. A session created without workspace metadata remains a stock session and
+   cannot add workspace metadata later.
+10. UHP input files are workspace mutations. Reject them on a `read_only`
+    first turn before source resolution. For `editable`, apply them only after
+    the private copy exists and before the initial produced-file baseline.
+    Harness assets and runner control state remain outside source content.
+11. Workspace fields cannot contain commands, environment variables, resource
+    limits, provider settings, or harness settings.
 
-The upstream issue and UEP own final standard names when accepted. If review
-changes the proposed shape, update the specification, schema, reference
-implementation, conformance suite, examples, and this plan together. A
-downstream-only implementation keeps the proposed names, documents their
-extension status, and tracks any later UHP collision as a required clean
-migration.
-
-### Session binding and public provenance
-
-After materialization, the session owns one immutable binding containing:
-
-- canonical requested repository URL;
-- requested ref, or an explicit record that it was omitted;
-- exact resolved 40-hex commit;
-- runner-owned session root under `/data`;
-- private checkout root beneath that session root;
-- separate runner control root as a sibling of the checkout;
-- execution working directory beneath the checkout;
-- the governing UHP release;
-- the workspace-contract owner and immutable revision, expressed internally as
-  the accepted UHP release or exact downstream source commit;
-- creation time and server-owned expiry; and
-- cleanup state sufficient to make removal idempotent.
-
-The checkout root, session root, control root, and cleanup token are internal and
-must never appear in UHP responses, streams, logs, artifacts, or Promptfoo
-reports. Successful responses expose only stable public provenance:
+A workspace snapshot request is therefore:
 
 ```json
 {
   "metadata": {
+    "harness_id": "allagents-omp",
     "workspace": {
-      "repository": {
-        "url": "https://github.com/example/project.git",
-        "requested_ref": "refs/heads/main",
-        "resolved_commit": "0123456789abcdef0123456789abcdef01234567"
+      "access": "read_only",
+      "source": {
+        "kind": "workspace_snapshot",
+        "snapshot_name": "monorepo-release",
+        "image_manifest_digest": "sha256:...",
+        "workspace_manifest_digest": "sha256:..."
       },
-      "working_directory": "packages/service"
+      "working_directory": "packages/api"
     }
   }
 }
 ```
 
-If the ref was omitted, `requested_ref` is omitted rather than synthesized. If
-the working directory was omitted, `working_directory` is omitted. The same
-public provenance is returned on successful continuations and idempotent
-response retrieval. The selected contract and schema distinguish accepted
-request fields from read-only response provenance fields; the UEP owns that
-distinction when upstream accepts the contract.
+## Session binding and public provenance
 
-### Continuation
+The fork stores workspace binding fields in the existing session/checkpoint
+record. The binding contains:
 
-A continuation normally supplies only `previous_response_id`:
+- the canonical effective descriptor and its digest;
+- the source kind and exact resolved source identity;
+- the generation key, immutable publication/epoch identity, and verified tree
+  manifest digest;
+- `access`, effective `retention`, and normalized `working_directory`;
+- the attachment method and evidence needed to prove the restored session still
+  refers to that exact generation;
+- exact public provenance;
+- existing session expiry/deletion state; and
+- the selected harness/provider binding already owned by the session.
 
-```json
-{
-  "previous_response_id": "resp_...",
-  "input": "Now run the focused check and summarize the result."
-}
-```
+Public response `metadata.workspace` has exactly `access`, `retention`,
+`working_directory`, `effective_descriptor_digest`, `generation_id`,
+`workspace_manifest_digest`, `provenance`, and `expires_at`.
+`working_directory` is always present and uses `.` for the workspace root.
+`expires_at` is the effective timestamp for `session` retention and `null` only
+for authorized `persistent` retention.
 
-HarnessRouter may also reuse a session through its existing
-`metadata.session_id` recovery path. After session resolution, every reused
-session rejects `metadata.workspace`, regardless of which identifier selected
-it. For a workspace-bound session, stored binding and harness state select
-execution, and any caller-supplied harness must match exactly. A mismatch fails
-before Git, hydration, or provider work. A reused unbound session without
-workspace metadata retains ordinary upstream routing behavior.
+Repository `provenance` has `kind: "repositories"` and a request-order
+`repositories` array. Each entry has normalized `url`, `destination`, exact
+`resolved_commit`, effective `depth`, and `requested_ref` only when the request
+supplied a ref. Snapshot `provenance` has `kind: "workspace_snapshot"`,
+`snapshot_name`, exact `image_manifest_digest`, exact
+`workspace_manifest_digest`, and a manifest-order `repositories` array. Each
+snapshot root has `destination`; a history-bearing root also has
+`resolved_commit` and `object_set_digest`, while a tree-only root has neither.
 
-A valid workspace continuation reuses the exact session root, checkout root,
-control root, execution working directory, and checkout mutations. It verifies
-that the runtime supports the binding's recorded workspace-contract owner and
-revision. A missing, expired, cleaned, identity-mismatched, or unsupported
-binding fails closed; HarnessRouter never silently clones or reinterprets it.
-Before activating an incompatible contract, an upgrade must explicitly migrate
-compatible bindings or drain and delete them.
+Acquisition-policy revisions, catalog origins, mirrors, credentials, host and
+mount paths, attachment IDs, leases, and internal generation keys are not
+public. A continuation and response replay return the same committed object;
+they never report a newly resolved ref or substituted generation.
 
-### Provider and harness contract
+## Existing lifecycle integration
 
-The downstream deployment defines two protocol-specific HarnessRouter
-connections that point to one external OAuth gateway and use the same
-server-side base URL and API-key secret:
+The first-turn sequence is:
 
-- a Responses-format connection used only by Codex; and
-- an OpenAI Chat Completions connection used only by OMP.
+1. Authenticate and validate the stock UHP envelope and establish existing
+   idempotency ownership.
+2. Resolve whether the request creates or reuses a session.
+3. If new and workspace-backed, validate and authorize the closed workspace
+   descriptor, then store a pending binding in the existing session transition.
+4. Run fresh hydration only far enough to allocate the existing session
+   workspace and isolation identity. Skip stock empty-root Git initialization
+   for workspace-backed sessions; do not allocate another checkout root.
+5. Create a per-session writable control root in that allocation but outside
+   source content. Redirect `.harness` state, HOME, conversation data, plugins,
+   skills, MCP/configuration, credentials, scratch, and produced/checkpoint
+   bookkeeping to it.
+6. Resolve the immutable source identity, claim or reuse the generation, and
+   attach it at the existing workspace path with the requested access mode.
+7. Reject workspace input files for `read_only`. For `editable`, apply them to
+   the private copy before the initial produced-file baseline. Supply generated
+   instructions through a harness-supported external instruction path or a
+   non-shadowing session mount; never write, overlay, or copy up a source path.
+8. Establish runner-owned outer and nested produced-file cursors, validate the
+   effective working directory, and prove a `read_only` attachment has no
+   writable alias.
+9. Atomically mark the existing session attachment ready, then continue through
+   ordinary provider selection and harness execution.
+10. Collect files/artifacts and checkpoint through the access-specific path:
+    `read_only` stores only session-local mutable state plus exact attachment
+    evidence and excludes generation bytes; `editable` checkpoints its private
+    workspace copy. Stream events, set terminal state, and schedule cleanup
+    through existing HarnessRouter paths.
 
-This is one external provider route with two logical protocol adapters, not two
-credential authorities. The external gateway owns user login, upstream token
-storage, refresh, and repair.
+A continuation does not parse or resolve a source. Workspace-aware hydration
+first restores and validates only the control metadata needed for attachment:
+generation key/epoch, manifest, durable reference, and attachment evidence. It
+then acquires and mounts that exact protected generation, and only afterward
+restores the remaining session-local harness state around the source mount. A
+missing, expired, corrupt, wrong-generation, or unsupported attachment fails
+closed. Hydration must not reacquire Git, contact an OCI registry, use another
+cached generation, archive or restore shared generation bytes, or start with an
+empty workspace.
 
-- A new session selects only an allowed `metadata.harness_id` and model.
-- A reused workspace-bound session derives its harness from stored state; a
-  supplied mismatch fails before execution. Unbound sessions retain upstream
-  routing.
-- Each custom harness has an explicit model allowlist and a one-entry provider
-  policy pointing to its matching protocol-specific connection.
-- There is no fallback connection or automatic transport switching.
-- Provider base URL, API key, transport, headers, and model mapping cannot be
-  supplied in UHP input or workspace metadata.
-- Provider failure is returned as an ordinary HarnessRouter/UHP failure. It does
-  not change workspace or routing state.
-- HarnessRouter runs in brokered sandbox mode. A harness receives a short-lived,
-  session-scoped credential and loopback broker URL, never the long-lived
-  external-gateway key. The scoped credential exists only for the active turn
-  and is removed before checkpointing or public file collection.
+`retention: "session"` follows existing finite session TTL and deletion.
+Authorized `persistent` retention pins the existing session and its generation
+reference until explicit deletion or operator policy permits removal; it does
+not create a second retention scheduler. Polling and response replay do not
+extend retention. Cleanup makes the session unavailable before releasing its
+attachment, private copy, or generation reference and remains idempotent across
+restart.
 
-## Security and resource invariants
+## Generation and attachment design
 
-These are release requirements, not later hardening:
+A generation is a verified immutable source artifact, not a runnable workspace
+or session. It is stored outside session allocations under runner-owned `/data`
+state and can be attached only through the existing hydrate path.
 
-1. **URL and DNS:** Accept only public HTTPS destinations. Reject loopback,
-   link-local, private, carrier-grade NAT, documentation, multicast, reserved,
-   and otherwise non-public IPv4/IPv6 results. Validate every DNS answer before
-   connection, pin the validated address for that hop, revalidate every redirect,
-   and cap redirects. A public name that resolves to any forbidden address fails
-   closed.
-2. **Git protocols:** Disable `file`, `ssh`, `git`, `ext`, and helper-driven
-   alternate protocols. Clear inherited Git configuration and credential
-   helpers. Disable terminal prompting. Requests never provide credentials.
-3. **Repository execution:** Disable repository hooks and clean/smudge/process
-   filters. Do not initialize submodules. Detect and reject gitlinks and Git LFS
-   pointer-backed content instead of executing helpers or returning a partial
-   workspace as complete.
-4. **Root separation:** Keep four explicit values: session root, checkout root,
-   control root, and execution working directory. The checkout and control roots
-   are separate children of the session root. Harness HOME, credentials,
-   scratch, skills, and runner state live only under control. The execution
-   directory is a no-follow-validated descendant of checkout. Repository content
-   cannot become control state.
-5. **Filesystem confinement:** Build the checkout in sibling staging and publish
-   it only into an absent checkout target. Reject absolute paths, `..`, empty
-   segments, NUL, platform-separator ambiguity, and symlinks that escape the
-   checkout.
-6. **Exact provenance:** Resolve the requested ref, fetch its commit, check out
-   detached, and verify `HEAD` equals the recorded object ID before publication.
-   Later ref movement cannot change the bound checkout.
-7. **Bounds:** Enforce server-owned limits for request bytes, URL/ref/path
-   lengths, redirects, clone/fetch duration, materialized bytes, inodes, process
-   output, concurrent materializations, active harness time, and idle checkout
-   TTL. Apply limits during work, not only after completion.
-8. **Process control:** Run Git and materializer children in a cancellable process
-   group with a minimal environment, bounded stdout/stderr capture, and a hard
-   termination deadline. Cancellation stops descendants.
-9. **Crash-safe publication:** A workspace-aware first hydrate creates an
-   isolated empty session root with checkout absent. Persist a pending
-   reservation, materialize and validate in sibling staging, atomically publish
-   staging as checkout, create the separate control root, then atomically commit
-   the usable binding. Startup reconciliation removes abandoned staging, pending
-   reservations, published-but-unbound roots, and cleanup-marked roots. A
-   harness can never observe staging or a partially validated tree.
-10. **Isolation:** Never bind one session to another session's checkout. Each
-    first turn creates a private checkout even when URL, ref, and resolved commit
-    are identical.
-11. **Cleanup:** Removal is safe to repeat, never follows links, is confined to
-    the recorded session root, and cannot remove another session's data.
-12. **Provider secrets:** `HR_SANDBOX_TRUST=owner` is forbidden. The local broker
-    exchanges a scoped turn credential for the real external-gateway key. The
-    long-lived key never enters the harness environment or filesystem. Generate
-    CLI credential config only in a per-turn ephemeral control subtree, exclude
-    it from checkpoints and public file/artifact APIs, and delete it before
-    terminal persistence. Neither long-lived keys nor scoped broker tokens may
-    survive in a checkpoint, session file, artifact, stream, response, or log.
+### Identity
 
-## Workstreams and implementation phases
+The canonical generation key includes only immutable source and layout inputs:
 
-The phases are ordered by dependency. Each ends with observable behavior; source
-inspection alone is not an exit criterion.
+- source kind;
+- for every repository in request order: canonical normalized URL, exact
+  resolved commit, and normalized destination; or the selected OCI catalog
+  identity plus both direct digests;
+- the normalized source-layout/workspace-manifest schema revision;
+- materializer contract revision;
+- Git fetch depth (`2`) and Git acquisition-policy revision for repository
+  sources;
+- OCI extraction and validation-policy revision for snapshot sources; and
+- any operator acquisition-policy identity that can change resulting bytes.
 
-### Phase 1: Establish the upstream issue and ownership decision
+The key excludes session ID, response ID, harness, provider, access, retention,
+working directory, and caller display data. Those values affect attachment or
+execution, not generation bytes. Different request ref spellings that resolve to
+the same canonical repositories, commits, destinations, depth, and policy reuse
+the same generation. Exact provenance retains the original requested values even
+when the immutable generation key is shared.
 
-**Outcome:** HarnessRouter maintainers have selected the governance path and
-either accepted upstream ownership or recorded that the fork must own the
-extension.
 
-Work:
+### Git acquisition cache
 
-1. Open the upstream issue with the exact request shape, response provenance,
-   first-turn-only rule, continuation behavior, failure categories, source
-   restrictions, root model, lifecycle, and non-goals.
-2. Link prior security analysis without importing AllAgents-specific naming into
-   the generic contract.
-3. Draft the required UEP and identify compatibility effects on UHP clients,
-   schemas, conformance runners, and existing metadata behavior.
-4. Obtain maintainer direction on allocation of `metadata.workspace`, generic
-   configuration names, materializer placement, runner interface, and release
-   target.
-5. If no decision arrives within 30 calendar days after the issue opens, post a
-   follow-up after day 14 and record non-response at day 30 as deferral.
-6. Split reviewable upstream changes according to maintainer preference while
-   keeping one coherent protocol contract.
-7. Record explicit decisions and update every example when review changes a
-   name or behavior.
+Repository sources use two server-owned cache levels inside runner-owned
+`/data`; neither is a session workspace:
 
-Exit gate:
+1. One operator-only bare shallow acquisition mirror exists per canonical
+   repository URL. Only the runner's acquisition worker can write it. Every
+   refresh of that repository is serialized through the same mirror, and
+   concurrent refreshes of the same normalized ref request use one in-flight
+   operation. Depth and acquisition-policy revisions belong to immutable commit
+   snapshots and generation identity, not the mutable mirror key.
+2. Verified depth-2 commit snapshots from that mirror feed immutable multi-
+   repository generations keyed by canonical URLs, exact commits, destinations,
+   depth, policy, and materializer contract revision. A generation is the only
+   cache object that can be attached to a session.
 
-- the upstream issue exists and links the UEP when required;
-- maintainers have made an explicit decision, or the documented non-response
-  window has elapsed and is recorded as deferral;
-- accepted semantics are reserved through governance, or downstream semantics
-  are explicitly labeled as a HarnessRouter fork extension; and
-- no unresolved decision blocks implementation in the selected ownership path.
+The bare mirror stores acquired objects and shallow-boundary metadata so a
+second generation needing the same commit does not clone or transfer its pack
+again. Updates import a verified bounded fetch atomically; they never mutate a
+published commit snapshot, silently deepen it, or make a partially refreshed
+mirror eligible for generation construction. The generation builder exports a
+self-contained repository with no alternates and no writable link to the mirror.
+Mirror paths, file descriptors, credentials, refs, and writable internals are
+never mounted into or disclosed to a session.
 
-### Phase 2: Pin the fork baseline and supply chain
+Resolving a mutable advertised ref may contact the origin to determine its
+current exact commit. Once resolution yields an identity already present in the
+mirror and generation store, there is no source pack acquisition, checkout,
+tree materialization, or publication. Separate counters distinguish ref
+advertisement from source-byte acquisition so cache-reuse proof cannot count a
+remote pack fetch as a hit.
 
-**Outcome:** `allagentsdev/harnessrouter` can reproducibly build the examined
-upstream baseline and identify both that baseline and every downstream workspace
-commit when the extension is not accepted upstream.
+### Publication and reuse
 
-Work:
+- Build into a random private sibling staging directory.
+- Persist one singleflight claim per bare-mirror refresh and one per generation
+  key. Concurrent misses perform at most one remote pack acquisition and one
+  immutable generation publication. Other requests wait independently, and one
+  waiter's cancellation does not cancel work still needed by another live
+  waiter.
+- Stream validation and accounting during acquisition. Verify the final manifest
+  before publication.
+- Atomically rename verified staging into an immutable publication and record its
+  complete metadata in runner state.
+- Treat bare commit snapshots and published generations as immutable. Startup
+  verifies recorded ownership, publication completeness, shallow boundary,
+  policy revision, and manifest evidence before readiness.
+- A repository generation hit may refresh mutable ref advertisement, but performs
+  no clone, pack fetch, checkout, tree copy, or second publication after the
+  exact normalized source identity matches. An OCI digest-keyed hit performs no
+  registry manifest/blob request, extraction, tree copy, or second publication.
+  Both record only a new session lease/reference.
+- Every `read_only` session whose normalized source identity matches a cached
+  generation attaches that same immutable generation. It cannot choose to
+  reclone, re-extract, rematerialize, or copy cached source bytes.
+- Failed or cancelled builds remove staging after descendants stop. A partially
+  refreshed mirror, commit snapshot, or generation is quarantined and never
+  attached.
+- Existing leases/session references protect a generation from cleanup. Existing
+  cleanup scheduling removes only complete, unreferenced generations under
+  bounded operator policy. Mirror/object-cache cleanup is separately confined
+  and cannot invalidate a referenced generation.
 
-1. Preserve `HarnessRouter/harnessrouter` as the documented upstream remote and
-   record v0.25.4 commit
-   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3` as the initial examined baseline.
-2. Keep upstream synchronization commits separate from downstream deployment
-   commits. Never combine a baseline jump with a product behavior change.
-3. Pin the selected UHP release, base image by manifest digest, Codex and OMP
-   runtime releases, Git/materialization system packages, Promptfoo dependency
-   and lockfile, and every CI action. No `latest`, floating branch, or unbounded
-   package range enters a release.
-4. Configure image publication for `ghcr.io/allagentsdev/harnessrouter`.
-5. Add an upstream-diff check so each candidate records its exact upstream tag
-   and commit plus every downstream commit in the image.
-6. Use the upstream-baseline-plus-downstream-revision tag convention
-   `<upstream-tag>-allagents.<revision>`, for example
-   `v0.25.4-allagents.1`. Increment the downstream revision for any image change
-   on the same upstream baseline; reset it to `.1` when the upstream baseline
-   tag changes.
-7. Use the same tag for the downstream source release and OCI image, then deploy
-   the image only by manifest digest, for example
-   `ghcr.io/allagentsdev/harnessrouter:v0.25.4-allagents.1@sha256:<digest>`.
+### Access-specific attachment
 
-Behavior-focused proof:
+- `read_only`: take a lease and bind the cached immutable generation directly at
+  the existing session workspace through a read-only filesystem view. A second
+  matching session performs zero source-tree copy and shares the same verified
+  generation inodes/bytes, while the writable control root, HOME, checkpoint,
+  conversation, produced records, harness runtime, and lifecycle state remain
+  isolated. Workspace input files are absent. After control-root assets and
+  external instructions are ready, verify that root, nested paths, symlink
+  paths, bind aliases, and alternate descriptors cannot write or copy up into
+  source.
+- `editable`: take a lease, then create a private, inode-independent tree from
+  the verified generation inside the existing session workspace allocation.
+  Reflink/copy is allowed only when it yields independent inodes and writes
+  cannot alter the generation or another session. Hard-linked mutable files are
+  forbidden.
+- Both modes preserve nested repository administrative state allowed by the
+  source manifest. The attachment never exposes the bare Git mirror or moves
+  harness HOME, credentials, scratch, or checkpoint control into repository
+  content.
+- Continuation reuses the exact lease and attachment. An editable continuation
+  sees its mutations; a read-only continuation sees the same immutable
+  generation and its own session-local state.
 
-- a clean fork checkout builds the recorded baseline from pinned inputs;
-- source links, OCI labels, release metadata, and SBOM identify
-  `allagentsdev/harnessrouter`, the exact upstream commit, and the downstream
-  revision; and
-- changing a pin, baseline, or lockfile appears as a reviewed source diff.
+## Implementation phases
 
-Exit gate: the unchanged pinned baseline image builds before workspace behavior
-or downstream deployment configuration is added.
+Each phase ends with observable proof. Source inspection or mock-forwarding
+assertions are not sufficient.
 
-### Phase 3: Land the workspace contract in the selected ownership path
+### Phase 1: Pin the baseline and record stock behavior
 
-**Outcome:** the contract, parser, and behavior tests agree on one bounded
-first-turn workspace object; requests without it retain ordinary behavior. When
-accepted upstream, specification, machine schema, conformance, changelog, and
-user documentation define the same standard contract.
-
-Primary areas: UHP specification/schema and conformance when accepted upstream;
-`gateway/app.py`, focused gateway tests, changelog, and user documentation in
-either ownership path.
-
-Work:
-
-1. Define the request and public provenance shapes through the upstream review.
-   An accepted UHP release owns standard compatibility and schema evolution;
-   otherwise the downstream fork release owns the extension shape.
-2. Parse `metadata.workspace` only on an initial request. Leave unrelated
-   metadata unchanged.
-3. Apply generic metadata byte/depth bounds before response or session
-   allocation.
-4. Strictly validate required and optional fields, unknown-field rejection,
-   anonymous public HTTPS policy, and normalized relative
-   `working_directory` rules.
-5. Extend session resolution to report whether it created or reused a session.
-   Store the canonical descriptor only after proving the session is new. Use one
-   canonical serialization and digest so idempotent replay cannot create a
-   second binding.
-6. Reject workspace metadata for every reused session selected by either
-   `previous_response_id` or `metadata.session_id`, before Git, hydration,
-   runner, or provider work.
-7. For a reused workspace-bound session, derive the harness from stored state and
-   reject a caller-supplied mismatch before hydration. Leave reused unbound
-   sessions on the ordinary route.
-8. Map validation and reuse failures to stable UHP errors with the offending
-   parameter named. Never expose exceptions or internal paths.
-9. When accepted upstream, update the specification, machine schema, reference
-   implementation, conformance suite, changelog, and docs in the same change
-   set. Otherwise update the fork implementation, extension tests, changelog,
-   and docs together without altering UHP conformance definitions.
-
-Acceptance examples:
-
-| Case | Observable result |
-|---|---|
-| Valid URL only | Accepted; checkout root becomes the effective working directory |
-| Valid URL, ref, and nested directory | Accepted; values reach the single workspace hook |
-| Missing URL, unknown field, array, or non-string field | 400 before materialization |
-| Absolute or parent-traversing `working_directory` | 400 before materialization |
-| Continuation containing `metadata.workspace` | 409 before materialization |
-| Existing `metadata.session_id` plus workspace object | 409 before materialization |
-| Workspace-bound session with a different `harness_id` | 409 before hydration |
-| No workspace object | Same status, response, and runner path as upstream baseline |
-
-Tests assert the HTTP/UHP contract and absence of materializer/provider activity,
-not helper calls or field-copy plumbing.
-
-### Phase 4: Land runner and materializer seams in the selected ownership path
-
-**Outcome:** HarnessRouter can prepare a workspace after session resolution and
-before provider execution while preserving its ordinary path.
-
-Primary areas: `gateway/app.py`, `runner/server.py`, their existing transport,
-the materializer package, focused integration tests, and operator docs. These
-land upstream when accepted and otherwise remain an explicit fork patch.
+**Outcome:** the unchanged baseline is reproducible and the fork has regression
+proof for the lifecycle being extended.
 
 Work:
 
-1. Extend the existing gateway-to-runner turn envelope with an optional canonical
-   first-turn workspace descriptor and an optional hydrated binding for a
-   continuation. Do not add a public endpoint.
-2. Add a first-hydrate mode that performs existing isolation, wipe, and ownership
-   setup but leaves an empty session root with checkout absent. It must not run
-   stock Git initialization, write `.gitignore`, apply input files, or create
-   harness state before publication.
-3. Define one runner-owned materializer interface with two operations:
-   `materialize(first_turn_descriptor, checkout_target, limits, cancellation)`
-   and `cleanup(binding)`. Use one configured implementation; do not add plugin
-   discovery, registration, or hook chaining.
-4. Preserve the four explicit root values in the binding. Validate the execution
-   working directory without following links; keep control as a sibling of
-   checkout.
-5. After materialization, finish the pending-reservation/publication transition,
-   create control, then atomically commit the binding and public provenance.
-6. On continuation, hydrate and verify the stored roots and identity. Do not
-   resolve, fetch, checkout, or validate caller workspace metadata again.
-7. Spawn the harness in the execution working directory. Anchor durable HOME,
-   scratch, skills, and CLI state in control. Scope input files, produced-file
-   Git diffing, file APIs, and artifacts to checkout. Checkpoint the session root
-   only after removing ephemeral credential state. Do not initialize an outer
-   repository or overwrite the source repository's `.gitignore`.
-8. Make first-turn transition idempotent. Same-key replay returns the owning
-   response and binding. A competing request cannot materialize or bind a second
-   checkout for the same session.
-9. Preserve streaming, cancellation, terminal-state, idempotency, artifact, and
-   provider-error ordering. Workspace failure terminates before provider traffic.
-10. Implement typed materializer request, result, and error records. Results
-    include internal roots plus safe public provenance; errors contain neither
-    secrets nor uncontrolled Git output.
-11. Canonicalize and authorize the HTTPS URL before Git. Use one acquisition path
-    for DNS, redirects, IP policy, ref advertisement, and fetch.
-12. Resolve omitted ref through the advertised symbolic default. Resolve full
-    branch/tag refs or unambiguous shorthand from advertised SHA-1 refs. Reject
-    raw object IDs, other namespaces, SHA-256 repositories, missing refs, and
-    ambiguous shorthand. Peel annotated tags and require a commit.
-13. Create restrictive random staging as a sibling of the absent checkout target.
-    Fetch only the advertised ref needed for the resolved commit, disable helper
-    execution, and check out detached with isolated Git configuration.
-14. Reject submodule entries and LFS-managed content. Validate confinement,
-    bytes, inodes, `HEAD`, and optional execution directory.
-15. Atomically publish validated staging to checkout. Never write control or
-    derive a host path from URL, ref, working directory, response ID, or other
-    caller text.
-16. Remove staging on every error, timeout, cancellation, and recovery sweep.
-    Bound concurrency with one server-owned semaphore and emit stable staged
-    errors with capped private stderr.
-17. Document the runner/materializer contract and configuration in the owning
-    HarnessRouter changelog and operator docs; include it in UHP documentation
-    only when accepted as standard behavior.
+1. Pin the initial examined baseline to HarnessRouter `v0.25.4`, commit
+   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`, and UHP `2026-09-12`. Before
+   implementation, record the exact release baseline actually selected; move it
+   only in a standalone synchronization change.
+2. Preserve `HarnessRouter/harnessrouter` as the upstream remote and
+   `allagentsdev/harnessrouter` as the existing fork.
+3. Pin base image, OS packages, Git and OCI libraries/tools, Codex, OMP,
+   Promptfoo, lockfiles, and CI actions. Build the unchanged image first.
+4. Add focused characterization scenarios for fresh empty-root Git hydration,
+   continuation checkpoint restore, attached-file/harness-asset ordering,
+   root-Git produced-file cursor behavior, cancellation, TTL cleanup, restart,
+   and requests with arbitrary metadata.
+5. Capture stock UHP request/stream/error behavior for requests without
+   `metadata.workspace`; these traces become compatibility fixtures.
+6. Record the precise gateway/session/hydrate/runner/checkpoint/files call path
+   in code comments or tests where the fork seam lands. Do not add a generic
+   extension framework.
 
-Behavior-focused proof:
+Exit proof:
 
-- a probe harness sees a committed repository file on its first instruction;
-- `working_directory` becomes process cwd while HOME and runner state remain
-  outside checkout;
-- repository `.harness` paths and `.gitignore` cannot collide with control state;
-- exact commit remains fixed if the branch later advances;
-- omitted ref selects the advertised default branch;
-- raw object IDs, SHA-256 repositories, escaping paths, forbidden destinations,
-  protocols, credentials, hooks, filters, submodules, and LFS content fail;
-- byte, inode, time, output, redirect, and concurrency limits apply during work;
-- materializer failure produces no provider request, agent process, binding, or
-  published checkout;
-- cancellation kills Git descendants and removes staging;
-- restart and continuation restore checkout mutations and control state;
-- two sessions at the same commit receive distinct writable roots; and
-- ordinary requests exercise the unchanged upstream sequence.
+- a clean checkout builds the unchanged pinned image;
+- characterization runs demonstrate all seven inventory facts; and
+- a stock request completes through each supported existing route with no
+  workspace-specific state.
 
-Use controlled origins and resolvers for hostile network cases and a stable
-public fixture repository for built-image proof. Tests observe files, commit
-identity, isolation, errors, and process termination rather than mock argument
-forwarding.
+### Phase 2: Add request validation and immutable session binding
 
-### Phase 5: Complete continuation and cleanup lifecycle
+**Outcome:** the gateway accepts the exact first-turn descriptor and binds it to
+the existing session transition without changing stock requests.
 
-**Outcome:** checkout lifecycle follows the existing session lifecycle with
-bounded ephemeral storage and crash-safe recovery in the selected ownership
-path.
+Primary surfaces are the existing UHP request handling/session resolution in
+`gateway/app.py`, the existing gateway-to-runner turn envelope, existing session
+persistence, focused integration tests, changelog, and extension documentation.
 
 Work:
 
-1. Add the server-owned idle TTL configuration selected through review, with a
-   finite safe default. Callers cannot set or extend it.
-2. Start or reset idle expiry only after a terminal turn is durably recorded. An
-   active materialization or harness turn is never removed by the sweeper.
-3. On continuation, verify stored identity, contract owner and revision, and all
-   roots, then use the same working directory and mutations. Reset expiry only
-   after the turn becomes terminal.
-4. On first-turn cancellation during materialization, terminate the process
-   group, remove staging, and leave no resumable binding.
-5. On cancellation after publication, stop the harness through ordinary
-   HarnessRouter behavior and retain the checkout only until finite idle expiry,
-   allowing a permitted continuation to see prior mutations.
-6. On expiry or existing-session deletion, atomically mark the binding
-   unavailable before confined idempotent cleanup. A late continuation fails
-   closed and cannot recreate checkout.
-7. On startup, reconcile abandoned staging, pending reservations,
-   published-but-unbound roots, and cleanup-marked session roots. Do not add a
-   second database, durable queue, deletion ledger, or general storage collector.
-8. If cleanup encounters a transient host error, keep binding unavailable, emit
-   an operator-visible error, and retry the same idempotent removal on the next
-   bounded sweep or startup. Never make checkout executable again.
-9. Before activating an incompatible workspace contract, explicitly migrate
-   compatible bindings or drain and delete them. Unsupported revisions fail
-   closed; do not add aliases or reinterpret stored descriptors.
-10. Add lifecycle behavior to UHP conformance only where accepted and
-    protocol-visible. Always cover implementation behavior with focused
-    HarnessRouter integration tests in the owning repository.
+1. Parse only `metadata.workspace`; keep unrelated metadata behavior unchanged.
+2. Apply metadata byte, nesting, list-count, and string-length bounds before
+   session allocation or source work.
+3. Strictly validate the closed union, snake_case names, access, retention,
+   destinations, working directory, direct `sha256:` digest syntax, and the
+   `read_only` input-file exclusion.
+4. Authorize persistent retention before source resolution or generation lookup.
+5. Canonically serialize the effective descriptor with the default
+   `retention: "session"` and calculate its digest.
+6. Extend the existing new-session transition with pending/ready workspace
+   binding states. Do not add another response or session identity.
+7. Reject the descriptor on every reused session path before hydration. On a
+   workspace-bound continuation, derive source/access/retention/cwd/harness from
+   stored state and reject a supplied harness mismatch through existing session
+   rules.
+8. Preserve idempotency: the owning initial request performs one binding; a
+   duplicate receives the same response/session result and cannot claim another
+   generation or attachment.
+9. Map validation, authorization, reuse, and binding failures into bounded UHP
+   errors without internal paths or secret/catalog details.
+10. Add public provenance only after attachment is ready. Retrieval/replay uses
+    stored provenance rather than resolving it again.
 
-Acceptance examples:
+Proof includes valid descriptors for both source kinds; repository counts
+`0`, `1`, `128`, and `129`; multiple repository entries; default retention;
+authorized and unauthorized persistence; invalid unions, fields, digests,
+paths, and destinations; workspace injection on both continuation mechanisms;
+idempotent duplicates; harness mismatch; exact response-schema fixtures for
+both provenance variants; and a byte-for-byte stock trace for requests without
+the descriptor.
 
-| Scenario | Observable result |
-|---|---|
-| Turn 1 edits a file; turn 2 reads it | Turn 2 sees the edit in the same checkout |
-| Turn 2 omits workspace metadata | Stored binding selects checkout and cwd |
-| Turn 2 includes workspace metadata | Rejected before Git or provider activity |
-| Checkout missing or identity mismatched | Continuation fails; no rematerialization |
-| Git cancellation | Child processes exit and staging disappears |
-| Harness cancellation | Response is cancelled; checkout follows finite idle expiry |
-| Expiry races with continuation | Existing session serialization selects one winner; checkout is not used after cleanup begins |
-| Cleanup runs twice or after restart | Same absent final state; no neighboring path changes |
+### Phase 3: Add the immutable generation store and existing-workspace attachment seam
 
-### Phase 6: Add downstream Codex, OMP, and provider wiring
+**Outcome:** one generic runner seam claims, publishes, reuses, and attaches a
+verified generation inside the existing hydrate lifecycle.
 
-**Outcome:** the fork supplies AllAgents deployment policy while consuming the
-accepted upstream capability or its explicitly documented downstream workspace
-patch unchanged.
+Primary surfaces are existing runner/session hydrate code in `runner/server.py`,
+its current gateway transport, checkpoint/session persistence, startup
+reconciliation, and existing cleanup scheduling.
 
-Work in `allagentsdev/harnessrouter`:
+Work:
+
+1. Add one internal `resolve -> claim/reuse -> materialize -> verify -> publish ->
+   attach` pipeline selected by the closed source union. It is not a public API or
+   plugin registry.
+2. Replace only the fresh empty-root initialization point for workspace-backed
+   sessions. The designated path remains the existing session workspace.
+3. Persist bare-mirror refresh/snapshot state, generation claims, staging,
+   publication, session leases/references, and attachment-ready transitions using
+   the runner's current durable state and recovery ordering.
+4. Build and verify the canonical source-visible manifest: normalized relative
+   path, type, mode, size/content identity, link target where applicable, declared
+   repository ownership, and optional normalized Git-history declaration.
+5. Implement access-specific attachment and verify read-only alias resistance or
+   editable inode independence before marking the session ready.
+6. Add a per-session writable control root outside source content and redirect
+   every stock workspace-internal mutable path there: `.harness`, HOME,
+   conversation state, plugins, skills, MCP/configuration, credentials, scratch,
+   produced-file indexes, and checkpoint control. No mutable runtime path may
+   resolve into an immutable generation.
+7. Use harness-supported external instruction inputs or a non-shadowing
+   session-only mount for generated instructions. Reject the implementation if
+   either supported harness requires overwriting, overlaying, or copying up a
+   source path.
+8. Reject UHP input files for `read_only`; for `editable`, apply them to the
+   private copy at the normal pre-turn point and establish the initial
+   produced-file baseline afterward.
+9. Add access-specific checkpoint/hydrate behavior. A read-only checkpoint
+   excludes the generation mount and source bytes, persists only session-local
+   mutable state plus exact attachment evidence, and reattaches the same
+   generation before restore. An editable checkpoint carries the private
+   workspace copy and never the mirror or generation backing store.
+10. Reuse existing user/sandbox isolation, process groups, timeouts,
+    cancellation, TTL, deletion, and cleanup. Source workers inherit
+    cancellation and must stop all descendants before terminal acknowledgement.
+11. Reconcile abandoned mirror refreshes, immutable commit snapshots, staging,
+    incomplete publication, ready generations, pending attachments, leases,
+    references, private copies, control roots, and cleanup after restart.
+12. Verify continuations against the stored generation epoch/manifest, durable
+    reference, and attachment evidence; never resolve or materialize source on
+    continuation.
+13. Expose separate bounded counters/events for ref resolution, remote pack
+    acquisition, mirror singleflight, generation build/publication/hit,
+    read-only zero-copy attachment/checkpoint, editable copy/checkpoint,
+    reference, cancellation, quarantine, and cleanup. Do not log request
+    credentials, registry locations, internal paths, or uncontrolled tool
+    output.
+
+Proof uses deterministic fake Git and OCI builders to show one mirror refresh
+and one publication under concurrent misses, independent waiter cancellation,
+two read-only sessions directly attaching the same verified generation with
+zero second clone/fetch/materialization/copy, and two editable sessions with
+independent inodes and mutations. Real Codex and OMP probes prove generated
+instructions and all mutable harness assets live outside source. A read-only
+checkpoint contains no generation bytes. Continuation restores and validates
+minimal binding/control metadata, reattaches the same protected generation,
+then restores remaining session-local harness state; checkpoint creation writes
+no root Git commit. Editable checkpoint/continuation preserves its private
+mutations. Restart at every persisted transition and cleanup are idempotent.
+Session/runtime state remains isolated even when immutable bytes are shared. A
+stock session still creates and uses its normal root Git workspace.
+
+### Phase 4: Implement repository composition with mandatory depth-2 acquisition
+
+**Outcome:** repository mode deterministically builds one generation from one or
+more repositories while retaining bounded recent Git history.
+
+Work:
+
+1. Validate each caller URL under the fixed deployment egress policy. Callers may
+   not supply credentials, proxy configuration, Git config, or transport
+   options. Re-authorize redirects and resolved addresses; isolate Git config and
+   disable interactive helpers, hooks, filters, alternate protocols, submodules,
+   and LFS hydration.
+2. Resolve an omitted ref through the advertised symbolic default. Resolve an
+   explicit advertised branch or tag, peel annotated tags as required, and
+   record the exact commit before fetch. Reject ambiguous, missing, unsupported,
+   or non-commit targets.
+3. Maintain one operator-only bare shallow acquisition mirror per canonical URL.
+   Serialize every write for that repository through the same mirror and
+   singleflight concurrent refreshes for the same normalized ref request.
+4. On a mirror miss, fetch exactly depth 2 with `--depth=2` into a private
+   bounded refresh area, verify it, and atomically import its pack/object and
+   shallow-boundary state. Fetch only the selected advertised branch/tag path.
+   Do not retry with a larger depth, `--unshallow`, full clone, arbitrary
+   object-ID fetch, another ref, or another source mode.
+5. Verify the fetched tip/peeled commit exactly equals the commit observed during
+   resolution. A ref movement race fails the refresh rather than caching or
+   binding different bytes.
+6. Publish an immutable commit snapshot inside the mirror cache. A cache hit for
+   the exact canonical URL, commit, depth, and policy performs no clone or remote
+   pack transfer. No session can access the mirror path or a writable mirror file
+   descriptor.
+7. Export the selected cached commit into generation staging as a self-contained
+   repository with no alternates or writable link to the mirror. Preserve
+   `.git/shallow` and sufficient normalized administrative state for recent
+   offline `git log`, parent inspection, and diff.
+8. For a merge tip, preserve both fetched parent edges at depth 2 and validate
+   the shallow boundary rather than flattening the merge.
+9. Reject a server that cannot satisfy the bounded shallow fetch. Return a coded
+   source error and do not deepen, full-clone, strip history, or fall back to OCI.
+10. Check out the exact detached commit at each declared destination. Reject
+    submodule gitlinks and LFS pointer-backed content rather than fetching them.
+11. Enforce destination non-overlap before network work, then build all
+    repositories into one staging tree. No repository may create paths outside
+    its destination or add undeclared root files.
+12. Validate each repository's `HEAD`, index/worktree equality at publication,
+    shallow metadata, closed refs/config, object reachability for the retained
+    depth, file modes, links, bytes, inodes, and absence of credentials/remotes
+    that would cause later network use.
+13. Compute exact generation identity from canonical URL identity, resolved
+    commit, destination, fixed depth `2`, acquisition-policy revision, and layout
+    policy. Preserve requested URL/ref separately as provenance.
+14. Clean incomplete mirror refresh, repository staging, and descendants on
+    error, timeout, cancellation, lost claim, or restart without invalidating a
+    previously verified commit snapshot or referenced generation.
+
+Behavior proof covers one repository at a top-level destination; several sibling/nested-path
+repositories; the same URL at different refs and destinations; omitted default,
+branch, lightweight tag, annotated tag, and moving-ref rejection; pairwise
+non-overlap; depth exactly 2; `.git/shallow`; two-entry recent offline history;
+merge-tip parents and diff semantics; detached exact commit; no network during
+attached `git log`; submodule/LFS rejection; unsupported shallow server with no
+fallback; cancellation; restart cleanup; and exact provenance. Concurrent cold
+requests produce one advertised-ref refresh, one remote pack fetch, one verified
+mirror snapshot, and one generation publication. After resolution confirms the
+same exact identity, a second read-only request performs zero clone, zero pack
+transfer, zero checkout/materialization, and zero tree copy, attaches the same
+immutable generation bytes, and retains isolated session/runtime state.
+
+The release notes must state plainly that depth 2 reduces transferred history,
+not the checked-out working-tree bytes. Large repositories still require the OCI
+snapshot source and its release gate.
+
+### Phase 5: Implement mandatory OCI workspace snapshot materialization
+
+**Outcome:** the same generation pipeline safely restores an operator-cataloged,
+digest-pinned workspace snapshot with no Git fallback.
+
+Deployment configuration owns a bounded snapshot catalog. Each `snapshot_name`
+maps to one operator-controlled registry/repository origin, credential reference,
+TLS policy, allowed media types, and resource policy. The request and public
+provenance never reveal those private values. This catalog is HarnessRouter
+configuration; it is not `workspace.yaml`.
+
+Work:
+
+1. Require a direct OCI image manifest digest. Reject tags, mutable references,
+   manifest indexes/lists, caller-selected repositories, and catalog/digest
+   mismatches.
+2. Fetch the direct image manifest, config, workspace manifest, and referenced
+   layers only from the selected catalog entry. Implement bounded registry
+   authentication and exact-host redirect policy without exposing credentials to
+   the harness, session workspace, logs, response, or provenance.
+3. Verify every descriptor digest and size before use. Require the declared
+   `workspace_manifest_digest` to identify the exact workspace manifest used to
+   validate the final tree.
+4. Stream decompression and extraction inside the fixed v1 envelope: at most 64
+   distributable tar/gzip/zstd layers; a 4 MiB image manifest; a 128 MiB
+   workspace manifest with at most 128 repository roots; 8 GiB total compressed
+   layer bytes; 32 GiB expanded source bytes; 500,000 entries; 4 GiB per regular
+   file; paths of at most 4096 UTF-8 bytes and 128 components; and 1 MiB per PAX
+   or extended header. For each layer and the aggregate artifact,
+   `expanded_bytes / max(compressed_bytes, 1)` must not exceed `100`. Enforce
+   these bounds plus inode, output, and wall-time limits during streaming.
+   Deployment configuration may lower but cannot raise them without a contract
+   revision.
+5. Apply OCI layers in order with correct file and opaque-directory whiteout
+   semantics. Whiteouts are extraction instructions and must never appear in the
+   published workspace. Reject malformed whiteouts and type transitions not
+   representable by the workspace manifest.
+6. Reject absolute paths, traversal, NULs, ambiguous separators, duplicate
+   conflicting entries, devices, FIFOs, sockets, unsafe sparse files, and other
+   unsupported types. Validate symlink and hardlink targets against the final
+   workspace root; reject escaping, dangling-required-target, forward-link, and
+   link-cycle cases outside the supported bounded model.
+7. Validate final paths, types, modes, sizes, content digests, links, repository
+   roots, and destination non-overlap against the workspace manifest. Extra,
+   missing, or changed source-visible entries fail before publication.
+8. Support tree-only repository roots and optional normalized offline Git
+   history. For a history-bearing root, require detached `HEAD`, exact
+   index/tree/worktree equality, closed object reachability and declared object
+   digest, bounded refs/config, and no remotes, credentials, alternates, hooks,
+   includes, worktrees, replace/graft state, or unsafe administrative files.
+   Tree-only roots must not contain undeclared `.git` state.
+9. Return the same canonical manifest/generation envelope as repository mode.
+   Include direct image/workspace digests and snapshot name in identity and exact
+   provenance; exclude registry origin and credentials.
+10. On any resolution, registry, digest, extraction, manifest, Git-history,
+    cancellation, or capacity failure, terminate descendants, remove staging,
+    and return the source-specific error. Never clone Git, select a different
+    digest, or use a stale generation as fallback.
+
+Proof uses a local authenticated registry and malicious fixtures for digest/media
+mismatch, indexes, redirects, authentication, truncation, compression bombs,
+layer limits, whiteouts and opaque whiteouts, traversal, path/type/link attacks,
+devices, sparse files, cancellation, partial cleanup, and restart. Positive
+fixtures cover a tree-only workspace, multiple declared repository roots,
+normalized offline Git history, offline `git log`/`git blame`/historical diff,
+read-only attachment, editable copy, concurrent publication, and cache reuse
+with zero second-session registry or extraction work.
+
+OCI implementation and this proof are required before v1 release. A passing Git
+path cannot waive or defer them.
+
+### Phase 6: Adapt produced-file collection for nested and multiple repositories
+
+**Outcome:** existing Files/artifact behavior reports turn-produced changes
+across composed workspaces without inventing a second file API.
+
+Work:
+
+1. Preserve the existing produced-file cursor semantics but move the outer
+   workspace baseline/index into the per-session control root. Never initialize,
+   commit, or mutate a bookkeeping `.git` directory inside an immutable
+   generation.
+2. Register source-manifest repository roots and history mode when the attachment
+   becomes ready. The set is immutable for the session.
+3. At each turn boundary, record the external outer baseline plus a cursor for
+   each declared repository root: Git `HEAD`/index/worktree state for
+   history-bearing roots and manifest/file identity for tree-only roots.
+4. Collect the union of outer and nested additions, modifications, deletions,
+   renames, and mode changes relative to the turn baseline. Normalize to
+   workspace-relative paths, assign each path to the most specific declared
+   owner, deduplicate it, and preserve existing file size/count/type limits.
+5. Never expose `.git` administrative files, generation-store paths, mount
+   internals, control state, provider credentials, harness assets, or checkpoint
+   internals as produced files.
+6. Do not report immutable source baseline files merely because they arrived
+   during first-turn composition. Report only changes after the established
+   source/turn baseline.
+7. In `read_only`, any attempted source mutation fails at the filesystem boundary
+   and produces no changed source entry. Collection reads the external baseline
+   without modifying source.
+8. In `editable`, changes remain private to the session and are visible on
+   continuation and through the existing file and artifact APIs.
+9. Preserve collection-before-checkpoint ordering. Read-only checkpointing skips
+   the generation mount; editable checkpointing includes only the private
+   workspace and session-local state. Cancellation cannot publish a partial
+   cursor or checkpoint.
+
+Proof covers changes at workspace root and in every nested repository; two
+repositories changed in one turn; same filename under different destinations;
+add/modify/delete/rename; tree-only OCI roots; history-bearing OCI roots; Git
+shallow roots; paths outside repository destinations; ignored files under the
+existing policy; read-only denial; editable continuation; cancellation during
+collection; restart; bounds; and absence of `.git`, credentials, generation
+paths, or duplicate records.
+
+### Phase 7: Wire Codex, OMP, and the existing provider gateway
+
+**Outcome:** both supported harnesses execute in the attached existing workspace
+without gaining source or long-lived provider credentials.
+
+Work:
 
 1. Install exact pinned Codex and OMP releases and enable only required release
    backends with `HR_BACKENDS=codex,omp`.
-2. Define stable custom harness IDs such as `allagents-codex` and
-   `allagents-omp`. Store instructions, tools, allowed models, and base harness
-   in downstream deployment configuration.
-3. Configure two logical connections using the same external-gateway base URL
-   and API-key secret: Responses for Codex and OpenAI Chat Completions for OMP.
-   Give each harness policy one matching connection and no fallback.
-4. Fail startup/readiness if either selected model and endpoint combination is
-   unsupported. Never switch transport or connection after an error.
-5. Force `HR_SANDBOX_TRUST=broker`. Configure the local loopback broker so
-   self-host mode does not require a public broker URL.
-6. Add readiness proof that mints a scoped turn credential, reaches the loopback
-   broker, and keeps the real external-gateway key gateway-side.
-7. Reject caller-selected models outside the harness allowlist and any request
-   field that attempts to replace provider routing.
-8. Give OMP ordinary session-local home/config and cwd. Generate its
-   credential-bearing `models.json` and `models.yml` only under a per-turn
-   ephemeral control subtree using the scoped token. Delete both before terminal
-   checkpointing and exclude their paths from checkpoints and public walkers.
-9. Redact the external key and scoped tokens from logs, traces, stored responses,
-   session files, checkpoints, artifacts, and snapshots.
+2. Define stable downstream custom harnesses such as `allagents-codex` and
+   `allagents-omp` with explicit model allowlists.
+3. Configure two logical connections to the same external OAuth-to-OpenAI-
+   compatible gateway: Responses for Codex and OpenAI Chat Completions for OMP.
+   Each harness has exactly its matching connection and no fallback.
+4. Retain brokered sandbox credentials. The long-lived external gateway key
+   remains server-side; the harness receives only the existing short-lived,
+   scoped turn credential and loopback route.
+5. Start each harness in the validated `working_directory` while keeping HOME,
+   skills, scratch, conversation, credential projection, and checkpoint control
+   in their current session-isolated locations.
+6. Reject unsupported models and any attempt to place provider URL, key,
+   transport, route, registry data, or source credentials in the request.
+7. Remove ephemeral OMP/Codex provider configuration before checkpoint and file
+   collection using existing broker lifecycle hooks.
+8. Provider failure returns the existing normalized failure and does not change
+   source, generation, access, attachment, harness, connection, or protocol.
 
-Acceptance examples:
+Proof runs both harnesses against Git and OCI sources, at root and a nested
+working directory, in read-only and editable modes where applicable. It verifies
+that caller and provider credentials, registry credentials, broker tokens, and
+private origins are absent from process output, session/checkpoint files,
+produced files, artifacts, logs, and public metadata. An invalid provider
+credential or unsupported model causes no route fallback. A stock request still
+uses its original workspace path and provider behavior.
 
-- Codex completes a real Responses turn through the external gateway;
-- OMP completes a real Chat Completions turn through the same external gateway;
-- each harness starts inside the materialized execution working directory;
-- unsupported model fails before provider traffic;
-- invalid provider credentials return the ordinary provider failure without
-  selecting another connection; and
-- callers cannot observe or override provider URL, key, or transport.
+### Phase 8: Exercise lifecycle, restart, cancellation, and cleanup
 
-### Phase 7: Build the one-container operator surface
+**Outcome:** source generations and attachments follow the existing HarnessRouter
+session lifecycle under failures and restarts.
 
-**Outcome:** an operator can start the AllAgents-maintained HarnessRouter image
-with Docker Compose, one data volume, and no helper service.
+Work and proof:
 
-The checked-in Compose contract is equivalent to:
+1. Cancel during Git advertisement/fetch/checkout, OCI manifest/blob transfer,
+   decompression/extraction, generation wait, editable copy, harness execution,
+   checkpoint, and produced-file collection. Reap descendants before terminal
+   acknowledgement and remove only the cancelled request's incomplete state.
+2. Cancel one waiter on a shared generation build while another continues. If no
+   waiter remains, cancel the bounded builder. At most one complete publication
+   can survive.
+3. Restart after every durable transition: pending descriptor, source resolved,
+   claim held, staging populated, generation published, session reference
+   created, read-only attached, editable copy started/completed, attachment ready,
+   turn active, checkpoint written, cleanup marked, and reference released.
+4. Before readiness, reconcile incomplete staging and copies, publication
+   evidence, references, read-only mounts, editable ownership, session binding,
+   and cleanup marks. Never attach an uncertain generation or expose an editable
+   copy to another session.
+5. Prove a continuation after restart restores the exact generation/access/cwd;
+   editable mutations persist, read-only remains immutable, and no source
+   endpoint is contacted.
+6. Prove session expiry and explicit deletion first make the session unavailable,
+   then release the mount/private copy and generation reference exactly once.
+   Persistent retention survives ordinary session-idle cleanup until authorized
+   deletion.
+7. A cleanup failure quarantines the path and keeps it unavailable/accounted.
+   Retrying cleanup is confined, no-follow, and idempotent.
+8. Generation cleanup removes only unreferenced complete publications under
+   bounded operator policy. Active session references and authorized persistent
+   sessions prevent removal.
 
-```yaml
-services:
-  harnessrouter:
-    image: ghcr.io/allagentsdev/harnessrouter:${HARNESSROUTER_IMAGE_TAG}@${HARNESSROUTER_IMAGE_DIGEST}
-    ports:
-      - "127.0.0.1:3000:3000"
-    env_file:
-      - .env
-    environment:
-      HR_BACKENDS: codex,omp
-      HR_SANDBOX_TRUST: broker
-      HR_WORKSPACE_TTL_SECONDS: ${HR_WORKSPACE_TTL_SECONDS:-3600}
-    volumes:
-      - harnessrouter-data:/data
-    restart: on-failure
+### Phase 9: Add direct large-OCI Promptfoo E2E
 
-volumes:
-  harnessrouter-data:
-```
+**Outcome:** the built image proves the consumer-visible contract, mandatory
+large-workspace behavior, and second-session generation reuse.
 
-The final environment key uses the upstream-approved name when accepted and the
-documented fork name otherwise. The actual Compose file also carries
-HarnessRouter's required caller authentication, secret,
-health, and process settings. The operator supplies one external provider base
-URL and key through two protocol-specific connection records; neither value is
-baked into the image.
+Promptfoo calls the built image directly at the existing UHP Responses endpoint
+with a HarnessRouter caller API key. There is no adapter service or alternate
+execution protocol.
 
-Startup contract:
+Release-blocking scenarios:
 
-1. Copy the example environment file and set non-default Console/caller
-   credentials, provider route, model allowlists, TTL/resource limits, immutable
-   image tag, and manifest digest.
-2. Run `docker compose up -d`.
-3. Readiness succeeds only after HarnessRouter, runner, Codex/OMP runtimes,
-   materializer, writable `/data`, custom harnesses, both provider connections,
-   and loopback credential broker pass startup checks. Owner-trust pass-through
-   fails readiness.
-4. The UHP base remains HarnessRouter's existing
-   `http://127.0.0.1:3000/api/harness`; remote access requires operator-owned TLS
-   and network controls.
-5. Restart with the same volume preserves unexpired sessions and private
-   checkouts. Reconciliation removes only abandoned or cleanup-marked data.
+1. **Large OCI fixture:** publish a deterministic workspace snapshot with at
+   least 2 GiB of expanded source bytes and 100,000 source-visible filesystem
+   entries. Falling below either floor fails the gate. Include multiple
+   repository roots, a late-path sentinel, a nested working directory, and
+   normalized offline history. The release record publishes actual compressed
+   and expanded bytes, file/inode count, layer count, expansion ratio, and
+   manifest digests so “large” is measured rather than asserted.
+2. **First session:** start Codex read-only from the large snapshot, read the
+   sentinel, run recent offline Git history, and complete from the nested working
+   directory. Registry counters and runner metrics must show one bounded download,
+   extraction, verification, and atomic generation publication.
+3. **Second session reuse:** start OMP read-only with the identical snapshot
+   identity but a different session and harness. It must report the same
+   generation/manifest identity, share verified generation bytes while retaining
+   isolated session state, and complete with zero additional registry manifest or
+   blob requests, zero extraction, and zero publication. This is the required
+   second-session cache-reuse proof.
+4. **Editable reuse:** start an editable session from the same cached generation.
+   It performs no registry/extraction work, receives inode-independent private
+   bytes, mutates a file, continues without resending workspace metadata, and
+   leaves the read-only sessions and generation unchanged.
+5. **Repository matrix:** run depth-2 Git scenarios for default ref, branch, tag,
+   merge tip, several repositories, nested working directory, recent history,
+   and produced files across destinations. Concurrent cold requests must record
+   one serialized/singleflight mirror refresh, one pack fetch, and one generation
+   publication. A second read-only request with the same resolved source identity
+   must record zero clone, pack transfer, checkout/materialization, and tree copy;
+   it attaches the same immutable generation bytes while its session, runtime,
+   conversation, outputs, and cleanup remain isolated.
+6. **Access/lifecycle matrix:** cover read-only write denial, editable isolation,
+   session and authorized persistent retention, continuation, restart, expiry,
+   explicit deletion, cleanup retry, and missing/corrupt attachment with no
+   rematerialization.
+7. **Failure matrix:** cover malformed descriptor, overlap, bad working directory,
+   unauthorized persistence, workspace input files with `read_only`,
+   shallow-fetch refusal, moving ref, submodule/LFS, wrong OCI digest,
+   workspace-manifest mismatch, extraction limit, path/link/type attack,
+   cancellation in both source modes, provider failure, and reused-session
+   descriptor injection. Assert there is no Git/OCI/provider fallback.
+8. **Provider matrix:** complete Codex/Responses and OMP/Chat Completions through
+   the one external provider gateway; reject route/model override; scan retained
+   and public surfaces for caller, source, registry, broker, and provider secrets.
+9. **Stock matrix:** replay baseline requests without workspace metadata and
+   compare status, stream ordering, checkpoint/files behavior, and provider route
+   with the characterization fixtures.
 
-Container requirements:
+Reports retain only sanitized request/result assertions, image/source digests,
+resource measurements, and source/generation counters. They never retain
+credentials, private registry origins, provider traffic, internal paths, or
+session volume contents.
 
-- the materializer is installed in the same image and invoked locally;
-- Git and certificate roots are pinned and present;
-- service binds to loopback by default;
-- `/data` is the only required durable mount;
-- secrets are runtime inputs, not layers, labels, build arguments, or examples;
-- image has standard SBOM and build provenance; and
-- OCI labels record source revision, upstream tag and commit, downstream
-  revision, UHP release, and runtime releases.
+### Phase 10: Publish a digest-pinned release
 
-### Phase 8: Add direct Promptfoo smoke and E2E coverage
-
-**Outcome:** lockfile-pinned Promptfoo calls the built image directly over UHP
-and proves user-visible workspace behavior.
-
-Suggested downstream area: `e2e/promptfoo/` in
-`allagentsdev/harnessrouter`, containing only Promptfoo configuration, small
-fixtures/assertions, and package metadata.
-
-Work:
-
-1. Configure Promptfoo's OpenAI Responses-compatible provider directly against
-   `/api/harness/v1/responses`, with the HarnessRouter API key in an environment
-   variable and `metadata.workspace` in the request. Do not place an HTTP adapter
-   or another repository between Promptfoo and HarnessRouter.
-2. Use a stable public Git fixture with known commits and a task that succeeds
-   only when the harness starts in the materialized checkout.
-3. Run the same first-turn scenario for `allagents-codex` and `allagents-omp`,
-   using each harness's allowed model and provider transport.
-4. Add a two-turn scenario that mutates a uniquely named file on turn one and
-   reads or changes it on turn two through `previous_response_id`, without
-   resending workspace metadata.
-5. Cover malformed metadata, forbidden URL resolution, missing ref, invalid
-   working directory, source limit, provider failure, cancellation during Git,
-   cancellation during harness execution, continuation after cleanup,
-   reused-session workspace injection, and cross-harness mismatch.
-6. Assert the expected resolved commit in public provenance and absence of
-   internal paths and credentials.
-7. Use canary external keys and scoped tokens; assert both are absent from
-   session files, checkpoints, artifacts, logs, reports, and data retained after
-   each turn.
-8. Exercise the built image, not an in-process server. Store only sanitized
-   reports; never upload provider traffic, secret-bearing prompts, or volume
-   contents.
-
-Focused permanent tests protect schema boundaries, security invariants,
-ordering, session transitions, and cleanup races. Do not add tests that merely
-assert config keys, field copies, mocks, or source text.
-
-Release-blocking E2E matrix:
-
-| Harness | First turn | Continuation | Cancellation | Provider failure |
-|---|---:|---:|---:|---:|
-| Codex / Responses | required | required | required | required |
-| OMP / Chat Completions | required | required | required | required |
-
-### Phase 9: Integrate the upstream baseline and release the downstream image
-
-**Outcome:** the fork consumes an exact upstream baseline, carries only the
-workspace delta required by the recorded ownership decision, preserves ordinary
-HarnessRouter behavior, and publishes a reproducible image.
+**Outcome:** a clean operator can deploy the exact tested image and reproduce the
+Git/OCI contract.
 
 Work:
 
-1. Confirm the upstream decision. If accepted, verify that the
-   UEP/specification, schema, reference implementation, conformance, changelog,
-   and docs landed together. If declined or deferred, record that decision and
-   the exact downstream workspace commits.
-2. Advance the fork in a standalone synchronization change to the exact upstream
-   release tag and commit selected as the baseline. Rebase or replay the
-   downstream workspace and deployment commits separately.
-3. Run the complete selected UHP conformance suite against the built image.
-   Downstream scenarios supplement it; they do not replace or exclude upstream
-   cases.
-4. Run upstream HarnessRouter integration coverage for gateway, runner, Codex,
-   OMP, sessions, streaming, cancellation, idempotency, files, artifacts, and
-   ordinary requests.
-5. Run the direct Promptfoo matrix against the exact image candidate.
-6. Review the fork diff against its recorded upstream baseline. It must contain
-   only the declared workspace extension when needed, deployment defaults,
-   custom harness definitions, provider wiring, Promptfoo scenarios, and image
-   publication changes. Reusable protocol or runner improvements continue to be
-   proposed upstream.
-7. Tag source and image using `<upstream-tag>-allagents.<revision>`, publish
-   `ghcr.io/allagentsdev/harnessrouter:<tag>`, attach SBOM/provenance, and record
-   the manifest digest. The first release targets `linux/amd64`; additional
-   architectures are separate work.
-8. Verify a clean Compose deployment using the digest, a fresh volume, both
-   harnesses, first turn, continuation, cancellation, expiry, restart, and
-   cleanup.
-9. Publish release notes containing upstream issue/UEP links, UHP release,
-   upstream tag and commit, downstream revision and source commit, pinned
-   Codex/OMP and Promptfoo releases, image digest, known limitations, and
-   upgrade/rollback instructions.
-10. For future updates, synchronize the new upstream baseline alone, rerun
-    conformance and built-image E2E, then replay or revise the declared
-    downstream workspace and deployment patches. Never mix baseline movement
-    with product behavior.
+1. Review the fork diff against its exact upstream tag/commit. The workspace
+   changes must be limited to request/session binding, the existing hydrate and
+   attachment seam, immutable generation storage, Git/OCI materialization,
+   produced-file adaptation, focused lifecycle/configuration/docs, custom
+   harness/provider wiring, E2E, and release automation.
+2. Run the complete pinned upstream UHP conformance suite without exclusions and
+   the focused fork coverage against the image candidate.
+3. Run the Phase 9 Promptfoo matrix against that exact candidate digest.
+4. Build `linux/amd64` from pinned inputs, attach standard SBOM and provenance,
+   and publish
+   `ghcr.io/allagentsdev/harnessrouter:<upstream-tag>-allagents.<revision>`.
+5. Read back and deploy by manifest digest, for example
+   `ghcr.io/allagentsdev/harnessrouter:v0.25.4-allagents.1@sha256:<digest>`.
+6. Verify a fresh-volume deployment and a same-volume restart with both
+   harnesses, Git and large OCI, cache reuse, continuation, cancellation,
+   produced files, expiry, persistent deletion, generation cleanup, and stock
+   requests.
+7. Record upstream tag/commit, downstream source commit, UHP release, Codex/OMP/
+   Promptfoo versions, base and package pins, Git depth/policy revision, OCI
+   validation-policy revision, image digest, source fixture digests, SBOM,
+   provenance, and E2E report identities.
+8. Block release on any missing OCI implementation/evidence, large-workspace
+   failure, second-session rebuild, writable read-only alias, editable inode
+   sharing, continuation rematerialization, source fallback, credential leak,
+   stock regression, or unpinned input.
 
-Release gate:
+Only after the downstream digest and evidence are available may maintainers
+prepare an upstream issue or proposal for the generic contract and runner seams.
+That work cites measured Git/OCI behavior, cache reuse, security failures, and
+stock compatibility. Upstream discussion, acceptance, UEP timing, and merge are
+outside the release critical path; a later upstream implementation replaces the
+fork delta only after equivalent behavior passes the same gates.
 
-- the upstream ownership decision is recorded and all deliverables for the
-  selected path are complete;
-- all focused tests pass;
-- UHP conformance passes without downstream exclusions;
-- built-image Codex and OMP first-turn/continuation E2E passes through the
-  external provider gateway;
-- security failures and cancellation leave no descendant or staging directory;
-- the external key is absent from harness environments, and it plus scoped
-  tokens are absent from persistent and public surfaces while both broker routes
-  succeed;
-- expiry and cleanup make checkout unavailable and remove it idempotently;
-- ordinary requests remain upstream-compatible;
-- the fork diff contains only the declared downstream surface, including the
-  workspace extension when upstream did not accept it;
-- digest, SBOM, provenance, pins, baseline, and downstream revision are
-  available; and
-- Compose smoke succeeds from a fresh checkout and `/data` volume.
+## Failure contract
 
-## Error contract
+Workspace failures use bounded stable detail codes under the existing UHP error
+shape. Exact HTTP mapping follows existing HarnessRouter conventions, but these
+observable distinctions must remain:
 
-The selected workspace contract defines stable, stage-oriented detail codes
-under HarnessRouter's UHP error shape. When accepted upstream, the UEP,
-specification, schema where applicable, reference implementation, conformance
-expectations, and docs agree on these observable categories. Otherwise the fork
-implementation, extension tests, changelog, and docs agree without claiming UHP
-standardization:
+| Condition | Required behavior |
+|---|---|
+| Invalid shape, field, digest, destination, or working directory | Reject before session source work |
+| Unauthorized `persistent` retention | Reject before source lookup/network work |
+| Workspace metadata on a reused session | Reject without changing the existing binding or TTL |
+| Workspace input files with `read_only` access | Reject before source resolution; never overlay or copy up immutable source |
+| Repository ref missing/ambiguous/moved | Fail repository resolution; no alternate ref/source |
+| Server cannot satisfy depth-2 fetch | Fail repository acquisition; no deepen/full clone/OCI fallback |
+| Submodule or LFS content | Fail repository validation; no helper execution |
+| OCI catalog name/digest/media mismatch | Fail snapshot resolution; do not reveal catalog origin |
+| Layer digest, whiteout, path, link, type, limit, or workspace-manifest failure | Fail extraction/validation; no publication or Git fallback |
+| Generation capacity unavailable | Return bounded retryable capacity failure before unbounded work |
+| Source timeout or cancellation | Stop descendants, detach waiter, clean incomplete private state |
+| Attachment evidence missing/corrupt on continuation | Fail closed; no source access or replacement generation |
+| Read-only write attempt | Filesystem denial; generation and sibling sessions unchanged |
+| Provider failure | Existing provider error; source and route binding unchanged |
+| Cleanup failure | Session/path remains unavailable and accounted for retry |
 
-| Condition | HTTP class | Retry guidance |
-|---|---:|---|
-| Invalid workspace JSON or path | 400 | Caller must change request |
-| Workspace supplied for a reused session | 409 | Caller must omit workspace |
-| URL, ref, or source feature rejected | 400 | Caller must change source |
-| Forbidden DNS or redirect destination | 400 | Caller or operator must change source/network policy |
-| Materialization exceeds fixed source limit | 413 | Caller must choose a smaller repository |
-| Materializer concurrency unavailable | 503 | Retry with backoff inside caller deadline |
-| Git/network timeout before binding | 504 | Retry through ordinary idempotency rules |
-| Materialization cancelled | Existing UHP cancelled outcome | Do not retry under cancelled response ID |
-| Bound checkout missing, expired, cleanup-started, or on an unsupported contract revision | 410 | Start a new session with a new workspace request |
-| Provider unavailable or rejects credentials | Existing provider error | Repair external provider gateway; no route fallback |
+Failures before attachment-ready expose no generation or source provenance.
+Failures after attachment-ready may return already committed public provenance,
+but never internal paths, registry origins, credentials, raw tool stderr, or
+private network details.
 
-A failure before publication exposes no checkout identity or provenance. A
-failure after binding may include already committed public provenance, but never
-internal paths, uncontrolled Git stderr, private network topology, or provider
-secrets.
+## Verification matrix
 
-## Configuration ownership
-
-| Value | Owner | Caller-overridable? |
-|---|---|---:|
-| Repository URL, optional ref, optional working directory | Initial UHP request | yes, within schema and policy |
-| Harness ID and allowed model | New-session request constrained by server definition; stored state on reuse | only among configured values on creation |
-| External provider base URL and API key | Operator secret configuration | no |
-| Codex/OMP provider transport | Downstream harness definition | no |
-| Materializer implementation | HarnessRouter image/runtime configuration in the owning upstream or fork implementation | no |
-| DNS, redirect, and Git restrictions | HarnessRouter safe defaults plus operator policy | no weakening by caller |
-| Byte, inode, time, and concurrency limits | Operator within image-safe bounds | no |
-| Idle checkout TTL | Operator within image-safe bounds | no |
-| Session, checkout, control, and execution paths | Runner | no |
-| Resolved commit | Materializer observation | no |
-| Workspace contract owner and revision | HarnessRouter release and session binding | no |
-
-## Delivery sequence and ownership
-
-A practical sequence is:
-
-1. Protocol owner opens the upstream issue, drives the UEP when required, and
-   records the governance decision or documented timed deferral before
-   substantial implementation.
-2. Fork maintainer pins the examined baseline, supply chain, image publication,
-   and baseline-plus-revision release convention in
-   `allagentsdev/harnessrouter`.
-3. If upstream accepts ownership, upstream protocol and runner owners land the
-   coordinated specification, schema, parsing, session rules, root separation,
-   materialization, lifecycle, errors, conformance, changelog, and docs.
-4. If upstream declines or defers ownership, fork owners land the same bounded
-   implementation with separate extension tests, changelog, and docs, and record
-   every downstream workspace commit against the upstream baseline.
-5. Downstream harness owner adds Codex/OMP definitions and two logical provider
-   connections to the one external route.
-6. Downstream container owner adds deployment defaults, readiness, `/data`,
-   Compose, OCI labels, SBOM, and provenance.
-7. Downstream E2E owner adds lockfile-pinned direct Promptfoo scenarios and
-   built-image smoke.
-8. Release owner proves the recorded upstream baseline and declared downstream
-   diff, runs UHP conformance plus extension E2E, then publishes the tagged
-   digest.
-
-Upstream runner code depends only on an accepted upstream contract. The fork may
-implement after the upstream ownership decision and must keep downstream
-extension coverage separate from UHP conformance. Materializer security and
-runner lifecycle may proceed in parallel after the selected contract freezes.
-Provider wiring, downstream container work, and Promptfoo scenario authoring may
-then proceed against that contract. No phase changes the AllAgents CLI
-repository.
+| Gate | Observable evidence |
+|---|---|
+| Stock compatibility | Requests without `metadata.workspace` match pinned status, stream, hydrate/checkpoint, files, cancellation, and provider behavior |
+| Request/session binding | Both source variants bind only on a new session; continuation omits metadata and reuses the exact binding |
+| Multiple repositories | Pairwise non-overlapping destinations compose correctly; overlap and source escape fail before acquisition |
+| Git depth policy | Advertisement/default/branch/tag resolve exactly; fetch uses depth 2; tip matches; `.git/shallow`, recent history, and merge parents work offline; unsupported shallow fetch has no fallback |
+| OCI integrity | Direct manifest and workspace-manifest digests, fixed `100` per-layer and aggregate expansion-ratio ceilings, bounded layers, whiteouts, paths, links, types, tree manifest, and optional normalized Git history all verify |
+| Mandatory large OCI | A fixture with at least 2 GiB expanded source and 100,000 source-visible entries completes for both harnesses from the digest-pinned image; no Git acquisition occurs |
+| Generation publication | Concurrent identical Git or OCI identities singleflight to one acquisition and one publication; failed/partial mirror snapshots or generations never attach |
+| Git mirror/generation reuse | One operator-only bare shallow mirror exists per canonical repository identity; a second resolved-identity hit has zero clone/pack transfer/checkout/tree copy and directly attaches the same immutable generation |
+| OCI generation reuse | A second exact-digest request has zero registry request/extraction/tree copy/publication and directly attaches the same immutable generation |
+| Read-only sharing | Every matching read-only session leases and binds the same verified generation bytes with zero copy; all write paths/aliases fail and session/runtime state stays isolated |
+| Read-only state separation | Mutable harness/runtime assets live in the session control root; checkpoint excludes generation bytes, writes no source Git state, and continuation reattaches the exact generation before restoring session state |
+| Editable isolation | Private copies share no mutable inode; one session's changes and checkpoint never alter generation or siblings |
+| Working directory | Root and nested valid directories become process cwd; missing, file, traversal, and symlink escape fail before harness execution |
+| Produced files | Existing API reports root and nested-repository changes once, excludes baselines/admin/control/secrets, survives continuation/restart, and respects bounds |
+| Continuation | Exact access, retention, generation, provenance, cwd, harness, conversation, and editable mutations restore without source traffic |
+| Cancellation | Git, OCI, build wait, copy, harness, checkpoint, and collection cancellation reap descendants and leave recoverable state |
+| Restart | Every generation/attachment/cleanup transition reconciles before readiness; exact attachments resume or fail closed |
+| Cleanup | Expiry/deletion is unavailable-first, confined, idempotent, reference-safe, and quarantine-preserving on error |
+| Provider boundary | Codex Responses and OMP Chat Completions use one operator route with brokered credentials, no caller override, fallback, or retained secrets |
+| Release | GHCR image, digest, SBOM, provenance, source/runtime pins, UHP conformance, and direct Promptfoo reports identify the same candidate |
 
 ## Definition of done
 
-This work is done when:
-
-1. The upstream issue and required UEP have a recorded decision. On acceptance,
-   the UHP specification, schema, HarnessRouter reference implementation,
-   conformance suite, changelog, and docs define the same generic
-   `metadata.workspace` contract. On rejection or deferral, the fork
-   implementation, extension tests, changelog, and docs define it consistently
-   without claiming UHP standardization.
-2. `allagentsdev/harnessrouter` remains the GitHub fork and its release diff from
-   the recorded upstream baseline contains only the declared workspace extension
-   when needed, AllAgents deployment defaults, custom harness definitions,
-   provider wiring, Promptfoo scenarios, and image publication.
-3. An operator can deploy one digest-pinned
-   `ghcr.io/allagentsdev/harnessrouter:<upstream-tag>-allagents.<revision>`
-   container with Docker Compose and one `/data` volume.
-4. Promptfoo can directly start either custom harness with a public HTTPS Git
-   repository, optional advertised ref, and optional safe `working_directory`.
-5. The public response reports the securely resolved exact commit without
-   internal paths, while the harness runs inside a private editable checkout.
-6. Continuation through either supported session-reference path verifies the
-   recorded workspace-contract owner and revision, then reuses the same stored
-   harness, mutations, checkout, control state, and execution directory without
-   new Git work.
-7. Session, checkout, control, and execution roots remain separated; staging is
-   invisible; binding publication and startup recovery are crash-safe.
-8. Git and harness cancellation leak no descendants or staging, and expiry makes
-   the binding unavailable before deterministic idempotent cleanup.
-9. Codex uses Responses and OMP uses Chat Completions through two logical
-   connections to one external OAuth gateway, with no fallback.
-10. The long-lived external key never enters the harness, and neither it nor
-    scoped broker credentials survive in persisted or public surfaces.
-11. Unsafe or invalid sources, limits, reused-session injection, missing
-    checkout, and provider failures return the agreed bounded errors without
-    violating ordering or making unintended provider calls.
-12. Direct built-image Promptfoo coverage passes for both harnesses, first turn,
-    continuation, cancellation, provider failure, security negatives, restart,
-    expiry, and cleanup.
-13. Ordinary requests remain upstream-compatible and the complete selected UHP
-    conformance suite passes without downstream exclusions.
-14. Source tag, OCI tag, digest, SBOM, provenance, exact upstream tag/commit,
-    downstream revision/source commit, runtime pins, and release notes are
-    published and mutually consistent.
-15. No implementation code, CLI command, profile migration, or `workspace.yaml`
-    change is required in `allagentsdev/allagents`.
-
-Upstream rejection or deferral does not rename the product or block the
-distribution. It changes ownership: the workspace patch remains visible in
-`allagentsdev/harnessrouter`, its release notes identify it as a downstream
-HarnessRouter extension, and any later conflicting UHP standard triggers a
-clean migration.
+1. `allagentsdev/harnessrouter` remains the existing fork and the release image is
+   `ghcr.io/allagentsdev/harnessrouter` with the established
+   `<upstream-tag>-allagents.<revision>` tag and a deployed manifest digest.
+2. The stock behavior inventory is protected by characterization coverage, and
+   requests without workspace metadata remain unchanged.
+3. The exact first-turn-only snake_case contract supports required `access`,
+   optional `retention`, required repositories or workspace-snapshot `source`,
+   and optional workspace-relative `working_directory`, with no nested version.
+4. Session state binds exact source provenance, generation/manifest identity,
+   access, retention, working directory, harness, and attachment evidence.
+   Continuation omits the descriptor and reuses that exact attachment.
+5. Repository mode supports multiple non-overlapping destinations, resolves
+   advertised default/branch/tag refs, fetches at depth 2, verifies the fetched
+   tip, preserves shallow recent history and merge semantics, and never silently
+   deepens or falls back. Submodules and LFS remain off.
+6. OCI snapshot mode is implemented and release-tested with direct manifests,
+   workspace-manifest verification, bounded layer extraction, whiteouts,
+   path/link/type checks, optional normalized offline Git history, and no Git
+   fallback. Callers never provide or observe registry origins or credentials.
+7. Repository acquisition uses one operator-only bare shallow mirror per canonical
+   repository identity, serialized singleflight refresh, immutable exact-commit
+   snapshots, and a separate immutable multi-repository generation. OCI uses the
+   exact digest-keyed generation cache. Identical normalized source identities
+   publish once; access/retention/cwd/harness/session do not fragment identity.
+8. Every matching read-only session leases and directly binds the same verified
+   generation bytes with zero clone, source-byte transfer, materialization, or
+   tree copy. Mirror internals are never session-visible. Editable sessions
+   receive inode-independent private copies.
+9. Existing hydrate, user/sandbox isolation, cancellation, TTL, restart,
+   deletion, files, artifacts, and cleanup own the complete session lifecycle.
+   Workspace-backed sessions relocate mutable harness/runtime assets to a
+   per-session control root outside source. Read-only requests reject workspace
+   input files and checkpoint no generation bytes; editable requests apply input
+   files only to the private copy and checkpoint only that copy plus
+   session-local state. No parallel workspace system remains.
+10. Existing produced-file cursor semantics are adapted with runner-owned
+    external baselines for outer paths plus declared nested/multiple repository
+    and tree-only/history-bearing cursors, without writing bookkeeping Git state
+    into an immutable generation or adding a second Files API.
+11. Direct Promptfoo E2E against the tested image proves Git and large OCI,
+    multiple repositories, nested working directory, continuation, read-only
+    enforcement, editable isolation, produced files, cancellation, restart,
+    cleanup, provider boundaries, and unchanged stock requests.
+12. Required second-session proof covers both caches: Git performs zero clone,
+    pack transfer, checkout/materialization, or tree copy after exact identity
+    resolution; OCI performs zero registry request, extraction, publication, or
+    tree copy. Both read-only sessions bind the same immutable generation bytes
+    while session/runtime state remains isolated. Editable reuse has independent
+    inodes and mutations.
+13. Codex and OMP use their fixed protocol adapters through the existing external
+    OAuth-to-OpenAI-compatible gateway with brokered short-lived credentials and
+    no fallback or caller override.
+14. UHP remains the only northbound protocol. There is no AllAgents CLI work,
+    local profile synchronization, `workspace.yaml` change, provider-login
+    implementation, runtime-image contract, or benchmark-environment coupling.
+15. The release is blocked unless UHP conformance, focused integration coverage,
+    large-OCI Promptfoo E2E, generation-reuse evidence, credential scans, SBOM,
+    provenance, and digest-pinned fresh/restart deployment all pass for the same
+    image.
+16. Any later upstream proposal is based on this downstream evidence and remains
+    outside the release path; no upstream issue, UEP, acceptance, or wait period
+    blocks implementation or publication.

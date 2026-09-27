@@ -37,35 +37,35 @@ The fork must preserve the stock ownership boundary:
 
 | Existing HarnessRouter responsibility | Extension responsibility |
 |---|---|
-| Allocate the session workspace and user/sandbox identity | Validate the first-turn workspace descriptor |
+| Allocate the private, writable session workspace and user/sandbox identity | Validate the first-turn descriptor and reserve declared non-root source destinations |
 | Choose fresh materialization or checkpoint hydration | Resolve Git commits or exact OCI artifact identity |
 | Transport and restore checkpoints | Build or reuse one verified immutable generation |
-| Start the harness in the session workspace | Attach that generation read-only or as a private editable copy |
+| Start the harness in the private session workspace | Bind each generation repository root read-only, or populate an inode-independent editable copy |
 | Track sessions, TTL, cancellation, files, and cleanup | Persist source provenance and attachment identity with the session |
-| Resume an existing session workspace | Verify and reuse the exact prior attachment without resolving source again |
+| Resume an existing writable session workspace | Restore outer state and reattach the exact prior protected generation without resolving source again |
 
 For a new workspace-backed session, source initialization runs after
 authentication, request validation, idempotency, session resolution, and
-allocation of HarnessRouter's fresh session workspace, but before provider work
-or harness execution. It attaches source content at the runner-designated
-workspace root; it does not allocate another workspace root or move lifecycle
-ownership out of HarnessRouter.
+allocation of HarnessRouter's fresh private session workspace, but before
+provider work or harness execution. The workspace root remains private and
+writable for both access modes. The initializer places source only at the
+declared non-root repository destinations; it does not allocate another
+workspace root or move lifecycle ownership out of HarnessRouter.
 
-Stock HarnessRouter writes `.harness` state, generated instruction files,
-plugins, skills, MCP configuration, HOME, and conversation state under the
-workspace. That is incompatible with a shared read-only source mount. For
-workspace-backed sessions, the fork creates a per-session writable control root
-inside the existing session allocation but outside source content and redirects
-all mutable harness/runtime state there. Generated instructions use a
-harness-supported external instruction channel or non-shadowing session mount;
-they never overwrite, overlay, or copy up a source path. If Codex or OMP cannot
-honor that separation, the read-only release gate fails.
+For `read_only`, the fork creates empty destination directories in the session
+workspace and attaches the corresponding immutable-generation repository roots
+with per-session, namespace-confined, read-only bind mounts. `.harness`, HOME,
+generated instructions, plugins, skills, MCP configuration, inputs, outputs,
+scratch, conversation state, and other session data continue to use ordinary
+writable paths in the private workspace, provided they are outside mounted
+source destinations. There is no requirement to relocate all mutable state to a
+separate control root.
 
-For continuation or recovery, workspace-aware checkpoint hydration first
-restores and validates the minimal control metadata needed for attachment,
-acquires and mounts the exact protected generation, then restores the remaining
-session-local mutable state around it. The source initializer is not invoked.
-Git refs are not resolved again, OCI is not fetched again, and a newer
+For continuation or recovery, workspace-aware checkpoint hydration unmounts
+any stale attachment, restores the writable outer workspace without traversing
+or restoring source destinations, validates empty non-link mountpoints, and
+then reattaches the exact protected generation. The source initializer is not
+invoked. Git refs are not resolved again, OCI is not fetched again, and a newer
 generation is not substituted.
 
 Workspace initialization reuses HarnessRouter's cancellation, process
@@ -124,7 +124,7 @@ OCI snapshot mode:
         "image_manifest_digest": "sha256:…",
         "workspace_manifest_digest": "sha256:…"
       },
-      "working_directory": "packages/compiler"
+      "working_directory": "repo/packages/compiler"
     }
   }
 }
@@ -145,9 +145,17 @@ A repository source has exactly `kind: "repositories"` and `repositories`. The a
 |---|---:|---|
 | `url` | yes | Canonical public HTTPS Git URL. No userinfo, query, fragment, local path, or alternate transport. |
 | `ref` | no | Advertised full ref or unambiguous branch/tag shorthand. Omission uses the advertised remote default. The resolved commit, not the ref spelling, is authoritative. |
-| `destination` | yes | Non-root, workspace-relative POSIX directory. Destinations must be unique, pairwise non-overlapping, and disjoint from runner-owned control paths. |
+| `destination` | yes | Non-root, workspace-relative POSIX directory. Destinations must be unique, pairwise non-overlapping, and outside reserved runner paths. |
 
 Depth is not caller-selectable. The repository acquisition policy defaults every entry to Git depth `2`; that effective depth is returned as provenance and participates in generation identity.
+
+Every source composition occupies 1 to 128 declared repository roots. Whether
+the roots come from repository request entries or a verified OCI workspace
+manifest, their destinations are non-root, unique, and pairwise
+non-overlapping. A monorepo therefore uses a destination such as `repo`, with a
+working directory such as `repo/packages/compiler`; source at destination `.`
+is invalid. Ancestor directories may be created as empty mount scaffolding, but
+must contain no source files.
 
 A snapshot source has exactly:
 
@@ -158,17 +166,23 @@ A snapshot source has exactly:
 | `image_manifest_digest` | yes | Direct `sha256:` digest of the accepted OCI image manifest. Mutable tags and indexes are not accepted as source identity. |
 | `workspace_manifest_digest` | yes | `sha256:` digest of the canonical workspace manifest expected from that artifact. |
 
+The verified canonical workspace manifest declares 1 to 128 repository roots
+and their destinations under the same non-root and non-overlap rules. The
+request cannot override those destinations.
+
 The OCI catalog is HarnessRouter deployment configuration owned by the operator. It maps `snapshot_name` to a fixed registry repository, allowed media types, trust policy, and server-side registry credential reference. A caller never supplies a registry origin, repository, tag, header, or credential.
 
-`working_directory` is interpreted only after the verified tree exists. It must resolve, without symlink escape, to a real directory inside the workspace. Absolute paths, empty components, `.` or `..` components, platform-specific separators, and reserved control paths are invalid.
+`working_directory` is interpreted only after the verified tree is attached or copied and input files are placed. It must resolve, without symlink escape, to a real directory inside the workspace; it may be within a declared source root or elsewhere in the writable outer workspace. Absolute paths, empty components, `.` or `..` components, platform-specific separators, and reserved runner paths are invalid.
 
 Unknown keys are rejected at every level. The descriptor cannot contain credentials, headers, host paths, environment variables, commands, runtime images, Docker settings, materializer selection, resource limits, provider routes, or caller-selected TTLs. Request size, string length, array length, nesting, and validation work are bounded before source access.
-UHP input files are workspace mutations. They are accepted only for `editable`
-workspaces, after the private copy exists and before the initial produced-file
-baseline is sealed. A `read_only` first turn containing workspace input files
-fails before source resolution. Harness assets, HOME, credentials, scratch, and
-checkpoint control remain in runner-owned session paths outside immutable source
-content in both modes.
+UHP input files remain normal session-workspace mutations in both access modes.
+They are placed before the initial produced-file baseline is sealed. In
+`read_only` mode they may target writable outer-workspace paths, but any input
+whose path is a declared source destination or lies beneath one fails rather
+than overlaying, copying up, or modifying the mounted generation. Generated
+instructions and other HarnessRouter assets follow the same boundary: they may
+be written outside source destinations. In `editable` mode inputs may overlay
+the private source copies before baseline.
 
 A first turn may omit `metadata.workspace`; stock behavior then remains unchanged. A session created without workspace metadata cannot add it later. Any reused session selected through `previous_response_id` or HarnessRouter's existing session-recovery metadata must omit `metadata.workspace`, even if the repeated object is byte-for-byte identical.
 
@@ -220,7 +234,7 @@ Snapshot response:
     "workspace": {
       "access": "read_only",
       "retention": "session",
-      "working_directory": "packages/compiler",
+      "working_directory": "repo/packages/compiler",
       "effective_descriptor_digest": "sha256:…",
       "generation_id": "sha256:…",
       "workspace_manifest_digest": "sha256:…",
@@ -231,7 +245,7 @@ Snapshot response:
         "workspace_manifest_digest": "sha256:…",
         "repositories": [
           {
-            "destination": ".",
+            "destination": "repo",
             "resolved_commit": "0123456789abcdef0123456789abcdef01234567",
             "object_set_digest": "sha256:…"
           }
@@ -258,24 +272,74 @@ The response fields are exact:
 
 Repository provenance contains `kind: "repositories"` and the request-order `repositories` array. Each entry contains normalized `url`, `destination`, exact `resolved_commit`, effective `depth`, and `requested_ref` only when the request supplied `ref`. Branch or tag movement does not change stored provenance for an existing session.
 
-Snapshot provenance contains `kind: "workspace_snapshot"`, `snapshot_name`, exact `image_manifest_digest`, exact `workspace_manifest_digest`, and a manifest-order `repositories` array. Each declared root contains `destination`; a history-bearing root additionally contains `resolved_commit` and `object_set_digest`. Tree-only roots contain neither. Snapshot provenance never exposes a registry origin, repository, credential reference, redirect, or physical path.
+Snapshot provenance contains `kind: "workspace_snapshot"`, `snapshot_name`, exact `image_manifest_digest`, exact `workspace_manifest_digest`, and a manifest-order `repositories` array. Each declared root contains its non-root `destination`; a history-bearing root additionally contains `resolved_commit` and `object_set_digest`. Tree-only roots contain neither. Snapshot provenance never exposes a registry origin, repository, credential reference, redirect, backing path, or physical mount path.
 
 Failures before attachment reaches `ready` omit workspace metadata. Failures after `ready` return the complete committed object. Internal generation keys, policy versions, authorization scope, mount paths, attachment IDs, pins, leases, reservations, and other sessions' state remain private.
 
 ## Immutable generations and attachment behavior
 
-Both source modes produce the same versioned canonical workspace manifest. It enumerates source-visible directories, regular files, and symbolic links in logical path order with normalized mode, size, content digest, or link target. HarnessRouter independently walks staging without following links, recomputes the canonical bytes, and requires the supplied and computed manifest digests to match before publication.
+Both source modes produce the same versioned canonical workspace manifest. It
+declares 1 to 128 non-root, pairwise non-overlapping repository roots and
+enumerates the source-visible directories, regular files, and symbolic links
+beneath them in logical path order with normalized mode, size, content digest,
+or link target. HarnessRouter independently walks staging without following
+links, recomputes the canonical bytes, and requires the supplied and computed
+manifest digests to match before publication.
 
-The runner computes a private generation key from every input that can change source bytes, filesystem semantics, or sharing authorization. For Git this includes the normalized repository URLs, resolved commits, destinations, shallow depth (`2` in v1), acquisition-policy revision, and materializer contract revision. For OCI it includes the catalog identity, exact image-manifest and workspace-manifest digests, trust-policy revision, and materializer contract revision. Access, retention, working directory, harness, session, and physical paths are excluded because they do not change the generation's immutable bytes. A later depth or acquisition-policy change therefore cannot reuse an incompatible Git generation.
+The runner computes a private generation key from every input that can change
+source bytes, filesystem semantics, or sharing authorization. For Git this
+includes normalized repository URLs, resolved commits, destinations, shallow
+depth (`2` in v1), acquisition-policy revision, and materializer contract
+revision. For OCI it includes catalog identity, exact image-manifest and
+workspace-manifest digests, trust-policy revision, and materializer contract
+revision. Access, retention, working directory, harness, session, and physical
+paths are excluded because they do not change the generation's immutable bytes.
+A later depth or acquisition-policy change therefore cannot reuse an
+incompatible Git generation.
 
-Identical normalized source identity publishes exactly one live verified generation. The cache has two levels: an operator-only bare Git mirror/object cache per canonical repository URL for bounded acquisition, followed by an immutable multi-repository generation keyed by canonical URLs, exact resolved commits, destinations, depth, acquisition-policy revision, and materializer contract revision. Refreshes of one bare cache are serialized, and in-flight acquisition and generation misses singleflight by generation key. Publication is crash-safe: partial or failed staging is never attachable, and garbage collection cannot remove a generation while a build waiter, provisional pin, durable session reference, or attachment lease protects it.
+Identical normalized source identity publishes exactly one live verified
+generation. The cache has two levels: one operator-only bare Git mirror/object
+cache per canonical repository URL for bounded acquisition, followed by an
+immutable multi-repository generation keyed by canonical URLs, exact resolved
+commits, destinations, depth, acquisition-policy revision, and materializer
+contract revision. Refreshes of one bare cache are serialized, and in-flight
+acquisition and generation misses singleflight by generation key. Publication
+is crash-safe: partial or failed staging is never attachable, and garbage
+collection cannot remove a generation while a build waiter, provisional pin,
+durable session reference, or attachment lease protects it.
 
 Attachment depends on `access`:
 
-- Every `read_only` Git request for the same normalized source identity leases and attaches the same cached immutable shallow-generation bytes; it never clones or copies that repository again. Every `read_only` OCI request for the same snapshot and generation identity likewise leases and attaches the exact digest-keyed generation. These sessions retain separate user and sandbox identity, checkpoint state, home, scratch space, control state, logs, outputs, and response state. Filesystem enforcement makes each attachment read-only; there is no copy-up path, and neither the generation backing store nor the writable acquisition cache is exposed to a session.
-- `editable` sessions reuse the same acquisition cache and pinned verified generation as input, then receive a private, quota-bounded, inode-independent writable copy. No mutable inode may be shared with the generation, Git object cache, or another session. Later turns and checkpoints operate on that private copy.
+- Every `read_only` Git request for the same normalized source identity, and
+  every equivalent OCI request, leases the same immutable generation. For each
+  declared root the runner creates an empty destination in the private writable
+  session workspace and bind-mounts the matching generation directory there
+  read-only. Matching sessions therefore see the same generation inodes and
+  cached source bytes while retaining separate outer-workspace state, user and
+  sandbox identity, HOME, scratch, logs, outputs, checkpoints, and response
+  state.
+- Each bind mount is kernel-enforced read-only, namespace-confined, `nodev`,
+  and `nosuid`, while preserving repository execute bits required by tools.
+  Neither a writable alias nor a copy-up path is visible to the session, and
+  the generation backing store and writable acquisition cache remain
+  inaccessible. Any mount or remount failure fails closed.
+- `editable` sessions reuse the same acquisition cache and pinned verified
+  generation as input, then receive an inode-independent, quota-bounded private
+  writable copy at each declared destination. No mutable inode may be shared
+  with the generation, Git object cache, or another session.
 
-An attachment binds the normalized descriptor, exact generation key and epoch, access, retention, working directory, selected harness, provenance, and manifest digest to the HarnessRouter session. Continuation reuses that exact attachment. It never re-resolves source, changes access or retention, selects another generation with the same public ID, or rebuilds missing state.
+Bind mounts are required rather than symlinks. A symlink neither enforces
+read-only access nor confines traversal to the workspace; it exposes a backing
+path, can escape workspace containment, and gives cwd and file tools surprising
+path behavior. The mounted roots instead appear as ordinary directories at the
+declared workspace-relative destinations.
+
+An attachment binds the normalized descriptor, exact generation key and epoch,
+access, retention, working directory, selected harness, root-to-destination
+attachment manifest, provenance, and workspace-manifest digest to the
+HarnessRouter session. Continuation reuses that exact attachment. It never
+re-resolves source, changes access or retention, selects another generation
+with the same public ID, or rebuilds missing state.
 
 ## Git acquisition and integrity
 
@@ -289,7 +353,7 @@ Git initialization must satisfy all of these requirements:
 - Keep one server-owned bare shallow Git mirror/object cache per canonical repository URL behind the generation builder so repeated acquisition can reuse fetched objects. The cache is mutable operator-only runner infrastructure, never a session attachment. Refreshes are serialized, and it is inaccessible to harness users, credentials, hooks, and workspace writes. Publication selects only the resolved ref's bounded object graph into the immutable generation; unrelated cached refs and objects are never exposed. The generation contains its own normalized shallow repository state, so later cache updates cannot change it.
 - Preserve the generation's normalized `.git/shallow` metadata and the acquired recent history so offline commands such as `git log` and recent diffs work within the fetched boundary. Remove credential-bearing remotes, hooks, worktree links, alternates, replace and graft state, locks, reflogs, and transient fetch state. Verify detached `HEAD`, shallow boundary, index-to-tree equality, included object integrity, and source-visible content against the recorded commit and acquisition policy.
 - Apply finite time, transferred-byte, inode, file-count, process, descendant, and concurrency limits across all repositories. Shallow depth reduces history transfer; it does not solve large working-tree transfer or materialization, which is why OCI snapshots remain mandatory.
-- Stage every repository beneath its declared destination and reject overlaps, undeclared files, cross-root links, traversal, or reserved-path collisions. Publish the complete multi-repository generation atomically or publish nothing.
+- Stage every repository beneath its declared non-root destination and reject overlaps, undeclared files, source files in destination ancestors, cross-root links, traversal, or reserved-path collisions. Publish the complete multi-repository generation atomically or publish nothing.
 - Record normalized URL, optional requested ref, exact resolved commit, destination, and effective depth for every repository. A failure in any repository fails the whole source; partial repository sets are never attached.
 
 ## OCI acquisition and integrity
@@ -298,10 +362,11 @@ OCI snapshot support is mandatory in v1 and release-blocking. Snapshot acquisiti
 
 - Resolve `snapshot_name` only through the operator-owned catalog. Fetch only the direct image manifest named by `image_manifest_digest`; do not follow mutable tags, accept an index in its place, change registry authority on redirect, or expose catalog registry details to the caller.
 - Verify the image manifest digest, media type, descriptor sizes, every selected layer digest and size, the catalog-defined workspace-manifest media type, the workspace-manifest blob digest, and the recomputed source-visible manifest digest.
+- Fetch and verify the canonical workspace manifest before requesting any layer. Validate its effective repository-root map and every input, generated-asset, reserved-path, and restored-outer-state collision before any layer request or outer workspace content write.
 - Enforce the v1 envelope before and during extraction: at most 64 distributable tar/gzip/zstd layers; a 4 MiB image manifest; a 128 MiB workspace manifest with at most 128 repository roots; 8 GiB total compressed layer bytes; 32 GiB expanded source bytes; 500,000 entries; 4 GiB per regular file; paths of at most 4096 UTF-8 bytes and 128 components; and 1 MiB per PAX or extended header. For each layer and for the aggregate artifact, expanded bytes divided by `max(compressed_bytes, 1)` must not exceed `100`. Cumulative-size and expansion-ratio checks apply while streaming, not only after extraction. Operators may configure lower limits, never higher ones without a contract revision.
 - Apply layers in order with OCI whiteout and opaque-directory semantics. Whiteouts are metadata operations, not source-visible files. Reject malformed, duplicate, conflicting, or out-of-root whiteouts.
-- Before writing each entry, validate its normalized relative path, type, declared size, mode, and link target. Reject absolute paths, traversal, NULs, escaping hard links or symbolic links, devices, sockets, FIFOs, sparse-file tricks, unsupported types, and entries that collide with runner-owned paths. Extraction uses rooted, no-follow operations and cannot write through a previously extracted link.
-- Require the canonical workspace manifest to declare every source-visible entry and repository root. Undeclared output, missing entries, type changes, digest mismatches, and paths outside declared roots fail closed.
+- Before writing each entry, validate its normalized relative path, type, declared size, mode, and link target. Every hard link or symbolic link must remain within its owning declared repository root; links into another source root or the writable outer workspace fail closed. Reject absolute paths, traversal, NULs, escaping links, devices, sockets, FIFOs, sparse-file tricks, unsupported types, and entries that collide with runner-owned paths. Extraction uses rooted, no-follow operations and cannot write through a previously extracted link.
+- Require the canonical workspace manifest to declare every source-visible entry and 1 to 128 non-root, pairwise non-overlapping repository roots. Undeclared output, missing entries, type changes, digest mismatches, source at destination `.`, source files in destination ancestors, and paths outside declared roots fail closed.
 
 A workspace snapshot may contain normalized offline Git history for any declared repository root. A history-bearing root records `resolved_commit` and `object_set_digest`; a tree-only root records neither. History-bearing roots must have detached `HEAD` at the recorded commit, an index equal to that tree, the complete required object closure matching `object_set_digest`, and no dirty, staged, untracked, unreachable, or extra source-visible state. They must contain no remote, credential helper, config include, hook, worktree link, alternate, shallow, replace, graft, reflog, transient fetch state, or credential-bearing configuration. OCI restore never contacts Git, and failure of snapshot or embedded Git verification never falls back to cloning.
 
@@ -310,48 +375,62 @@ The direct image digest is part of OCI identity even when two artifacts have the
 ## Produced files, checkpoints, and continuation
 
 HarnessRouter's existing Files API and produced-file collection remain the only
-public file surface. The fork adapts the existing root-Git-oriented bookkeeping
-rather than introducing a second Files API or parallel change tracker. It stores
-workspace-backed cursors and indexes under the per-session control root; it does
-not initialize or mutate a bookkeeping `.git` directory inside an immutable
-generation.
+public file surface. The fork adapts the stock root-workspace Git/bookkeeping
+path rather than introducing a second Files API or parallel change tracker. The
+outer session workspace stays writable, but root bookkeeping explicitly
+excludes every declared source destination and must not traverse its mount.
+Bookkeeping state remains in normal runner-owned session paths; it never
+initializes or mutates a `.git` directory inside an immutable generation.
 
-Bookkeeping must understand the declared repository roots and source mode:
+Bookkeeping understands the declared repository roots and source mode:
 
-- Git repository roots compare editable state with their recorded resolved
-  commits.
-- History-bearing snapshot roots use their verified commit and object-set
-  records.
-- Tree-only snapshot roots compare with the canonical workspace manifest.
-- Workspace paths outside declared repository roots use an external
-  runner-owned baseline in the control root.
-- Git control data, generation metadata, credentials, checkpoint control state,
-  and runner-owned paths are never reported as produced files.
+- Writable outer-workspace paths retain stock-like root bookkeeping, excluding
+  all source destinations.
+- Nested repository collectors compare editable Git roots with their recorded
+  resolved commits, history-bearing editable snapshot roots with their verified
+  commit and object-set records, and tree-only editable roots with the canonical
+  workspace manifest.
+- Read-only roots cannot change and are never traversed by root Git,
+  produced-file scans, cleanup walks, or archive creation.
+- Git control data, generation metadata, credentials, attachment evidence, and
+  runner-owned checkpoint state are never reported as produced files.
 
-The adaptation must represent additions, modifications, deletions, renames, and
-mode changes across multiple nested repository roots without assuming or
-writing a single root `.git` directory. `read_only` attachments cannot produce
-source mutations. Editable produced-file state and nested repository state are
-covered by the session's private quota and lifecycle.
+The adaptation represents additions, modifications, deletions, renames, and
+mode changes in the writable outer workspace and across multiple editable
+nested repository roots without assuming one root `.git` directory. A
+`read_only` attachment cannot produce source mutations, but files created
+outside mounted roots are collected normally. Editable produced-file state and
+nested repository state remain covered by the session's private quota and
+lifecycle.
 
-Checkpoint behavior is access-specific. A `read_only` checkpoint excludes the
-generation mount and all source bytes; it persists session-local mutable state
-separately from the exact generation-key, epoch, manifest, durable reference,
-and attachment evidence. Hydration validates that minimal binding/control
-metadata, reattaches the same protected generation, then restores the remaining
-harness state before the turn. An `editable` checkpoint contains the private
-workspace copy and its nested repository state, never the bare acquisition
-cache or immutable generation backing store. Checkpoint creation must not run a
-root Git commit against a read-only attachment.
+Checkpoint behavior is access-specific. A `read_only` checkpoint archives the
+writable outer workspace while explicitly excluding every mount destination
+and all source bytes. It stores the exact generation key and epoch, root
+attachment manifest, workspace manifest, durable reference, and mount evidence
+separately. Archive and file operations never follow or cross a source mount.
+An `editable` checkpoint includes the inode-independent private source copies
+and nested repository state, but never the bare acquisition cache or immutable
+generation backing store.
 
 A continuation supplies the existing predecessor/session reference and omits
-`metadata.workspace`. HarnessRouter performs the access-specific hydration,
-verifies the stored attachment evidence, and starts the stored harness in the
-stored working directory. Edits from prior editable turns remain visible. A
-changed ref, source digest, working directory, access, retention, or harness
+`metadata.workspace`. HarnessRouter first unmounts any existing source
+attachments, hydrates the writable outer state, validates that every declared
+destination is an empty real directory rather than a link, and only then
+reattaches the exact protected generation read-only. It verifies the stored
+attachment evidence and starts the stored harness in the stored working
+directory. Editable hydration restores its private copies instead. Edits from
+prior editable turns and files written outside read-only roots remain visible.
+A changed ref, source digest, working directory, access, retention, or harness
 requires a new session.
 
-If attachment, generation, private-copy, checkpoint, or provenance evidence is expired, missing, corrupt, or inconsistent, continuation fails closed. It does not clone, repull, restore from OCI again, substitute another generation, or silently start a fresh session.
+Attachments are unmounted before hydration, deletion, workspace cleanup, or
+retrying cleanup. Tar, Files API traversal, recursive cleanup, and root Git
+operations must stay on the writable outer filesystem and never cross a mount.
+If unmount, attachment, generation, private-copy, checkpoint, or provenance
+evidence is expired, missing, busy, corrupt, or inconsistent, continuation or
+cleanup fails closed and the allocation remains accounted for. Continuation
+does not clone, repull, restore from OCI again, substitute another generation,
+or silently start a fresh session.
 
 ## Provider authentication and harness configuration
 
@@ -371,7 +450,7 @@ The implementation fails closed without changing source mode, source identity, a
 |---|---|
 | Malformed, oversized, too-deep, or unknown workspace field | Reject before source access and without mutating an existing session. |
 | Workspace metadata on a continuation or reused session | Reject without changing the attachment, checkpoint, or TTL. |
-| Workspace input files with `read_only` access | Reject before source resolution; never overlay or copy up immutable source. |
+| Input file targets a declared `read_only` source destination | Reject without overlay, copy-up, or source mutation; inputs outside mounted roots remain allowed. |
 | Unauthorized `persistent` retention | Fail before source resolution; do not downgrade to `session`. |
 | Invalid Git URL, ref, destination, network target, redirect, or feature | Fail the response, cancel bounded source work, and remove staging; do not start a harness or provider call. |
 | Any repository in a multi-repository source fails | Fail the complete source; never attach a partial set. |
@@ -381,9 +460,10 @@ The implementation fails closed without changing source mode, source identity, a
 | Materializer timeout, crash, cancellation, or live descendant | Terminate and reap the complete process tree before cleanup and terminal acknowledgement. |
 | Working directory missing, not a directory, or escaping by traversal/link | Fail before attachment and harness execution. |
 | Crash during publication or attachment commit | Recover to either a complete verified attachment or no attachment; never expose partial staging. |
+| Mountpoint is non-empty, is a link, or a bind/remount operation fails | Fail closed before harness execution; never expose a writable source alias or partial attachment. |
 | Missing or corrupt bound state on continuation | Fail as non-resumable; never rematerialize or substitute. |
 | External provider authentication or execution failure | Return the normalized UHP failure; do not switch endpoint, protocol, credential, or harness. |
-| Cleanup failure | Quarantine and continue accounting for the allocation; retry the same idempotent cleanup path. |
+| Cleanup or unmount failure | Quarantine and continue accounting for the allocation; never traverse the mount, and retry the same idempotent unmount-then-cleanup path. |
 
 Promptfoo treats every non-success as an evaluation error. It does not convert a workspace failure to an empty success, source fallback, or implicit retry.
 
@@ -398,7 +478,7 @@ The public image remains `ghcr.io/allagentsdev/harnessrouter`. Tags identify the
 Release verification must exercise both Codex and OMP through the configured external provider gateway. In addition, v1 cannot release without:
 
 1. an end-to-end OCI test using at least 2 GiB of expanded source bytes and 100,000 source-visible filesystem entries that fetches by direct manifest digest, applies layers and whiteouts, verifies the workspace manifest and any offline Git history, starts a harness in `working_directory`, and continues the same session successfully; and
-2. a cache-reuse proof showing that identical Git and OCI source identities publish once, concurrent cache misses singleflight, every concurrent or later `read_only` task/session leases the same immutable generation bytes without cloning or copying, read-only checkpoints contain no generation bytes or source Git writes, mutable harness state remains per-session outside source, `editable` sessions derive inode-independent copies from the pinned generation, unrelated bare-cache refs are not exposed, and continuation reattaches the exact generation without reacquisition.
+2. a cache-reuse proof showing that identical Git and OCI source identities publish once, concurrent cache misses singleflight, every concurrent or later `read_only` task/session bind-mounts the same immutable generation inodes at its declared destinations without cloning or copying, the outer workspace remains private and writable, input and produced files outside source roots work normally, source-targeting inputs fail, mount failures fail closed, read-only checkpoints and Files/root-Git/cleanup traversal contain no generation bytes or source Git writes, `editable` sessions derive inode-independent copies from the pinned generation, unrelated bare-cache refs are not exposed, and continuation restores outer state before reattaching the exact generation without reacquisition.
 
 These are release gates, not deferred performance tests. Git and OCI failure-path coverage must also prove that no partial generation or source-mode fallback becomes visible.
 
@@ -411,6 +491,7 @@ Downstream implementation and release do not wait on upstream work. Once downstr
 | Build a new execution gateway | Duplicates HarnessRouter's UHP, sessions, workspace lifecycle, streaming, cancellation, files, artifacts, and harness supervision. |
 | Put a workspace service in front of HarnessRouter | Splits source and session ownership and cannot safely participate in checkpoint hydration, continuation, or produced-file bookkeeping. |
 | Create a second checkout root inside each session | Competes with the runner-owned workspace, duplicates cleanup and quota state, and makes files and checkpoints ambiguous. |
+| Attach shared source with symlinks | Symlinks do not enforce read-only access, expose backing paths, can escape workspace containment, and behave inconsistently for cwd and file tools; namespace-confined read-only bind mounts present ordinary destination directories and fail closed. |
 | Ship Git first and defer OCI | Fails the minimum large-repository use case and makes release viability depend on repeated acquisition. |
 | Treat OCI as a runtime or benchmark image | Mixes source provenance with tools, services, verifier assumptions, and execution policy. |
 | Wait for upstream before implementation | Makes delivery depend on a project we do not maintain and delays the evidence needed for a useful upstream proposal. |
@@ -422,7 +503,7 @@ Downstream implementation and release do not wait on upstream work. Once downstr
 
 ## Deliberate v1 limits
 
-V1 supports public HTTPS Git repositories acquired at fixed depth `2`, multiple pairwise non-overlapping destinations, advertised branch/tag/default refs, exact resolved-commit and effective-depth provenance, server-owned bare acquisition caches, operator-catalogued OCI snapshots selected by direct digests, optional normalized offline Git history, `read_only` and `editable` attachments, bounded `session` retention, authorized `persistent` retention, and a workspace-relative working directory.
+V1 supports public HTTPS Git repositories acquired at fixed depth `2`, source placed under 1 to 128 pairwise non-overlapping non-root destinations, advertised branch/tag/default refs, exact resolved-commit and effective-depth provenance, one server-owned bare acquisition cache per canonical URL, operator-catalogued OCI snapshots selected by direct digests, optional normalized offline Git history, writable private session roots with `read_only` repository bind mounts or private `editable` copies, bounded `session` retention, authorized `persistent` retention, and a workspace-relative working directory.
 
 V1 does not include caller-supplied registry origins or credentials, mutable OCI tags, OCI indexes as source identity, transparent Git/OCI fallback, caller-selected runtime images or benchmark environments, arbitrary materializer commands, private-network Git origins, caller-selected TTLs, session branching, access or retention changes on continuation, or public multi-tenant authorization. It does not add an AllAgents CLI command or change project workspace configuration.
 
@@ -430,10 +511,17 @@ Only Codex and OMP are required and release-validated. Other HarnessRouter backe
 
 ## Consequences
 
-HarnessRouter remains the sole execution, workspace, and session control plane. The fork gains deterministic first-turn source initialization without adding a new northbound API, process supervisor, checkpoint system, file service, or workspace lifecycle.
+HarnessRouter remains the sole execution, workspace, and session control plane.
+The fork gains deterministic first-turn source initialization without adding a
+new northbound API, process supervisor, checkpoint system, file service, or
+workspace lifecycle. Each session keeps its private writable root; only
+declared source roots participate in generation sharing.
 
-Mandatory OCI support and generation accounting make v1 more substantial than a Git clone hook, but they make the minimum large-repository use case viable. Shared immutable generations avoid repeated acquisition for `read_only` sessions; private inode-independent copies preserve isolation for `editable` sessions.
-
+Mandatory OCI support and generation accounting make v1 more substantial than
+a Git clone hook, but they make the minimum large-repository use case viable.
+Read-only bind mounts let matching sessions reuse the same protected generation
+inodes without making harness state or outputs read-only. Private
+inode-independent copies preserve isolation for `editable` sessions.
 The operator assumes finite capacity management for staging, generations, editable copies, persistent sessions, tombstones, and quarantined deletion failures. Protected or uncertain state is never advertised as free capacity.
 
 Provider credential lifecycle remains outside HarnessRouter. The distribution depends on the external OAuth-to-OpenAI-compatible gateway, while the harness sees only brokered short-lived credentials.
@@ -444,7 +532,7 @@ Revisit this decision if:
 
 - UHP or upstream HarnessRouter adopts an equivalent workspace-source contract;
 - HarnessRouter changes its fresh/checkpoint workspace lifecycle so the extension point no longer preserves one authoritative session workspace;
-- the host cannot enforce immutable shared generations and inode-independent editable copies;
+- the host cannot enforce namespace-confined read-only bind mounts for shared generations and inode-independent editable copies;
 - large-repository OCI materialization or cache reuse cannot meet finite release limits;
 - continuation and attachment recovery cannot fail closed without source reacquisition;
 - source acquisition requires a stronger isolation boundary;

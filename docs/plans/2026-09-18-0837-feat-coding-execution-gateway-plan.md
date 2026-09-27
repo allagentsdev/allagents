@@ -1,134 +1,125 @@
 ---
-title: "HarnessRouter Workspace Composition - Implementation Plan"
+title: "AllAgents Gateway Workspace Composition - Implementation Plan"
 date: 2026-09-18
-updated: 2026-09-27
+updated: 2026-09-28
 type: feat
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 execution: code
 ---
 
-# HarnessRouter Workspace Composition - Implementation Plan
+# AllAgents Gateway Workspace Composition - Implementation Plan
 
-## Stock behavior inventory
-
-The pinned HarnessRouter baseline already owns the session workspace lifecycle.
-The fork must extend that lifecycle rather than introduce another workspace
-abstraction:
-
-1. Session identity implicitly selects one private, writable session workspace;
-   callers do not currently describe source roots.
-2. Fresh hydration creates that workspace as an empty root Git repository.
-3. Continuation restores the session checkpoint selected by the existing
-   response/session identity.
-4. Attached UHP input files, `.harness` state, generated root instructions,
-   plugins, skills, MCP configuration, HOME, conversation state, outputs, and
-   produced/checkpoint bookkeeping are written under the hydrated workspace
-   before or during a harness turn.
-5. Produced-file collection uses a cursor over the root Git repository and may
-   assume that every descendant is part of that repository.
-6. Stock checkpointing mutates the root Git repository, then archives the entire
-   workspace; stock hydration clears the workspace before restoring that archive.
-   Stock file walking, root Git operations, archive creation, restore, and
-   cleanup have no mount-boundary exclusions.
-7. No stock UHP request field names a Git source, an OCI source, or a reusable
-   immutable generation.
-
-Phase 1 must characterize the exact paths and ordering of every stock write,
-root Git command, filesystem walk, archive/restore step, and pre-turn asset
-materialization rather than assuming the summary above is exhaustive. Those
-observations define the smallest adaptation seam: the outer session workspace
-remains private and writable, while only declared source destinations become
-access-specific attachments.
-
-The implementation keeps the existing session allocation, hydrate/checkpoint
-cycle, file and artifact APIs, user/sandbox isolation, cancellation, TTL,
-cleanup, and harness supervision. It adds first-turn source composition at the
-existing hydration boundary, stores the resulting attachment manifest in the
-existing session state, and adapts root Git, checkpointing, files, restore, and
-cleanup so they never traverse a declared source mount. It does not create a
-second workspace, second session database, second Files API, external
-materializer service, or parallel lifecycle.
 ## Goal
 
-Extend `allagentsdev/harnessrouter` so a new UHP session can compose its existing
-private, writable HarnessRouter workspace from either multiple Git repositories
-or a mandatory OCI workspace snapshot. Bind each verified source root and its
-access mode to the session before the first harness turn. For `read_only`, mount
-the immutable generation's repository roots read-only at their declared
-non-root destinations; keep `.harness`, HOME, generated instructions, inputs,
-outputs, and all other outer workspace state writable. Continuations omit the
-descriptor, restore the writable outer checkpoint, and recover the exact source
-attachments through the access-specific workspace-aware checkpoint path.
+Create AllAgents Gateway as the downstream distribution derived from
+`HarnessRouter/harnessrouter`. A first-turn UHP request MAY declare an ordered
+set of independent Git and OCI source trees. The gateway MUST acquire and cache
+each component independently, then compose every requested tree at its declared
+non-root destination in the existing private session workspace. A composition
+MUST become visible atomically: either every source root is ready at the exact
+requested identity or none is visible.
 
-OCI workspace snapshots are a release-blocking v1 source, not a later
-optimization. Large repositories are part of the minimum deliverable. The Git
-path limits history transfer with a fixed shallow fetch, but it still transfers
-and checks out every working-tree byte; it therefore does not replace OCI for
-large workspaces.
+The public downstream names are:
 
-Keep all other boundaries unchanged:
+- repository: `allagentsdev/allagents-gateway`;
+- image: `ghcr.io/allagentsdev/allagents-gateway`;
+- service: `allagents-gateway`; and
+- product: **AllAgents Gateway**.
 
-- UHP is the only northbound execution protocol.
-- Requests without `metadata.workspace` take the stock path without new source,
-  generation, attachment, or response semantics.
-- Codex and OMP are the supported harnesses.
-- Both use the existing separately operated OAuth-to-OpenAI-compatible provider
-  gateway through server-owned, brokered credentials.
-- `allagentsdev/harnessrouter` remains the existing GitHub fork and
-  `ghcr.io/allagentsdev/harnessrouter` remains the image name.
-- There is no AllAgents CLI implementation, profile import, local gateway
-  command, or `workspace.yaml` change.
+The fork MUST retain `HarnessRouter/harnessrouter` as its upstream remote, the
+recorded fork point, the upstream license, and required attribution. Upstream
+changes MUST be taken selectively and reviewed against the downstream contract;
+upstream acceptance is not a release dependency.
+
+Requests without `metadata.workspace` MUST remain on the stock UHP path. Their
+root-Git hydration, produced-file behavior, checkpointing, continuation,
+provider routing, cancellation, retention, and cleanup MUST remain compatible
+with the pinned upstream baseline. The new component, composition, manifest,
+and workspace-aware lifecycle apply only when `metadata.workspace` is present
+on a new session.
+
+## Stock behavior and adaptation boundary
+
+The pinned upstream baseline owns session identity, one private writable
+workspace per session, hydrate/checkpoint, UHP inputs, generated instructions,
+`.harness`, HOME, skills, plugins, MCP configuration, conversation state,
+Files/artifacts, cancellation, TTL, deletion, restart reconciliation, harness
+supervision, and provider brokering. Stock fresh hydration initializes an empty
+root Git repository. Stock produced-file collection and checkpointing use that
+root repository and may traverse the whole workspace.
+
+Phase 1 MUST characterize the exact upstream call paths and ordering rather than
+assuming that summary is exhaustive. The workspace-backed path MUST reuse the
+same session and runner lifecycle but replace root/nested Git correctness with
+filesystem-manifest correctness. For a workspace-backed session:
+
+- the outer workspace remains private and writable;
+- source destination ownership and identities are immutable for the life of the
+  session, while `editable` tree contents may change;
+- root Git, nested Git commits, indexes, status, diff, and rename detection MUST
+  NOT determine produced changes, evaluation results, or checkpoint correctness;
+- Git metadata MAY be present as acquisition data and agent convenience only;
+- OCI components need not contain Git metadata;
+- Files collection and final evaluation MUST compare canonical filesystem
+  manifests for every source root and the writable outer workspace;
+- checkpoint, restore, Files walks, and cleanup MUST understand source
+  boundaries and MUST NOT accidentally traverse a read-only mount; and
+- no second workspace service, session database, Files API, scheduler, or
+  external materializer service is introduced.
 
 ## Product and ownership boundary
 
 ### In scope
 
-- A strict first-turn-only `metadata.workspace` HarnessRouter extension.
-- Repository composition from one or more caller-declared repositories at
-  pairwise non-overlapping workspace-relative destinations.
-- Fixed depth-2 Git acquisition with exact resolved-commit provenance and useful
-  recent offline history.
-- Operator-cataloged OCI workspace snapshots selected by direct image-manifest
-  and workspace-manifest digests.
-- One immutable generation store shared by Git and OCI sources.
-- Reuse of a verified immutable generation across sessions.
-- Shared immutable generation inodes for `read_only` source roots and
-  inode-independent private writable copies for `editable` source roots.
-- A private writable outer session workspace for both access modes, with
-  generated assets and allowed UHP input files outside source destinations.
-- Existing session continuation, checkpoint, cancellation, TTL, deletion,
-  restart reconciliation, files, artifacts, root Git, and produced-file behavior
-  adapted to exclude declared source mounts.
-- Authorized persistent retention through the existing session lifecycle.
-- Exact source provenance and bounded, coded failures.
-- Direct Promptfoo coverage against the built image, including a large OCI
-  workspace and second-session cache reuse.
-- Digest-pinned publication to GHCR with SBOM and build provenance.
+- A strict first-turn-only `metadata.workspace` extension to UHP.
+- A closed ordered `sources` array containing 1 to 128 independent Git, OCI, or
+  mixed source entries.
+- Exactly one source tree and one required non-root `destination` per entry. A
+  monorepo is one tree, not an implicit bundle of roots.
+- Canonical public HTTPS Git acquisition with exact commit resolution and a
+  mandatory depth-2 fetch policy.
+- Operator-cataloged OCI source-tree transport selected by a direct image
+  manifest digest and a canonical source manifest digest.
+- Independent component cache and singleflight, followed by atomic composition.
+- Identical `read_only` and `editable` attachment semantics for Git and OCI.
+- Canonical baseline source manifests for all components and a canonical
+  baseline for the writable outer workspace.
+- Manifest-based add, modify, delete, mode, executable, symlink, and binary
+  change detection for workspace-backed sessions.
+- Mount-aware checkpoint and continuation, including separate preservation of
+  editable roots.
+- Per-source and request-aggregate resource limits.
+- Codex and OMP through the existing separately operated
+  OAuth-to-OpenAI-compatible provider gateway and brokered credentials.
+- Direct Promptfoo proof against the built image, including multiple OCI
+  components, a mixed Git/OCI composition, editable OCI mutation, and cache
+  reuse.
+- Digest-pinned GHCR publication with SBOM and build provenance.
 
 ### Explicit non-goals
 
-- A separate workspace service, workspace database, scheduler, Files API, or
-  task protocol.
 - Caller-selected runtime/container images or benchmark environments. An OCI
-  workspace snapshot is source content only.
-- Caller-provided registry origins, registry credentials, headers, proxy
-  settings, or source commands.
-- Arbitrary materializer plugins, hook discovery, or a public generation API.
-- Silent Git fallback for an OCI failure, silent OCI fallback for a Git failure,
-  or silent deepening/full-clone fallback for a bounded Git failure.
-- Submodule initialization, Git LFS hydration, checkout filters, or repository
-  hook execution.
-- Provider login, refresh, or repair in HarnessRouter; the external provider
-  gateway retains that responsibility.
-- A caller-selected provider route, API key, transport, or fallback chain.
-- Upstream acceptance as a release condition. Upstreaming is considered only
-  after downstream release evidence exists.
+  image is only a transport and cache unit for one source tree; it is never the
+  runtime workspace and never a multi-root workspace bundle.
+- Caller-provided registry origins, credentials, headers, certificates, mirrors,
+  proxy settings, Git configuration, source commands, or materializer hooks.
+- A public component-cache or composition API.
+- Silent Git-to-OCI, OCI-to-Git, ref, digest, mirror, deepening, full-clone, or
+  provider fallback.
+- Git submodule initialization, Git LFS hydration, checkout filters, or hook
+  execution.
+- Requiring a Git repository at workspace root or inside an OCI tree.
+- Provider login, refresh, or repair in AllAgents Gateway.
+- An AllAgents CLI, profile import, local gateway command, or `workspace.yaml`
+  change.
+- Upstream acceptance as a release condition.
 
 ## Request contract
 
-`metadata.workspace` is accepted only when the request creates a new session. It
-uses snake_case and has no nested schema version:
+`metadata.workspace` MUST be accepted only while creating a new session. The
+schema uses snake_case, has no nested schema version, and is closed at every
+object boundary.
 
 ```json
 {
@@ -137,20 +128,21 @@ uses snake_case and has no nested schema version:
     "workspace": {
       "access": "editable",
       "retention": "session",
-      "source": {
-        "kind": "repositories",
-        "repositories": [
-          {
-            "url": "https://github.com/example/service.git",
-            "ref": "refs/heads/main",
-            "destination": "service"
-          },
-          {
-            "url": "https://github.com/example/shared.git",
-            "destination": "libraries/shared"
-          }
-        ]
-      },
+      "sources": [
+        {
+          "kind": "git",
+          "url": "https://github.com/example/service.git",
+          "ref": "refs/heads/main",
+          "destination": "service"
+        },
+        {
+          "kind": "oci",
+          "snapshot_name": "shared-release",
+          "image_manifest_digest": "sha256:...",
+          "source_manifest_digest": "sha256:...",
+          "destination": "libraries/shared"
+        }
+      ],
       "working_directory": "service"
     }
   }
@@ -163,1007 +155,922 @@ The exact shape is:
 metadata.workspace = {
   access: "read_only" | "editable",
   retention?: "session" | "persistent",
-  source:
+  sources: Array<
     | {
-        kind: "repositories",
-        repositories: Array<{
-          url: string,
-          ref?: string,
-          destination: string
-        }>
+        kind: "git",
+        url: string,
+        ref?: string,
+        destination: string
       }
     | {
-        kind: "workspace_snapshot",
+        kind: "oci",
         snapshot_name: string,
         image_manifest_digest: string,
-        workspace_manifest_digest: string
-      },
+        source_manifest_digest: string,
+        destination: string
+      }
+  >,
   working_directory?: string
 }
 ```
 
-Rules:
+The obsolete singular `source`, `kind: "repositories"`, `repositories`,
+`kind: "workspace_snapshot"`, and `workspace_manifest_digest` fields MUST NOT be
+accepted as aliases. There is no compatibility schema.
 
-1. `access` and `source` are required. `retention` defaults to `session`.
-2. `persistent` is accepted only after existing caller/session authorization
-   succeeds and before source resolution, network traffic, or generation claims.
-3. `working_directory` and every repository `destination` are normalized
-   workspace-relative POSIX paths. The effective working directory must be a real
-   directory inside the final workspace without traversal or link escape.
-4. Every source destination is non-root: `.` and any spelling that normalizes to
-   the workspace root are invalid. Destinations are unique and pairwise
-   non-overlapping: no two may be equal, and neither may be an ancestor of
-   another. A monorepo therefore uses a destination such as `repo`, and
-   `working_directory` may be `repo` or `repo/packages/api`.
-5. Repository mode contains 1 to 128 entries. An OCI workspace manifest likewise
-   declares 1 to 128 repository roots, each with a non-root, pairwise
-   non-overlapping destination. Snapshot source files may exist only beneath
-   those roots; there is no snapshot source at destination `.` and no undeclared
-   root source file. Ancestor directories needed to reach a destination are
-   mount scaffolding only and contain no source files.
-6. Each URL, optional ref, destination, snapshot field, and manifest root is
-   bounded before network or filesystem work. Lower runtime capacity fails with
-   the coded capacity error; it does not change schema validity.
-7. `source` is a closed discriminated union. Unknown fields and mixed Git/OCI
-   fields fail validation.
-8. `snapshot_name` selects an operator-owned HarnessRouter deployment catalog
-   entry. The request supplies only the two `sha256:` digests; it never supplies
-   a registry, repository, credential, certificate, or mirror.
-9. A continuation selected through `previous_response_id` or the existing
-   session recovery mechanism omits `metadata.workspace`. Supplying it on a
-   reused session fails before hydrate, source access, generation lookup, or
-   provider traffic, even when it is identical to the stored value.
-10. A session created without workspace metadata remains a stock session and
-    cannot add workspace metadata later.
-11. UHP input files target the writable outer workspace by default. For
-    `read_only`, reject an input whose normalized path is equal to or below an
-    effective source destination; inputs elsewhere remain valid. Repository-mode
-    destinations are known during request validation. Snapshot destinations are
-    validated after the image/workspace manifests establish the verified root
-    map, but before layer acquisition, outer workspace writes, generation
-    attachment, or harness execution. For `editable`, inputs may overlay the
-    private source copies. In both modes, reject paths that collide with mount
-    scaffolding, reserved runner paths, or generated assets.
-12. Workspace fields cannot contain commands, environment variables, resource
-    limits, provider settings, or harness settings.
+### Validation rules
 
-A workspace snapshot request is therefore:
+1. `access` and `sources` are REQUIRED. `retention` defaults to `session`.
+   `sources` MUST contain 1 to 128 entries and preserves request order.
+2. Every entry MUST materialize exactly one tree at its own required
+   `destination`. Multiple Git entries, multiple OCI entries, duplicate
+   component identities at different destinations, and mixed Git/OCI entries
+   are valid.
+3. Every destination and supplied `working_directory` MUST be a relative POSIX
+   path with no empty, `.`, `..`, ambiguous, or platform-specific component and
+   no link escape. A destination that normalizes to the workspace root is
+   invalid. An omitted `working_directory` means the root, represented as `.`
+   only in the response.
+4. Destinations MUST be pairwise non-overlapping after normalization: no two are
+   equal and neither is an ancestor of another. Their ownership is determined
+   entirely from the request; OCI content MUST NOT add or move a root.
+5. UHP input paths, generated assets, reserved runner paths, credential paths,
+   cache paths, attachment state, and checkpoint state MUST be normalized and
+   checked against every destination before source resolution, network traffic,
+   cache lookup, session workspace writes, or component claims. Any path equal
+   to or below a source destination MUST be rejected for both access modes.
+   Inputs and generated assets outside all source destinations remain valid in
+   the writable outer workspace.
+6. Destination ancestor scaffolding MAY coexist only with independently valid
+   outer directories. A file, symlink, generated asset, input, or reserved path
+   at an ancestor that prevents safe directory scaffolding MUST fail before
+   network work.
+7. `working_directory` syntax is validated before network work. After atomic
+   composition it MUST resolve, without link escape, to a real directory either
+   in the outer workspace or within exactly one source root.
+8. A Git `url` MUST be canonical public HTTPS under the deployment egress policy.
+   User information, query strings, fragments, credentials, alternate
+   transports, ambiguous encodings, and caller transport options are forbidden.
+   `ref`, when present, is bounded and resolves only through advertised branch
+   or tag semantics.
+9. An OCI entry MUST provide an operator-catalog `snapshot_name`, a direct
+   `sha256:` image manifest digest, and a canonical `sha256:`
+   `source_manifest_digest`. Tags, indexes/lists, mutable references, and caller
+   registry coordinates are forbidden.
+10. Unknown fields, wrong-kind fields, mixed fields within one entry, invalid
+    digests, and obsolete schema fields MUST fail closed.
+11. Metadata bytes, nesting, strings, path lengths, source count, and input count
+    MUST be bounded during parsing. Persistent retention MUST be authorized
+    before cache lookup or network work.
+12. A continuation selected by `previous_response_id` or the existing recovery
+    mechanism MUST omit `metadata.workspace`. Supplying it on a reused session
+    MUST fail before hydrate, component lookup, provider traffic, or TTL changes,
+    even if it equals the stored descriptor. A stock session cannot become a
+    workspace-backed session later.
+13. Workspace fields MUST NOT contain commands, environment variables, resource
+    limits, provider settings, model settings, registry settings, or harness
+    settings.
 
-```json
-{
-  "metadata": {
-    "harness_id": "allagents-omp",
-    "workspace": {
-      "access": "read_only",
-      "source": {
-        "kind": "workspace_snapshot",
-        "snapshot_name": "monorepo-release",
-        "image_manifest_digest": "sha256:...",
-        "workspace_manifest_digest": "sha256:..."
-      },
-      "working_directory": "packages/api"
-    }
-  }
-}
-```
+Because every source declares its destination, all destination ownership,
+source-source overlap, and input/asset collision decisions are request-decidable
+and MUST complete before any network request. OCI source-manifest validation is
+content validation, not destination discovery.
 
-## Session binding and public provenance
+## Source and request limits
 
-The fork stores workspace binding fields in the existing session/checkpoint
-record. The binding contains:
+Bounds MUST be enforced while streaming, before allocation whenever the size is
+known, and both per source and across the whole request. Deployment policy MAY
+lower a bound but MUST NOT raise these v1 ceilings without a contract revision.
+A lower runtime capacity is a coded capacity failure, not a schema change.
 
-- the canonical effective descriptor and its digest;
-- the source kind and exact resolved source identity;
-- the generation key, immutable publication/epoch identity, verified tree
-  manifest digest, and immutable declared source-root map;
-- `access`, effective `retention`, and normalized `working_directory`;
-- the attachment manifest and evidence for every destination, including
-  generation root identity, mount/copy method, filesystem identity, and mount
-  protection needed to prove a restored session refers to the exact generation;
-- exact public provenance;
-- existing session expiry/deletion state; and
-- the selected harness/provider binding already owned by the session.
+| Resource | Per source ceiling | Request aggregate ceiling |
+|---|---:|---:|
+| Expanded source bytes | 32 GiB | 64 GiB |
+| Source-visible entries | 500,000 | 1,000,000 |
+| Compressed Git pack or OCI layer bytes | 8 GiB | 16 GiB |
+| Regular file size | 4 GiB | 4 GiB |
+| Path | 4096 UTF-8 bytes / 128 components | same per path |
+| Acquisition and materialization wall time | bounded by operator policy | bounded by session policy |
 
-Public response `metadata.workspace` has exactly `access`, `retention`,
-`working_directory`, `effective_descriptor_digest`, `generation_id`,
-`workspace_manifest_digest`, `provenance`, and `expires_at`.
-`working_directory` is always present and uses `.` for the workspace root.
-`expires_at` is the effective timestamp for `session` retention and `null` only
-for authorized `persistent` retention.
+Each OCI source additionally permits at most 64 distributable tar/gzip/zstd
+layers, a 4 MiB image manifest, a 128 MiB canonical source manifest, and 1 MiB
+per PAX or extended header. For each layer, each OCI source, and the request
+aggregate, `expanded_bytes / max(compressed_bytes, 1)` MUST NOT exceed `100`.
+Git object, checkout, inode, output, and filesystem quotas MUST feed the same
+per-source and aggregate accounting rather than becoming unbounded exceptions.
 
-Repository `provenance` has `kind: "repositories"` and a request-order
-`repositories` array. Each entry has normalized `url`, `destination`, exact
-`resolved_commit`, effective `depth`, and `requested_ref` only when the request
-supplied a ref. Snapshot `provenance` has `kind: "workspace_snapshot"`,
-`snapshot_name`, exact `image_manifest_digest`, exact
-`workspace_manifest_digest`, and a manifest-order `repositories` array. Each
-snapshot root has `destination`; a history-bearing root also has
-`resolved_commit` and `object_set_digest`, while a tree-only root has neither.
+## Canonical manifests and change semantics
 
-Acquisition-policy revisions, catalog origins, mirrors, credentials, host and
-mount paths, attachment IDs, leases, and internal generation keys are not
-public. A continuation and response replay return the same committed object;
-they never report a newly resolved ref or substituted generation.
+### Component baseline source manifest
 
-## Existing lifecycle integration
+Every published Git or OCI component MUST have a canonical baseline source
+manifest. It is keyed by normalized path relative to that component root and
+contains, for every included filesystem entry:
 
-The first-turn sequence is:
+- normalized relative path and entry type;
+- regular-file content digest and size;
+- executable bit and the platform-normalized mode semantics needed to reproduce
+  observable permissions;
+- symlink target bytes after canonical encoding; and
+- any bounded hardlink representation required by the extraction policy.
 
-1. Authenticate and validate the stock UHP envelope and establish existing
-   idempotency ownership.
-2. Resolve whether the request creates or reuses a session.
-3. If new and workspace-backed, validate and authorize the closed workspace
-   descriptor, request-declared repository destinations, working-directory
-   syntax, and input paths that can be decided without source access. Store a
-   pending binding in the existing session transition.
-4. Allocate the existing private, empty, writable session workspace and isolation
-   identity without running fresh-hydration writes, root Git, bookkeeping, or
-   asset materialization.
-5. Resolve the exact source plan. For repositories this resolves exact commits;
-   for OCI it verifies the image and workspace manifests sufficiently to obtain
-   the authoritative 1–128 root map before fetching/extracting layers. Validate
-   all non-root, non-overlap, input, generated-asset, reserved-path, and restored
-   outer-state collisions against that effective root map before any outer
-   workspace content write or generation claim/materialization.
-6. Run fresh hydration and materialize root Git/bookkeeping, `.harness`, HOME,
-   conversation data, generated instructions, plugins, skills,
-   MCP/configuration, credentials, scratch, and other stock mutable assets in
-   their normal private outer locations. Configure every root Git command and
-   filesystem walk to exclude the immutable destination set and never cross
-   mount boundaries. Apply allowed outer UHP inputs at the stock pre-turn point.
-   Create empty, non-link mountpoint directories and mount-ancestor scaffolding
-   only after collision validation.
-7. Claim or reuse the generation. For `read_only`, take a lease and attach each
-   immutable generation repository root to its destination with a per-session
-   read-only bind mount. For `editable`, create each inode-independent private
-   writable source copy at its destination.
-8. For `editable`, apply source-targeting inputs to the private copies. For
-   `read_only`, source-targeting inputs have already failed. Verify every
-   destination, protection flag, source identity, absence of writable aliases,
-   and editable inode independence before recording attachment-ready.
-9. Establish the outer produced-file cursor without traversing source
-   destinations and the access-specific per-root collectors. Validate the
-   effective working directory after attachments are complete.
-10. Atomically persist the attachment manifest/evidence and mark the existing
-   session ready, then continue through ordinary provider selection and harness
-   execution.
-11. Collect files/artifacts without mount traversal, then checkpoint the writable
-    outer workspace while explicitly excluding every source destination and all
-    source bytes. Persist attachment manifest/evidence separately. For
-    `editable`, nested source collectors and the editable-source checkpoint path
-    preserve each private root without allowing the outer archive to traverse it.
-    Stream events, set terminal state, and schedule cleanup through existing
-    HarnessRouter paths.
+Ordering and serialization MUST be canonical. Directory and link semantics MUST
+make type changes observable. Binary files use content digests exactly like text
+files; no text decoding or line diff is required for correctness. The component
+manifest digest is part of the immutable component publication.
 
-A continuation does not parse or resolve a source. Workspace-aware hydration
-uses this exact order:
+For Git, the runner computes the manifest from the verified detached depth-2
+checkout. For OCI, the canonical manifest named by `source_manifest_digest` MUST
+be fetched and verified before any layer request. Its paths are relative to the
+single requested destination. It MUST declare the final types, modes, sizes,
+content digests, and links that layer application is expected to produce. Final
+extraction MUST exactly match it before publication.
 
-1. recover and validate the minimal stored binding, durable generation reference,
-   source-root map, access mode, and attachment manifest/evidence without
-   resolving Git or OCI;
-2. ensure stale session mounts are unmounted, then clear/hydrate the outer
-   workspace using no-follow, no-cross-mount operations;
-3. restore the writable outer checkpoint, which contains no source bytes;
-4. validate that every declared destination is an empty non-link directory, that
-   its ancestors contain only allowed outer state/scaffolding, and that no input,
-   generated asset, root Git entry, or restored path collides with an attachment;
-5. reacquire the exact recorded generation lease and, for `read_only`, bind each
-   exact recorded generation root read-only at its destination; for `editable`,
-   restore the exact private source-root checkpoint at its destination;
-6. verify mount flags, filesystem/generation identity, source manifest, no
-   writable alias, and editable ownership/inode independence; and
-7. only then restore or activate remaining runtime state, rebuild external
-   cursors, validate `working_directory`, and start the harness.
+Git administrative state MAY be acquired and retained for agent convenience,
+but it is never a change baseline. OCI trees MAY omit it entirely. A source
+manifest MAY verify declared Git administrative files when present; the change
+collector MUST exclude every `.git` entry from reported changes.
 
-A missing, expired, corrupt, wrong-generation, writable, partially mounted, or
-unsupported attachment fails closed. Hydration must not reacquire Git, contact
-an OCI registry, select another cached generation, archive or restore shared
-generation bytes, or start with an empty source root. Any partial continuation
-attachment is unmounted before failure cleanup.
+### Outer workspace baseline
 
-`retention: "session"` follows existing finite session TTL and deletion.
-Authorized `persistent` retention pins the existing session and its generation
-reference until explicit deletion or operator policy permits removal; it does
-not create a second retention scheduler. Polling and response replay do not
-extend retention. Cleanup makes the session unavailable, unmounts every source
-destination, verifies that no mount remains, then hydrates/deletes outer state,
-removes editable copies, and releases the generation reference. The same
-unmount-before-hydrate/delete rule applies to cancellation, retry, and restart
-reconciliation and remains idempotent.
-## Generation and attachment design
+For a workspace-backed session, fresh hydration MUST create the writable outer
+workspace and apply allowed UHP inputs, generated instructions, harness assets,
+and other initial session material outside source destinations. Immediately
+before the first harness process starts, the runner MUST publish a canonical
+outer baseline manifest using the same path/type/content/mode/link model. It
+MUST exclude source destinations and runner-owned state.
 
-A generation is a verified immutable source artifact, not a runnable workspace
-or session. It is stored outside session allocations under runner-owned `/data`
-state and can be attached only through the existing hydrate path.
+The session binding MUST preserve the exact component baseline manifests and the
+outer baseline across continuation. A continuation MUST NOT silently regenerate
+a baseline from already-mutated content.
 
-### Identity
+### Final-tree comparison
 
-The canonical generation key includes only immutable source and layout inputs:
+At every required collection/evaluation boundary, the runner MUST walk the
+writable outer workspace without crossing a source mount and MUST walk every
+source root through its declared ownership boundary. It MUST compare each final
+manifest to the corresponding persisted baseline and report the union of:
 
-- source kind;
-- for every repository in request order: canonical normalized URL, exact
-  resolved commit, and normalized destination; or the selected OCI catalog
-  identity plus both direct digests;
-- the normalized source-layout/workspace-manifest schema revision;
-- materializer contract revision;
-- Git fetch depth (`2`) and Git acquisition-policy revision for repository
-  sources;
-- OCI extraction and validation-policy revision for snapshot sources; and
-- any operator acquisition-policy identity that can change resulting bytes.
+- additions;
+- content modifications, including binary changes;
+- deletions;
+- executable or other observable mode changes; and
+- symlink additions, removals, retargeting, and type transitions.
 
-The key excludes session ID, response ID, harness, provider, access, retention,
-working directory, and caller display data. Those values affect attachment or
-execution, not generation bytes. Different request ref spellings that resolve to
-the same canonical repositories, commits, destinations, depth, and policy reuse
-the same generation. Exact provenance retains the original requested values even
-when the immutable generation key is shared.
+Rename inference is OPTIONAL. Delete-plus-add is correct; final-tree equality is
+authoritative. Root Git, nested Git, commits, index state, ignored-file rules,
+and Git rename detection MUST NOT be correctness sources. A Git command MAY be
+available to the agent, but it MUST NOT change evaluator results.
 
+The collector MUST normalize each reported path into workspace-relative form,
+assign it to exactly one owner (outer workspace or one source destination), and
+deduplicate it. It MUST exclude `.git`, runner-owned state, credentials, caches,
+attachment evidence, checkpoint metadata, harness-private ephemeral state, and
+the component store. Existing count, size, and artifact limits still apply to
+reported outputs. Initial source and outer baseline entries MUST NOT be reported
+merely because composition or hydration created them.
+
+`read_only` source roots are compared as an integrity check and MUST remain equal
+to their component baselines. `editable` Git and OCI roots are compared with the
+same algorithm and MUST report mutations identically. Bug-fix evaluations MUST
+request `access: "editable"`.
+
+## Identity, cache, and generation design
+
+A **component** is one verified immutable source tree. A **composition** is an
+ordered mapping of exact component identities to normalized destinations. A
+**session attachment** applies one composition under an access mode to one
+private outer workspace. None is a runtime image or a second session.
+
+### Component identities
+
+A Git component identity MUST include the canonical URL, exact resolved commit,
+fixed depth `2`, Git acquisition-policy revision, materializer revision, and
+canonical baseline source-manifest digest. The request destination, ref spelling,
+access, session, harness, provider, retention, and working directory MUST NOT
+fragment the component cache.
+
+An OCI component identity MUST include the operator catalog identity,
+`snapshot_name`, direct `image_manifest_digest`, canonical
+`source_manifest_digest`, OCI validation-policy revision, materializer revision,
+and verified baseline source-manifest digest. Registry origin and credentials
+MUST remain private. Destination and session concerns MUST NOT fragment the
+component cache.
+
+The canonical composition identity MUST reference, in request order, each exact
+component publication identity paired with its normalized destination, plus the
+layout/materializer contract revision. Reordering entries therefore changes the
+composition identity even when component bytes are the same. The composition
+record contains references and evidence, not another copy of component bytes.
 
 ### Git acquisition cache
 
-Repository sources use two server-owned cache levels inside runner-owned
-`/data`; neither is a session workspace:
+The runner MUST maintain one operator-only bare shallow acquisition mirror per
+canonical Git URL. Every write to that mirror MUST be serialized; concurrent
+resolution/fetch for the same normalized request MUST singleflight. On a miss,
+the worker MUST resolve the advertised default, branch, or tag to an exact
+commit, fetch exactly depth 2, verify the fetched tip and shallow boundary, and
+atomically import the bounded result. It MUST NOT deepen, unshallow, full-clone,
+fetch an arbitrary object ID, choose another ref, or fall back to OCI.
 
-1. One operator-only bare shallow acquisition mirror exists per canonical
-   repository URL. Only the runner's acquisition worker can write it. Every
-   refresh of that repository is serialized through the same mirror, and
-   concurrent refreshes of the same normalized ref request use one in-flight
-   operation. Depth and acquisition-policy revisions belong to immutable commit
-   snapshots and generation identity, not the mutable mirror key.
-2. Verified depth-2 commit snapshots from that mirror feed immutable multi-
-   repository generations keyed by canonical URLs, exact commits, destinations,
-   depth, policy, and materializer contract revision. A generation is the only
-   cache object that can be attached to a session.
+An immutable self-contained component checkout MUST be exported without
+alternates or writable links to the mirror. It MUST preserve enough normalized
+`.git` data for recent offline `git log`, parent inspection, blame where the
+shallow history permits, and diff. A merge tip MUST retain both fetched parent
+edges when the server supplies them at depth 2. Submodule gitlinks and LFS
+pointer-backed content MUST fail rather than invoke helpers.
 
-The bare mirror stores acquired objects and shallow-boundary metadata so a
-second generation needing the same commit does not clone or transfer its pack
-again. Updates import a verified bounded fetch atomically; they never mutate a
-published commit snapshot, silently deepen it, or make a partially refreshed
-mirror eligible for generation construction. The generation builder exports a
-self-contained repository with no alternates and no writable link to the mirror.
-Mirror paths, file descriptors, credentials, refs, and writable internals are
-never mounted into or disclosed to a session.
+A hit for the same exact component identity MAY advertise a mutable ref to prove
+that it still resolves to that commit, but MUST perform zero pack acquisition,
+checkout, tree copy, baseline recomputation, or publication. Separate counters
+MUST distinguish advertisement from source-byte transfer.
 
-Resolving a mutable advertised ref may contact the origin to determine its
-current exact commit. Once resolution yields an identity already present in the
-mirror and generation store, there is no source pack acquisition, checkout,
-tree materialization, or publication. Separate counters distinguish ref
-advertisement from source-byte acquisition so cache-reuse proof cannot count a
-remote pack fetch as a hit.
+### OCI component cache
 
-### Publication and reuse
+The deployment owns a bounded catalog. Each `snapshot_name` maps to one
+operator-controlled registry/repository origin, credential reference, TLS and
+redirect policy, allowed media types, and resource policy. Those values MUST NOT
+appear in the request, session workspace, logs, public provenance, or harness
+environment.
 
-- Build into a random private sibling staging directory.
-- Persist one singleflight claim per bare-mirror refresh and one per generation
-  key. Concurrent misses perform at most one remote pack acquisition and one
-  immutable generation publication. Other requests wait independently, and one
-  waiter's cancellation does not cancel work still needed by another live
-  waiter.
-- Stream validation and accounting during acquisition. Verify the final manifest
-  before publication.
-- Atomically rename verified staging into an immutable publication and record its
-  complete metadata in runner state.
-- Treat bare commit snapshots and published generations as immutable. Startup
-  verifies recorded ownership, publication completeness, shallow boundary,
-  policy revision, and manifest evidence before readiness.
-- A repository generation hit may refresh mutable ref advertisement, but performs
-  no clone, pack fetch, checkout, tree copy, or second publication after the
-  exact normalized source identity matches. An OCI digest-keyed hit performs no
-  registry manifest/blob request, extraction, tree copy, or second publication.
-  Both record only a new session lease/reference.
-- Every `read_only` session whose normalized source identity matches a cached
-  generation bind-mounts the same immutable generation repository roots at its
-  declared destinations. It cannot choose to reclone, re-extract, rematerialize,
-  hard-link, symlink, or copy cached source bytes.
-- Failed or cancelled builds remove staging after descendants stop. A partially
-  refreshed mirror, commit snapshot, or generation is quarantined and never
-  attached.
-- Existing leases/session references protect a generation from cleanup. Existing
-  cleanup scheduling removes only complete, unreferenced generations under
-  bounded operator policy. Mirror/object-cache cleanup is separately confined
-  and cannot invalidate a referenced generation.
+The worker MUST require a direct image manifest digest and reject tags,
+indexes/lists, mutable references, and catalog mismatches. It MUST fetch and
+verify the image manifest, config, and canonical source manifest before any
+layer request. It MUST validate the source manifest's relative paths, types,
+sizes, modes, content digests, links, declared layer requirements, and per-source
+and aggregate limits before downloading layers.
 
-### Access-specific attachment
+Layers MUST be streamed, digest-checked, and applied in order with correct file
+and opaque-directory whiteout semantics. Whiteouts are instructions and MUST
+NOT appear in the publication. Extraction MUST reject absolute paths, traversal,
+NULs, ambiguous separators, conflicting duplicates, devices, FIFOs, sockets,
+unsafe sparse files, unsupported types, and unbounded metadata. Symlinks and
+hardlinks MUST remain within their owning source root; links to the outer
+workspace or another source are invalid. The completed tree MUST exactly match
+the canonical source manifest before atomic publication.
 
-- `read_only`: take a lease, then create one per-session bind mount from each
-  immutable generation repository root to its declared non-root destination in
-  the existing private writable workspace. Remount or create the bind with a
-  kernel-enforced read-only view plus `nodev` and `nosuid`, while preserving
-  repository execute bits required by tools. Mount setup is namespace-confined
-  to the session, exposes no generation backing path or writable file
-  descriptor, has no writable alias or overlay/copy-up path, and fails closed if
-  any protection or identity check fails. Matching sessions see the same source
-  filesystem identities/inodes, while `.harness`, HOME, inputs, outputs,
-  generated instructions, root Git/bookkeeping, checkpoint, conversation,
-  harness runtime, and lifecycle state remain private and writable outside the
-  destinations.
-- Symlinks are explicitly rejected as an attachment mechanism. They do not
-  enforce read-only access, can escape workspace containment, disclose backing
-  paths, make cwd and tool path behavior surprising, and do not provide a
-  trustworthy mount boundary for root Git, archives, Files, or cleanup.
-- `editable`: take a lease, then create an inode-independent private writable
-  copy of each verified generation repository root at its declared destination.
-  Reflink/copy is allowed only when later writes cannot alter the generation or
-  another session. Hard-linked mutable files and writable aliases are forbidden.
-- Both modes preserve nested repository administrative state allowed by the
-  source manifest. Only declared source destinations contain source bytes;
-  ancestors are empty scaffolding apart from independently valid outer state.
-  The attachment never exposes the bare Git mirror or moves harness HOME,
-  credentials, scratch, generated assets, outputs, or checkpoint control into
-  repository content.
-- Root Git, tar/archive, Files, hydrate, and cleanup receive the immutable
-  destination set and use no-follow, no-cross-mount traversal. They explicitly
-  exclude the destination paths rather than relying on the mounts being
-  read-only.
-- Continuation reuses the exact lease and attachment map. An editable
-  continuation sees its private mutations; a read-only continuation restores
-  writable outer state first, then reattaches the same immutable generation
-  roots and its own session-local state.
+An exact OCI component-cache hit MUST perform zero registry manifest/config/
+source-manifest/layer requests, extraction, tree copy, baseline recomputation, or
+publication. An OCI component is always one tree; an image that encodes multiple
+workspace roots or files outside that tree's relative manifest MUST fail.
+
+### Singleflight, publication, and reuse
+
+Each component identity MUST have its own durable singleflight claim and random
+private staging directory. Independent components MAY acquire concurrently
+within request and operator limits. A waiter cancellation MUST detach only that
+waiter while another live request still needs the build. When no waiter remains,
+the bounded builder MAY be cancelled. Failed, timed-out, cancelled, partial, or
+unverified staging MUST never become attachable.
+
+After streamed accounting and full manifest verification, publication MUST use
+an atomic rename and record ownership, policy revisions, manifest digest,
+publication epoch, and completeness. Published component bytes and manifests
+MUST be immutable. Startup reconciliation MUST quarantine uncertain state. A
+lease/reference MUST protect a component from cleanup; cleanup MUST remove only
+complete unreferenced publications and MUST NOT invalidate an attached session.
+
+A composition resolver MUST wait for every independently claimed component,
+verify the ordered identities and destinations, and commit one immutable
+composition record. One component failure MUST roll back request-local staging
+and references without invalidating successful shared components needed by
+other sessions. No partial composition can be attached.
+
+## Access and atomic attachment
+
+Both acquisition kinds MUST implement the same access behavior.
+
+- `read_only`: lease each immutable component and bind-mount its root at the
+  declared destination with kernel-enforced read-only, `nodev`, and `nosuid`
+  semantics while preserving required execute bits. The session MUST receive no
+  writable backing descriptor, alias, overlay/copy-up path, mirror path, or
+  component-store path. Symlinks are forbidden as an attachment mechanism.
+- `editable`: lease each immutable component and create an inode-independent
+  private writable copy or safe reflink at the declared destination. A later
+  write MUST NOT mutate the cache or any sibling session. Hard-linked mutable
+  files and writable aliases are forbidden.
+
+The runner MUST construct fresh and continued workspace-backed sessions in a
+private, non-runnable staging workspace or private mount namespace. It MUST
+prepare the outer state, all mountpoint scaffolding, every read-only mount and
+editable copy, manifest evidence, and the validated working directory there. It
+MUST expose no Files, checkpoint, provider, or harness consumer until every
+entry verifies. A single atomic workspace-path publication or namespace handoff,
+paired with the session ready transition, MUST make all roots visible together.
+Any failure MUST unwind mounts in reverse order, remove private copies/staging,
+release request-local references, and leave no runnable or externally visible
+partial workspace.
+
+Matching read-only sessions MUST bind the same immutable component bytes.
+Editable sessions MUST start from those same publications without reacquisition
+but have independent inodes. The outer workspace remains private and writable
+in both modes.
+
+## Session binding and public provenance
+
+The existing session/checkpoint record MUST store:
+
+- the canonical effective descriptor and digest;
+- the ordered resolved source plan;
+- each exact component identity, publication epoch, and baseline source-manifest
+  digest;
+- the composition identity and ordered destination ownership map;
+- `access`, effective `retention`, normalized `working_directory`, and selected
+  harness/provider binding;
+- the outer baseline manifest identity;
+- attachment evidence per destination, including mount/copy method, filesystem
+  identity, read-only protection or editable inode independence;
+- checkpoint identities for writable outer state and each editable source root;
+- exact sanitized public provenance; and
+- existing expiry, deletion, and lifecycle state.
+
+The public `metadata.workspace` response MUST contain exactly `access`,
+`retention`, `working_directory`, `effective_descriptor_digest`,
+`composition_id`, ordered `sources`, and `expires_at`. `working_directory` is
+always present and uses `.` for workspace root. `expires_at` is `null` only for
+authorized persistent retention.
+
+Each public Git source entry contains `kind: "git"`, normalized public `url`,
+`destination`, exact `resolved_commit`, `depth: 2`, `component_id`,
+`source_manifest_digest`, and `requested_ref` only when supplied. Each public
+OCI entry contains `kind: "oci"`, `snapshot_name`, `destination`, exact
+`image_manifest_digest`, exact `source_manifest_digest`, and `component_id`.
+Private component keys, catalog origins, mirrors, credentials, host paths, mount
+IDs, leases, policy identities, and attachment paths MUST NOT be public. Replay
+and continuation return the stored committed object and MUST NOT re-resolve
+mutable references.
+
+## Lifecycle
+
+### New workspace-backed session
+
+1. Authenticate and validate the stock UHP envelope; establish existing
+   idempotency ownership and whether the request creates or reuses a session.
+2. For a new workspace-backed session, parse and strictly validate the closed
+   descriptor, authorize retention, normalize the ordered 1–128 entries, and
+   reject all destination overlap and destination/input/asset/reserved-path
+   collisions before network, cache lookup, workspace writes, or component
+   claims.
+3. Persist a pending session binding containing only the validated canonical
+   request. Allocate an inaccessible staging workspace under the existing
+   session/isolation lifecycle.
+4. Resolve exact components. Git resolves advertised refs and depth-2 commits.
+   OCI verifies the image and canonical source manifest before layer requests.
+   Enforce per-source and aggregate limits as facts become known.
+5. Claim/reuse each component independently. Acquire, materialize, verify, and
+   atomically publish misses; retain leases for hits. Wait for all entries and
+   commit the ordered composition identity. On any failure, attach none.
+6. Fresh-hydrate the private outer staging workspace. Apply allowed inputs and
+   generated assets only outside destinations. Create empty, non-link
+   destination directories and safe ancestor scaffolding after rechecking the
+   prevalidated ownership map.
+7. Attach every component using the requested access mode. Verify exact
+   identities, read-only flags/no writable aliases, or editable ownership/inode
+   independence. No consumer can observe the workspace during this step.
+8. Validate the effective working directory. Publish the canonical outer
+   baseline after all initial outer assets are present, retain every canonical
+   component baseline, and persist attachment/checkpoint evidence.
+9. Atomically publish the complete workspace and transition the existing session
+   binding to ready. Only then select the provider and start the harness.
+10. At collection, compare final outer and source manifests to their baselines.
+    Checkpoint the writable outer tree without crossing source destinations;
+    checkpoint each editable source separately. Read-only source bytes are never
+    archived. Complete the existing stream/session transition and schedule
+    cleanup.
+
+Duplicate initial requests MUST share the existing idempotent result and MUST
+NOT claim a second composition or attachment.
+
+### Continuation
+
+A continuation MUST NOT parse or resolve sources or contact Git/OCI endpoints.
+It MUST:
+
+1. recover and validate the stored descriptor digest, exact component and
+   composition identities, destination map, access, manifests, attachment
+   evidence, checkpoints, and lifecycle state;
+2. ensure stale mounts are unmounted, then restore the writable outer checkpoint
+   into an inaccessible staging workspace using no-follow/no-cross-mount
+   operations;
+3. restore each editable root from its separate checkpoint, or reacquire the
+   exact recorded immutable lease and prepare the exact read-only bind mount;
+4. validate destination scaffolding, collisions, component/baseline identities,
+   editable ownership, and read-only protection;
+5. restore the original outer and component baselines without recomputing them
+   from mutated session content;
+6. validate the working directory and atomically publish the complete workspace;
+   and
+7. only then activate provider credentials, Files collection, and the harness.
+
+A missing, expired, corrupt, wrong-generation, writable, partially restored, or
+unsupported attachment MUST fail closed. Continuation MUST NOT select another
+cached component, reacquire source bytes, publish empty roots, or discard
+editable mutations.
+
+### Checkpoint, retention, and cleanup
+
+The outer checkpoint MUST exclude every source destination and all source bytes.
+Each editable Git or OCI root MUST have a separate private checkpoint and retain
+its baseline identity. Read-only roots are reattached from immutable component
+publications. Checkpointing and restore MUST be no-follow, mount-aware, bounded,
+and cancellation-safe.
+
+`retention: "session"` follows existing finite TTL and deletion. Authorized
+`persistent` retention pins the existing session and required references until
+explicit deletion or applicable operator policy; it does not create another
+scheduler. Polling and replay MUST NOT extend retention.
+
+Cleanup MUST first make the session unavailable, stop descendants, unmount every
+source destination, verify mount absence, remove editable copies and outer
+state, and release composition/component references exactly once. Hydrate,
+restore, delete, cancellation, and restart reconciliation MUST follow the same
+unmount-before-traversal rule. An uncertain or failed cleanup MUST quarantine the
+path, keep it unavailable and accounted, and permit confined idempotent retry.
+
 ## Implementation phases
 
-Each phase ends with observable proof. Source inspection or mock-forwarding
-assertions are not sufficient.
+Every phase ends in observable behavior through the real boundary. Source-text
+inspection and mock forwarding are not sufficient proof.
 
-### Phase 1: Pin the baseline and record stock behavior
+### Phase 1: Rename the downstream and pin the upstream baseline
 
-**Outcome:** the unchanged baseline is reproducible and the fork has regression
-proof for the lifecycle being extended.
+**Outcome:** AllAgents Gateway has stable distribution identity and a recorded,
+reproducible upstream relationship.
 
 Work:
 
-1. Pin the initial examined baseline to HarnessRouter `v0.25.4`, commit
-   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`, and UHP `2026-09-12`. Before
-   implementation, record the exact release baseline actually selected; move it
-   only in a standalone synchronization change.
-2. Preserve `HarnessRouter/harnessrouter` as the upstream remote and
-   `allagentsdev/harnessrouter` as the existing fork.
-3. Pin base image, OS packages, Git and OCI libraries/tools, Codex, OMP,
-   Promptfoo, lockfiles, and CI actions. Build the unchanged image first.
-4. Instrument focused characterization scenarios for fresh empty-root Git
-   hydration, every pre-turn workspace write, attached-file/harness-asset
-   ordering, root-Git commands and excludes, produced-file walks, checkpoint Git
-   mutation, archive creation/restoration, continuation clearing, cancellation,
-   TTL cleanup, deletion, and restart. Record path, ordering, symlink policy, and
-   whether each operation crosses a filesystem mount.
-5. Capture stock UHP request/stream/error behavior for requests without
-   `metadata.workspace`; these traces become compatibility fixtures.
-6. Record the precise gateway/session/hydrate/runner/checkpoint/files call path
-   and the concrete root Git, tar/archive, file-walk, and cleanup entry points
-   that must receive source-destination exclusions. Do not add a generic
-   extension framework.
+1. Record HarnessRouter `v0.25.4`, commit
+   `5f82db1d1f13ea25b8ed0893c38b5b7d2e3e57e3`, and UHP `2026-09-12` as the
+   initially examined fork point. The implementation PR MUST record the exact
+   selected baseline and move it only in a standalone synchronization change.
+2. Rename downstream repository/package references from
+   `allagentsdev/harnessrouter` to `allagentsdev/allagents-gateway`, the image to
+   `ghcr.io/allagentsdev/allagents-gateway`, the service to `allagents-gateway`,
+   and user-facing product text to AllAgents Gateway.
+3. Preserve `HarnessRouter/harnessrouter` as upstream, the upstream license and
+   notices, copyright/attribution, commit history where available, and a durable
+   fork-point record. Configure origin as `allagentsdev/allagents-gateway`.
+4. Define selective upstream intake: inspect each upstream diff, preserve the
+   downstream schema/security/lifecycle contract, and run stock plus downstream
+   gates before accepting it. Do not mirror upstream blindly.
+5. Pin base image, OS packages, Git and OCI libraries/tools, Codex, OMP,
+   Promptfoo, lockfiles, and CI actions. Build the unchanged renamed baseline.
+6. Characterize fresh root-Git hydration, pre-turn writes, Files collection,
+   checkpoint Git mutation/archive/restore, continuation clearing,
+   cancellation, TTL, deletion, cleanup, restart, and provider routing.
+7. Save stock UHP traces for requests without `metadata.workspace`. Identify the
+   exact branch point where workspace-backed requests stop using root-Git change
+   collection while stock requests remain unchanged.
 
 Exit proof:
 
-- a clean checkout builds the unchanged pinned image;
-- characterization runs demonstrate all seven inventory facts; and
-- a stock request completes through each supported existing route with no
-  workspace-specific state.
+- repository, image, service, and product surfaces use only the new downstream
+  names while attribution and the upstream remote/fork point remain intact;
+- a clean checkout builds the pinned image; and
+- stock requests complete with byte-for-byte compatible status/stream fixtures
+  and no workspace-specific state.
 
-### Phase 2: Add request validation and immutable session binding
+### Phase 2: Implement the ordered closed request schema
 
-**Outcome:** the gateway accepts the exact first-turn descriptor and binds it to
-the existing session transition without changing stock requests.
-
-Primary surfaces are the existing UHP request handling/session resolution in
-`gateway/app.py`, the existing gateway-to-runner turn envelope, existing session
-persistence, focused integration tests, changelog, and extension documentation.
+**Outcome:** request validation decides ownership and collisions before source or
+session side effects.
 
 Work:
 
-1. Parse only `metadata.workspace`; keep unrelated metadata behavior unchanged.
-2. Apply metadata byte, nesting, list-count, and string-length bounds before
-   session allocation or source work.
-3. Strictly validate the closed union, snake_case names, access, retention,
-   repository-mode destinations, working-directory syntax, direct `sha256:`
-   digest syntax, request-decidable input/asset/reserved-path collisions, and
-   the rule that `read_only` inputs may target only paths outside effective
-   source destinations. Snapshot-root validation occurs at verified-plan
-   resolution because the request does not carry those destinations.
-4. Authorize persistent retention before source resolution or generation lookup.
-5. Canonically serialize the effective descriptor with the default
-   `retention: "session"` and calculate its digest.
-6. Extend the existing new-session transition with pending/ready workspace
-   binding states. Do not add another response or session identity.
-7. Reject the descriptor on every reused session path before hydration. On a
-   workspace-bound continuation, derive source/access/retention/cwd/harness from
-   stored state and reject a supplied harness mismatch through existing session
-   rules.
-8. Preserve idempotency: the owning initial request performs one binding; a
-   duplicate receives the same response/session result and cannot claim another
-   generation or attachment.
-9. Map validation, authorization, reuse, and binding failures into bounded UHP
-   errors without internal paths or secret/catalog details.
-10. Add public provenance only after attachment is ready. Retrieval/replay uses
-    stored provenance rather than resolving it again.
+1. Parse only `metadata.workspace` and reject obsolete schema names.
+2. Apply metadata byte, nesting, list, string, digest, URL, and path bounds during
+   parsing.
+3. Validate the closed `sources` array for counts `1..128`, entry-kind fields,
+   canonical Git HTTPS URLs, OCI direct digests, required destinations, global
+   pairwise non-overlap, and working-directory syntax.
+4. Normalize UHP inputs, generated assets, reserved paths, credentials, caches,
+   attachment/checkpoint locations, and source destinations in one request-level
+   ownership validator. Reject every collision at or below a destination and
+   unsafe ancestor before network or cache work, regardless of access mode.
+5. Authorize persistent retention before source lookup. Canonically serialize
+   the descriptor with defaults and calculate its digest.
+6. Extend the existing new-session transition with pending and ready workspace
+   binding states. Reject metadata on every reuse/continuation path before
+   hydration.
+7. Preserve initial-request idempotency and bounded UHP error details. Commit
+   public provenance only after atomic attachment readiness.
 
-Proof includes valid descriptors for both source kinds; repository request
-counts `0`, `1`, `128`, and `129`; multiple repository entries; rejection of
-request-declared destination `.`, normalized aliases, equality, ancestor
-overlap, and request-decidable input/asset/reserved-path collisions; acceptance
-of read-only outer inputs and rejection of read-only repository-source inputs;
-default retention; authorized and unauthorized persistence; invalid unions,
-fields, digests, paths, and destinations; workspace injection on both
-continuation mechanisms; idempotent duplicates; harness mismatch; exact
-response-schema fixtures for both provenance variants; and a byte-for-byte
-stock trace for requests without the descriptor. Snapshot root counts,
-destinations, files outside roots, and snapshot-input collisions are proved in
-the OCI phase after verified workspace-manifest resolution.
+Exit proof covers zero, one, 128, and 129 sources; all-Git, all-OCI, and mixed
+arrays; repeated component identity at different destinations; ordering;
+unknown/obsolete/wrong-kind fields; normalized root/equal/ancestor overlap;
+input/asset/reserved collisions; outer inputs; URL/digest/path bounds;
+retention authorization; both continuation mechanisms; idempotent duplicates;
+harness mismatch; and an unchanged stock trace. Network and component counters
+MUST remain zero for every request-decidable rejection.
 
-### Phase 3: Add generation attachment and mount-aware workspace lifecycle
+### Phase 3: Add canonical manifests and manifest-based collection
 
-**Outcome:** one runner seam publishes immutable generations and attaches only
-their declared source roots inside the existing private writable workspace.
-
-Primary surfaces are existing runner/session hydrate code in `runner/server.py`,
-the gateway transport, root Git initialization and cursor code, checkpoint
-archive/restore, Files walking, startup reconciliation, and cleanup scheduling.
+**Outcome:** workspace-backed correctness depends only on canonical filesystem
+state, never Git state.
 
 Work:
 
-1. Add one internal `resolve -> claim/reuse -> materialize -> verify -> publish ->
-   attach` pipeline selected by the closed source union. It is not a public API
-   or plugin registry.
-2. Preserve fresh allocation of the existing private writable workspace and its
-   stock-like root Git/bookkeeping. Thread one immutable destination set through
-   root Git, produced-file walks, checkpoint tar/archive, hydrate clearing,
-   deletion, and cleanup. Each operation must use explicit path excludes plus
-   no-follow/no-cross-mount traversal; a read-only mount is not itself an
-   adequate traversal guard.
-3. Persist mirror refresh/snapshot state, generation claims, staging,
-   publication, session references, attachment manifests, per-root mount
-   evidence, editable-copy identity, and attachment-ready transitions using the
-   runner's current durable state and recovery ordering.
-4. Build and verify the canonical source manifest: 1–128 non-root pairwise
-   non-overlapping destinations; normalized relative path, type, mode,
-   size/content identity, link target, repository ownership, immutable
-   generation-root identity, and optional normalized Git-history declaration.
-5. Reject mountpoints or ancestors that collide with restored outer files,
-   symlinks, root Git state, UHP inputs, generated assets, or another root. Create
-   only empty non-link destination directories and required ancestor scaffolding.
-6. For `read_only`, create namespace-confined per-session bind mounts from exact
-   generation repository roots. Enforce read-only, `nodev`, and `nosuid`, preserve
-   executable file bits, retain no writable backing descriptor/alias, and fail
-   closed on any mount or remount error. Never use symlinks or overlay copy-up.
-7. For `editable`, create per-root inode-independent private writable copies.
-   Apply source-targeting inputs only after copies exist. Apply allowed outer
-   inputs and generated assets in the writable workspace before final baselines.
-8. Adapt checkpointing so the outer archive explicitly excludes every source
-   destination and contains no source bytes. Store attachment manifest/evidence
-   separately. Checkpoint editable roots through per-root collectors; never let
-   the outer tar traverse them. Root Git may retain stock-like bookkeeping for
-   outer paths but must exclude all source destinations from index, commit,
-   status, diff, and cleanup.
-9. Implement the exact continuation order specified above: validate binding,
-   unmount stale roots, hydrate/restore outer state, validate empty non-link
-   mountpoints and collisions, reattach exact read-only roots or restore exact
-   editable roots, verify identities/protection, rebuild cursors, then start the
-   harness. No source endpoint or replacement generation is allowed.
-10. Unmount all source destinations before hydrate, archive restore, deletion, or
-    cleanup. Partial mount sets unwind in reverse order. Mount absence,
-    attachment evidence, references, private copies, and cleanup marks reconcile
-    idempotently after restart; uncertainty quarantines and fails closed.
-11. Reuse existing user/sandbox isolation, process groups, timeouts,
-    cancellation, TTL, deletion, and cleanup. Source workers inherit
-    cancellation and stop descendants before terminal acknowledgement.
-12. Expose separate bounded counters/events for ref resolution, remote pack
-    acquisition, generation build/publication/hit, per-root mount/unmount,
-    mount verification/failure, no-cross-mount exclusions, outer checkpoint,
-    editable copy/checkpoint, continuation reconciliation, quarantine, and
-    cleanup. Do not log credentials, origins, backing paths, or raw tool output.
+1. Implement canonical streaming manifest creation and comparison for regular
+   files, binary bytes, directories, executable/mode semantics, symlinks, and
+   supported hardlinks.
+2. Define deterministic ordering/serialization and content-digest algorithms.
+   Enforce no-follow traversal, ownership boundaries, source and aggregate
+   limits, and cancellation.
+3. Publish one immutable baseline manifest with every component. Create and
+   persist the outer baseline only after initial outer inputs/assets exist and
+   before the first harness process.
+4. Route workspace-backed Files/evaluation collection through final-manifest
+   comparison for the outer workspace and every source. Remove root/nested Git
+   commits, indexes, status/diff, ignore behavior, and rename detection from the
+   correctness path. Leave the stock collector untouched for requests without
+   workspace metadata.
+5. Normalize ownership and exclude `.git`, runner state, credentials, caches,
+   attachment evidence, checkpoint metadata, harness-private ephemeral state,
+   and component-store paths.
+6. Persist baseline identities across checkpoint/continuation and fail closed on
+   missing or mismatched baseline evidence.
 
-Proof mounts deterministic Git and OCI generations through the real runner. Two
-read-only sessions have different writable workspace roots and independently
-writable outer inputs, generated assets, `.harness`, HOME, and outputs, but
-`stat`/filesystem evidence shows their matching source paths bind the same
-generation inodes with no clone, extraction, materialization, hard link,
-symlink, or tree copy. Writes by path, cwd, rename, link, descriptor, and
-alternate alias fail with the filesystem's read-only error and leave the
-generation and sibling unchanged. Two editable sessions have independent source
-inodes and mutations.
+Exit proof mutates outer, Git, and Git-free OCI trees and observes identical
+add/modify/delete/mode/symlink/binary results. It changes Git index, commits,
+ignore files, and rename heuristics without changing final-tree results. It
+proves delete-plus-add is accepted as a rename representation, initial trees are
+not reported, exclusions never leak, read-only trees remain equal, and a stock
+request still uses unchanged root-Git behavior.
 
-Checkpoint proof mutates outer state, creates a source sentinel larger than the
-archive, and shows the archive contains the outer mutation and attachment
-manifest but neither sentinel nor any source byte/path. Instrumented root Git,
-tar/archive, Files, hydrate, and cleanup walkers observe zero entries below mount
-destinations. Continuation first restores that outer mutation, validates empty
-mountpoints, then reattaches the exact recorded roots and preserves executable
-bits. Restart at every persisted mount/unmount/checkpoint transition is
-idempotent; failed mounts expose no partial source. A stock session still uses
-its unchanged root Git/checkpoint path.
-### Phase 4: Implement repository composition with mandatory depth-2 acquisition
+### Phase 4: Add independent component storage and atomic composition
 
-**Outcome:** repository mode deterministically builds one generation from one or
-more repositories while retaining bounded recent Git history.
+**Outcome:** components singleflight and cache independently, while consumers see
+all requested roots or none.
 
 Work:
 
-1. Validate each caller URL under the fixed deployment egress policy. Callers may
-   not supply credentials, proxy configuration, Git config, or transport
-   options. Re-authorize redirects and resolved addresses; isolate Git config and
-   disable interactive helpers, hooks, filters, alternate protocols, submodules,
-   and LFS hydration.
-2. Resolve an omitted ref through the advertised symbolic default. Resolve an
-   explicit advertised branch or tag, peel annotated tags as required, and
-   record the exact commit before fetch. Reject ambiguous, missing, unsupported,
-   or non-commit targets.
-3. Maintain one operator-only bare shallow acquisition mirror per canonical URL.
-   Serialize every write for that repository through the same mirror and
-   singleflight concurrent refreshes for the same normalized ref request.
-4. On a mirror miss, fetch exactly depth 2 with `--depth=2` into a private
-   bounded refresh area, verify it, and atomically import its pack/object and
-   shallow-boundary state. Fetch only the selected advertised branch/tag path.
-   Do not retry with a larger depth, `--unshallow`, full clone, arbitrary
-   object-ID fetch, another ref, or another source mode.
-5. Verify the fetched tip/peeled commit exactly equals the commit observed during
-   resolution. A ref movement race fails the refresh rather than caching or
-   binding different bytes.
-6. Publish an immutable commit snapshot inside the mirror cache. A cache hit for
-   the exact canonical URL, commit, depth, and policy performs no clone or remote
-   pack transfer. No session can access the mirror path or a writable mirror file
-   descriptor.
-7. Export the selected cached commit into generation staging as a self-contained
-   repository with no alternates or writable link to the mirror. Preserve
-   `.git/shallow` and sufficient normalized administrative state for recent
-   offline `git log`, parent inspection, and diff.
-8. For a merge tip, preserve both fetched parent edges at depth 2 and validate
-   the shallow boundary rather than flattening the merge.
-9. Reject a server that cannot satisfy the bounded shallow fetch. Return a coded
-   source error and do not deepen, full-clone, strip history, or fall back to OCI.
-10. Check out the exact detached commit under each declared non-root destination.
-    Reject destination `.`, overlap, submodule gitlinks, and LFS pointer-backed
-    content rather than fetching them.
-11. Enforce destination shape and non-overlap before network work, then build all
-    repositories into one staging tree. No repository may create source outside
-    its destination or add undeclared root files; ancestors are scaffolding only.
-12. Validate each repository's `HEAD`, index/worktree equality at publication,
-    shallow metadata, closed refs/config, object reachability for the retained
-    depth, file modes, links, bytes, inodes, and absence of credentials/remotes
-    that would cause later network use.
-13. Compute exact generation identity from canonical URL identity, resolved
-    commit, destination, fixed depth `2`, acquisition-policy revision, and layout
-    policy. Preserve requested URL/ref separately as provenance.
-14. Clean incomplete mirror refresh, repository staging, and descendants on
-    error, timeout, cancellation, lost claim, or restart without invalidating a
-    previously verified commit snapshot or referenced generation.
+1. Add durable component claim, staging, verification, atomic publication,
+   lease, quarantine, and cleanup states under runner-owned `/data`.
+2. Key components without destination/session concerns. Build composition
+   identity from the ordered exact component identities and destinations; store
+   references rather than copied source bytes.
+3. Resolve and claim independent entries concurrently within bounded worker,
+   network, disk, and aggregate request limits. Detach cancelled waiters without
+   cancelling a component still needed elsewhere.
+4. Construct the outer workspace and all source attachments in an inaccessible
+   staging path or private mount namespace. Add one atomic publish/handoff plus
+   ready transition. Reverse-unwind every partial mount/copy/reference on error.
+5. Implement identical read-only bind and editable copy/reflink behavior for Git
+   and OCI. Verify mount flags, no writable aliases, component identity, and
+   editable inode independence.
+6. Thread the immutable destination map through Files, archive, hydrate, restore,
+   delete, and cleanup with explicit excludes and no-cross-mount traversal.
+7. Add bounded metrics for component resolution/acquisition/hit/publication,
+   composition commit/hit/rollback, mount/copy, manifest creation/comparison,
+   checkpoint, reconciliation, quarantine, and cleanup without paths or secrets.
 
-Behavior proof covers rejection of root destination `.`; one repository at a
-non-root top-level destination; several sibling/nested-path destinations; the
-same URL at different refs and destinations; omitted default, branch,
-lightweight tag, annotated tag, and moving-ref rejection; pairwise non-overlap;
-depth exactly 2; `.git/shallow`; two-entry recent offline history; merge-tip
-parents and diff semantics; detached exact commit; no network during attached
-`git log`; submodule/LFS rejection; unsupported shallow server with no fallback;
-cancellation; restart cleanup; and exact provenance. Concurrent cold requests
-produce one advertised-ref refresh, one remote pack fetch, one verified mirror
-snapshot, and one generation publication. After resolution confirms the same
-exact identity, a second read-only request performs zero clone, pack transfer,
-checkout/materialization, or tree copy and bind-mounts the same immutable
-repository-root inodes while its writable outer state remains isolated.
+Exit proof races identical and partially overlapping compositions. Each exact
+component publishes at most once; a warm Git/cold OCI request reuses Git while
+building only OCI; a warm OCI/cold Git request does the inverse. Ordered
+composition IDs change with order/destination while component IDs stay stable.
+Injected failure in the last of several roots exposes no source or runnable
+workspace. Two read-only sessions share component inodes but not outer state;
+two editable sessions share no mutable inode.
 
-The release notes must state plainly that depth 2 reduces transferred history,
-not the checked-out working-tree bytes. Large repositories still require the OCI
-snapshot source and its release gate.
+### Phase 5: Implement depth-2 Git components
 
-### Phase 5: Implement mandatory OCI workspace snapshot materialization
-
-**Outcome:** the same generation pipeline safely restores an operator-cataloged,
-digest-pinned workspace snapshot with no Git fallback.
-
-Deployment configuration owns a bounded snapshot catalog. Each `snapshot_name`
-maps to one operator-controlled registry/repository origin, credential reference,
-TLS policy, allowed media types, and resource policy. The request and public
-provenance never reveal those private values. This catalog is HarnessRouter
-configuration; it is not `workspace.yaml`.
+**Outcome:** each Git entry produces one verified immutable component with useful
+bounded recent history.
 
 Work:
 
-1. Require a direct OCI image manifest digest. Reject tags, mutable references,
-   manifest indexes/lists, caller-selected repositories, and catalog/digest
-   mismatches.
-2. Fetch the direct image manifest, config, and workspace manifest only from the
-   selected catalog entry. Implement bounded registry authentication and
-   exact-host redirect policy without exposing credentials to the harness,
-   session workspace, logs, response, or provenance. Do not request layers yet.
-3. Verify every descriptor digest and size. Require the declared
-   `workspace_manifest_digest` to identify the exact workspace manifest. Before
-   layer acquisition, validate its 1–128 roots, non-root and non-overlap rules,
-   absence of source files outside roots or in ancestor scaffolding, and every
-   UHP input/generated-asset/reserved-path collision against the authoritative
-   root map.
-4. Fetch referenced layers and stream decompression/extraction inside the fixed
-   v1 envelope: at most 64 distributable tar/gzip/zstd layers; a 4 MiB image
-   manifest; a 128 MiB workspace manifest; 8 GiB total compressed layer bytes;
-   32 GiB expanded source bytes; 500,000 entries; 4 GiB per regular file; paths
-   of at most 4096 UTF-8 bytes and 128 components; and 1 MiB per PAX or extended
-   header. For each layer and the aggregate artifact,
-   `expanded_bytes / max(compressed_bytes, 1)` must not exceed `100`. Enforce
-   these bounds plus inode, output, and wall-time limits during streaming.
-   Deployment configuration may lower but cannot raise them without a contract
-   revision.
-5. Apply OCI layers in order with correct file and opaque-directory whiteout
-   semantics. Whiteouts are extraction instructions and must never appear in the
-   published workspace. Reject malformed whiteouts and type transitions not
-   representable by the workspace manifest.
-6. Reject absolute paths, traversal, NULs, ambiguous separators, duplicate
-   conflicting entries, devices, FIFOs, sockets, unsafe sparse files, and other
-   unsupported types. Validate every symlink and hardlink target against its
-   owning declared repository root; reject links into another root or the
-   writable outer workspace, plus escaping, dangling-required-target,
-   forward-link, and link-cycle cases outside the supported bounded model.
-7. Validate final paths, types, modes, sizes, content digests, links, repository
-   roots, and destination non-overlap against the workspace manifest. Extra,
-   missing, or changed source-visible entries fail before publication.
-8. Support tree-only repository roots and optional normalized offline Git
-   history. For a history-bearing root, require detached `HEAD`, exact
-   index/tree/worktree equality, closed object reachability and declared object
-   digest, bounded refs/config, and no remotes, credentials, alternates, hooks,
-   includes, worktrees, replace/graft state, or unsafe administrative files.
-   Tree-only roots must not contain undeclared `.git` state.
-9. Return the same canonical manifest/generation envelope as repository mode.
-   Include direct image/workspace digests and snapshot name in identity and exact
-   provenance; exclude registry origin and credentials.
-10. On any resolution, registry, digest, extraction, manifest, Git-history,
-    cancellation, or capacity failure, terminate descendants, remove staging,
-    and return the source-specific error. Never clone Git, select a different
-    digest, or use a stale generation as fallback.
+1. Enforce canonical public HTTPS and the fixed egress/redirect/address policy.
+   Isolate Git config and disable interactive credentials, hooks, filters,
+   alternates, alternate protocols, submodules, and LFS hydration.
+2. Resolve omitted ref through advertised symbolic default; resolve advertised
+   branches and lightweight/annotated tags to exact commits. Reject ambiguous,
+   missing, unsupported, non-commit, or moved targets.
+3. Serialize one operator-only bare shallow mirror per canonical URL. Fetch the
+   selected advertised path with exactly `--depth=2` into bounded private state,
+   verify the expected commit and shallow boundary, then atomically import.
+4. Export a self-contained detached checkout with normalized bounded `.git`
+   metadata and no writable mirror link. Preserve merge parents when available
+   within depth 2. Reject gitlinks and LFS pointer-backed content.
+5. Compute/verify the canonical component baseline, enforce per-source and
+   aggregate checkout bounds, and publish independently of destination.
+6. Ensure exact identity hits transfer no pack and perform no checkout, tree
+   copy, baseline recomputation, or publication after optional ref confirmation.
 
-Proof uses a local authenticated registry and malicious fixtures for
-digest/media mismatch, indexes, redirects, authentication, truncation,
-compression bombs, layer limits, whiteouts and opaque whiteouts, traversal,
-path/type/link attacks, devices, sparse files, cancellation, partial cleanup,
-and restart. Root-map proof covers 0, 1, 128, and 129 roots; destination `.`;
-equal/ancestor overlaps; source files outside roots or in ancestor scaffolding;
-and a `read_only` input collision rejected after workspace-manifest verification
-but before any layer request or outer workspace write. Positive fixtures cover a
-tree-only workspace, multiple declared repository roots, normalized offline Git
-history, offline `git log`/`git blame`/historical diff, read-only attachment,
-editable copy, concurrent publication, and cache reuse with zero second-session
-registry or extraction work.
+Exit proof covers default, branch, lightweight/annotated tag, moved ref, same URL
+at different refs, depth exactly 2, `.git/shallow`, recent offline log/blame/diff,
+merge parents, detached exact commit, malicious redirects, unsupported shallow
+server, submodule/LFS rejection, cancellation, restart, and exact provenance.
+Concurrent cold requests perform one mirror refresh and component publication;
+an exact hit records zero source-byte work. Release notes state that depth 2
+limits history, not working-tree bytes.
 
-OCI implementation and this proof are required before v1 release. A passing Git
-path cannot waive or defer them.
+### Phase 6: Implement OCI source-tree components
 
-### Phase 6: Adapt produced-file collection for nested and multiple repositories
-
-**Outcome:** existing Files/artifact behavior reports turn-produced changes
-across composed workspaces without inventing a second file API.
+**Outcome:** each OCI entry produces exactly one verified tree component without
+Git fallback or implicit workspace roots.
 
 Work:
 
-1. Preserve the existing root Git cursor in the writable outer workspace.
-   Register every source destination in root Git's internal excludes and pass the
-   immutable destination set to every root Git command so it never traverses a
-   mounted or copied source root.
-2. Register source-manifest repository roots and history mode when the
-   attachment becomes ready. The set is immutable for the session.
-3. At each turn boundary, record the outer root-Git cursor plus a cursor for each
-   editable declared repository root: Git `HEAD`/index/worktree state for
-   history-bearing roots and manifest/file identity for tree-only roots.
-   Read-only roots require no change cursor because the filesystem prevents
-   mutation.
-4. Collect the union of writable outer-workspace and editable-root additions,
-   modifications, deletions, renames, and mode changes relative to the turn
-   baseline. Normalize paths, assign each path to the most specific declared
-   owner, deduplicate it, and preserve existing file size/count/type limits.
-5. Never expose `.git` administrative files, generation-store paths, mount
-   internals, credentials, harness assets, or checkpoint internals as produced
-   files.
-6. Do not report immutable or initial editable source files merely because they
-   arrived during first-turn composition. Report only changes after the
-   established source/turn baseline.
-7. In `read_only`, any attempted source mutation fails at the filesystem
-   boundary, but additions and changes elsewhere in the writable workspace are
-   collected normally. No collector crosses a source mount.
-8. In `editable`, source changes remain private to the session and are visible
-   on continuation and through the existing file and artifact APIs.
-9. Preserve collection-before-checkpoint ordering. The outer checkpoint archive
-   explicitly excludes every source destination. Read-only sources are
-   reattached from the generation; editable sources use their separate private
-   source-root checkpoint path. Cancellation cannot publish a partial cursor or
+1. Implement the bounded operator catalog and direct image-manifest resolution.
+   Keep registry/repository origin, credentials, TLS configuration, and redirects
+   server-side.
+2. Fetch and verify the image manifest, config, and exact canonical source
+   manifest before layers. Validate relative ownership, all expected final
+   entries, links, modes, sizes, digests, and known per-source/aggregate limits.
+3. Stream bounded layers, verify descriptors, apply whiteouts, and enforce path,
+   type, link, sparse-file, compression-ratio, inode, byte, output, cancellation,
+   and time limits.
+4. Confine links to the one owning component root and reject multi-root or outer
+   workspace content. Match the final tree exactly to the canonical source
+   manifest before publication.
+5. Support Git-free trees and optionally normalized bounded Git administrative
+   data for agent convenience. Neither form changes manifest-based evaluation.
+6. Ensure exact identity hits make zero registry requests, extraction, tree copy,
+   baseline recomputation, or publication.
+
+Exit proof uses an authenticated local registry and malicious fixtures for
+catalog/digest/media mismatch, indexes, redirects, authentication, truncation,
+compression bombs, limits, whiteouts, traversal, path/type/link attacks,
+devices, sparse files, cancellation, partial cleanup, and restart. Positive
+fixtures cover Git-free and history-bearing trees, read-only and editable
+attachment, two independent OCI entries, exact-hit reuse, and source-manifest
+rejection before the first layer request.
+
+### Phase 7: Make checkpoint and continuation composition-aware
+
+**Outcome:** complete compositions survive turns and restarts without source
+traffic or baseline loss.
+
+Work:
+
+1. Archive the writable outer workspace with every destination excluded and
+   no-follow/no-cross-mount enforcement. Store no source bytes in the outer
    checkpoint.
+2. Preserve every editable Git or OCI root in an independent private checkpoint;
+   preserve immutable component references for read-only roots. Retain original
+   baseline identities separately from mutable final state.
+3. Implement the staged continuation order: validate binding/evidence, unmount
+   stale roots, restore outer state, restore editable roots or exact read-only
+   leases, verify all roots, restore baselines, validate cwd, then atomically
+   publish.
+4. Reconcile every durable transition after restart. Missing/corrupt evidence,
+   publication, checkpoint, mount, or baseline fails closed without network or
+   replacement component selection.
+5. Make cancellation, expiry, explicit deletion, persistent retention, cleanup,
+   quarantine, and reference release composition-aware and idempotent.
 
-Proof covers changes at workspace root and in every nested repository; two
-repositories changed in one turn; same filename under different destinations;
-add/modify/delete/rename; tree-only OCI roots; history-bearing OCI roots; Git
-shallow roots; paths outside repository destinations; ignored files under the
-existing policy; read-only denial; editable continuation; cancellation during
-collection; restart; bounds; and absence of `.git`, credentials, generation
-paths, or duplicate records.
+Exit proof checkpoints mixed compositions after mutating outer, editable Git,
+and editable OCI paths. Continuation preserves every mutation and baseline,
+makes zero source requests, and reports the same final-tree changes. A read-only
+continuation rebinds exact component inodes. Restart and cancellation are
+injected at each claim, publication, composition, mount/copy, baseline,
+checkpoint, handoff, and cleanup transition. No partial workspace becomes ready.
 
-### Phase 7: Wire Codex, OMP, and the existing provider gateway
+### Phase 8: Wire harnesses and provider boundary
 
-**Outcome:** both supported harnesses execute in the attached existing workspace
-without gaining source or long-lived provider credentials.
+**Outcome:** Codex and OMP run in the atomically composed workspace without
+source or long-lived provider credentials.
 
 Work:
 
-1. Install exact pinned Codex and OMP releases and enable only required release
-   backends with `HR_BACKENDS=codex,omp`.
-2. Define stable downstream custom harnesses such as `allagents-codex` and
-   `allagents-omp` with explicit model allowlists.
-3. Configure two logical connections to the same external OAuth-to-OpenAI-
-   compatible gateway: Responses for Codex and OpenAI Chat Completions for OMP.
-   Each harness has exactly its matching connection and no fallback.
-4. Retain brokered sandbox credentials. The long-lived external gateway key
-   remains server-side; the harness receives only the existing short-lived,
-   scoped turn credential and loopback route.
-5. Start each harness in the validated `working_directory` while keeping HOME,
-   skills, scratch, conversation, credential projection, and checkpoint control
-   in their current session-isolated locations.
-6. Reject unsupported models and any attempt to place provider URL, key,
-   transport, route, registry data, or source credentials in the request.
-7. Remove ephemeral OMP/Codex provider configuration before checkpoint and file
-   collection using existing broker lifecycle hooks.
-8. Provider failure returns the existing normalized failure and does not change
-   source, generation, access, attachment, harness, connection, or protocol.
+1. Pin Codex and OMP and enable only required backends with
+   `HR_BACKENDS=codex,omp` unless the renamed downstream configuration surface
+   adopts an equivalent key in the same change.
+2. Define stable `allagents-codex` and `allagents-omp` harnesses with explicit
+   model allowlists.
+3. Use the same external provider gateway through one Responses connection for
+   Codex and one Chat Completions connection for OMP, with no fallback.
+4. Retain server-side long-lived credentials and existing short-lived scoped
+   turn credentials/loopback route. Remove ephemeral provider configuration
+   before checkpoint and collection.
+5. Start each harness only after atomic attachment and from the validated working
+   directory. Keep HOME, skills, scratch, conversation, credentials, generated
+   assets, and checkpoint control in private outer locations.
+6. Reject caller provider, route, model, transport, source credential, and
+   registry overrides. Provider failure MUST NOT alter composition binding.
 
-Proof runs both harnesses against Git and OCI sources, at root and a nested
-working directory, in read-only and editable modes where applicable. It verifies
-that caller and provider credentials, registry credentials, broker tokens, and
-private origins are absent from process output, session/checkpoint files,
-produced files, artifacts, logs, and public metadata. An invalid provider
-credential or unsupported model causes no route fallback. A stock request still
-uses its original workspace path and provider behavior.
+Exit proof runs both harnesses against all-Git, all-OCI, and mixed compositions
+at outer and nested working directories in both access modes. It verifies that
+caller, Git, registry, broker, and provider secrets are absent from output,
+checkpoints, reported files, artifacts, logs, and public metadata. Unsupported
+models and bad credentials produce no route fallback. Stock requests retain
+their original provider path.
 
-### Phase 8: Exercise lifecycle, restart, cancellation, and cleanup
+### Phase 9: Run direct release-blocking E2E
 
-**Outcome:** source generations and attachments follow the existing HarnessRouter
-session lifecycle under failures and restarts.
+**Outcome:** the built image proves the consumer-visible component, composition,
+manifest, lifecycle, and compatibility contracts.
 
-Work and proof:
-
-1. Cancel during Git advertisement/fetch/checkout, OCI manifest/blob transfer,
-   decompression/extraction, generation wait, editable copy, harness execution,
-   checkpoint, and produced-file collection. Reap descendants before terminal
-   acknowledgement and remove only the cancelled request's incomplete state.
-2. Cancel one waiter on a shared generation build while another continues. If no
-   waiter remains, cancel the bounded builder. At most one complete publication
-   can survive.
-3. Restart after every durable transition: pending descriptor, source resolved,
-   claim held, staging populated, generation published, session reference
-   created, read-only attached, editable copy started/completed, attachment ready,
-   turn active, checkpoint written, cleanup marked, and reference released.
-4. Before readiness, reconcile incomplete staging and copies, publication
-   evidence, references, read-only mounts, editable ownership, session binding,
-   and cleanup marks. Never attach an uncertain generation or expose an editable
-   copy to another session.
-5. Prove a continuation after restart restores the exact generation/access/cwd;
-   editable mutations persist, read-only remains immutable, and no source
-   endpoint is contacted.
-6. Prove session expiry and explicit deletion first make the session unavailable,
-   then release the mount/private copy and generation reference exactly once.
-   Persistent retention survives ordinary session-idle cleanup until authorized
-   deletion.
-7. A cleanup failure quarantines the path and keeps it unavailable/accounted.
-   Retrying cleanup is confined, no-follow, and idempotent.
-8. Generation cleanup removes only unreferenced complete publications under
-   bounded operator policy. Active session references and authorized persistent
-   sessions prevent removal.
-
-### Phase 9: Add direct large-OCI Promptfoo E2E
-
-**Outcome:** the built image proves the consumer-visible contract, mandatory
-large-workspace behavior, and second-session generation reuse.
-
-Promptfoo calls the built image directly at the existing UHP Responses endpoint
-with a HarnessRouter caller API key. There is no adapter service or alternate
-execution protocol.
+Promptfoo MUST call the built image directly at the existing UHP Responses
+endpoint with an AllAgents Gateway caller API key. There is no adapter service or
+alternate execution protocol.
 
 Release-blocking scenarios:
 
-1. **Large OCI fixture:** publish a deterministic workspace snapshot with at
-   least 2 GiB of expanded source bytes and 100,000 source-visible filesystem
-   entries. Falling below either floor fails the gate. Include multiple
-   repository roots, a late-path sentinel, a nested working directory, and
-   normalized offline history. The release record publishes actual compressed
-   and expanded bytes, file/inode count, layer count, expansion ratio, and
-   manifest digests so “large” is measured rather than asserted.
-2. **First session:** start Codex read-only from the large snapshot, read the
-   sentinel, run recent offline Git history, and complete from the nested working
-   directory. Registry counters and runner metrics must show one bounded download,
-   extraction, verification, and atomic generation publication.
-3. **Second session reuse:** start OMP read-only with the identical snapshot
-   identity but a different session and harness. It must report the same
-   generation/manifest identity, share verified generation bytes while retaining
-   isolated session state, and complete with zero additional registry manifest or
-   blob requests, zero extraction, and zero publication. This is the required
-   second-session cache-reuse proof.
-4. **Editable reuse:** start an editable session from the same cached generation.
-   It performs no registry/extraction work, receives inode-independent private
-   bytes, mutates a file, continues without resending workspace metadata, and
-   leaves the read-only sessions and generation unchanged.
-5. **Repository matrix:** run depth-2 Git scenarios for default ref, branch, tag,
-   merge tip, several repositories, nested working directory, recent history,
-   and produced files across destinations. Concurrent cold requests must record
-   one serialized/singleflight mirror refresh, one pack fetch, and one generation
-   publication. A second read-only request with the same resolved source identity
-   must record zero clone, pack transfer, checkout/materialization, and tree copy;
-   it attaches the same immutable generation bytes while its session, runtime,
-   conversation, outputs, and cleanup remain isolated.
-6. **Access/lifecycle matrix:** prove that read-only source writes fail while
-   root-level generated assets, an allowed UHP input, and an agent-created output
-   remain writable and are checkpointed. Prove root Git, Files, archive, hydrate,
-   and cleanup do not traverse source mounts. Cover editable isolation, session
-   and authorized persistent retention, continuation, restart, expiry, explicit
-   deletion, cleanup retry, and missing/corrupt attachment with no
-   rematerialization.
-7. **Failure matrix:** cover malformed descriptor, root or overlapping
-   destination, bad working directory, unauthorized persistence, a `read_only`
-   input equal to or beneath a source destination, mountpoint/input/asset
-   collision, symlink attachment attempt, mount/remount failure, shallow-fetch
-   refusal, moving ref, submodule/LFS, wrong OCI digest, workspace-manifest
-   mismatch, extraction limit, path/link/type attack, cancellation in both
-   source modes, provider failure, and reused-session descriptor injection.
-   Assert there is no Git/OCI/provider fallback.
-8. **Provider matrix:** complete Codex/Responses and OMP/Chat Completions through
-   the one external provider gateway; reject route/model override; scan retained
-   and public surfaces for caller, source, registry, broker, and provider secrets.
-9. **Stock matrix:** replay baseline requests without workspace metadata and
-   compare status, stream ordering, checkpoint/files behavior, and provider route
-   with the characterization fixtures.
+1. **Large OCI component:** publish a deterministic source tree with at least
+   2 GiB expanded bytes and 100,000 source-visible entries, a late-path sentinel,
+   a nested working directory, and optional normalized offline history. Record
+   actual compressed/expanded bytes, entry count, layers, ratio, and digests.
+2. **Multiple OCI:** compose at least two independent OCI entries at sibling
+   destinations. Codex MUST read both; a second session MUST reuse both with zero
+   registry, extraction, copy, baseline, or publication work.
+3. **Mixed source:** compose at least two depth-2 Git and two OCI entries. OMP
+   MUST read all four, work from a nested directory, and report ordered
+   provenance and composition identity. Reject an overlap before network access.
+   Warm only one component, then prove the cold components build independently
+   and atomic visibility waits for every entry.
+4. **Editable OCI:** run a bug-fix evaluation with `access: "editable"`, mutate
+   an OCI file, add a binary, delete another path, change executable mode, and
+   retarget a symlink. Manifest comparison MUST report the exact final state;
+   continuation MUST preserve it; cache and sibling sessions MUST remain
+   unchanged.
+5. **Editable mixed composition:** mutate Git, OCI, and outer paths in one turn.
+   Prove ownership, deduplication, exclusion, binary/mode/link semantics, and
+   final-tree equality without Git status/index/commit dependence.
+6. **Git matrix:** cover default/branch/tag/merge, depth 2, several entries,
+   repeated identity at distinct destinations, recent offline history, cache
+   singleflight, and zero source-byte work on exact hit.
+7. **Atomicity and access:** delay/fail the last component and observe no partial
+   Files/harness/workspace visibility. Prove read-only mutation denial, shared
+   immutable inodes, editable independent inodes, writable outer assets, and
+   pre-network input/asset collision rejection for Git and OCI destinations.
+8. **Lifecycle:** cover continuation, restart, cancellation during each
+   acquisition kind and composition wait, expiry, authorized persistence,
+   explicit deletion, cleanup retry, corrupt evidence, and no rematerialization.
+9. **Failure/security:** cover malformed/obsolete descriptors, 0/129 sources,
+   root/overlap paths, per-source and aggregate limits, unsafe links/types,
+   digest mismatch, depth refusal, provider failure, reused-session injection,
+   and absence of Git/OCI/provider fallback or secret leakage.
+10. **Stock compatibility:** replay requests without workspace metadata and
+    compare status, stream ordering, root-Git Files/checkpoint behavior,
+    continuation, cancellation, and provider route with Phase 1 fixtures.
 
-Reports retain only sanitized request/result assertions, image/source digests,
-resource measurements, and source/generation counters. They never retain
-credentials, private registry origins, provider traffic, internal paths, or
-session volume contents.
+Reports MUST retain only sanitized assertions, image/source digests, measured
+resource values, and component/composition counters. They MUST NOT retain
+credentials, private origins, provider traffic, internal paths, or volume
+contents.
 
-### Phase 10: Publish a digest-pinned release
+### Phase 10: Publish the digest-pinned AllAgents Gateway release
 
-**Outcome:** a clean operator can deploy the exact tested image and reproduce the
-Git/OCI contract.
+**Outcome:** a clean operator can deploy the exact tested downstream image and
+reproduce the Git/OCI/mixed contract.
 
 Work:
 
-1. Review the fork diff against its exact upstream tag/commit. The workspace
-   changes must be limited to request/session binding, the existing hydrate and
-   attachment seam, immutable generation storage, Git/OCI materialization,
-   produced-file adaptation, focused lifecycle/configuration/docs, custom
-   harness/provider wiring, E2E, and release automation.
-2. Run the complete pinned upstream UHP conformance suite without exclusions and
-   the focused fork coverage against the image candidate.
-3. Run the Phase 9 Promptfoo matrix against that exact candidate digest.
+1. Review the downstream diff from the recorded upstream fork point, including
+   license/attribution, renamed distribution surfaces, selective upstream
+   changes, request/session binding, component caches, atomic composition,
+   manifests, lifecycle, provider wiring, E2E, and release automation.
+2. Run pinned upstream UHP conformance without exclusions and all focused
+   downstream gates against one image candidate.
+3. Run Phase 9 against that exact candidate digest.
 4. Build `linux/amd64` from pinned inputs, attach standard SBOM and provenance,
    and publish
-   `ghcr.io/allagentsdev/harnessrouter:<upstream-tag>-allagents.<revision>`.
+   `ghcr.io/allagentsdev/allagents-gateway:<upstream-tag>-allagents.<revision>`.
 5. Read back and deploy by manifest digest, for example
-   `ghcr.io/allagentsdev/harnessrouter:v0.25.4-allagents.1@sha256:<digest>`.
-6. Verify a fresh-volume deployment and a same-volume restart with both
-   harnesses, Git and large OCI, cache reuse, continuation, cancellation,
-   produced files, expiry, persistent deletion, generation cleanup, and stock
-   requests.
-7. Record upstream tag/commit, downstream source commit, UHP release, Codex/OMP/
-   Promptfoo versions, base and package pins, Git depth/policy revision, OCI
-   validation-policy revision, image digest, source fixture digests, SBOM,
-   provenance, and E2E report identities.
-8. Block release on any missing OCI implementation/evidence, large-workspace
-   failure, second-session rebuild, writable read-only alias, editable inode
-   sharing, continuation rematerialization, source fallback, credential leak,
-   stock regression, or unpinned input.
+   `ghcr.io/allagentsdev/allagents-gateway:v0.25.4-allagents.1@sha256:<digest>`,
+   under service name `allagents-gateway`.
+6. Verify fresh-volume and same-volume restart with both harnesses, Git, multiple
+   OCI, mixed composition, cache reuse, editable mutation, continuation,
+   cancellation, cleanup, manifests, and stock requests.
+7. Record upstream tag/commit and fork point, downstream commit, license/notices,
+   UHP and harness versions, base/package pins, Git/OCI/manifest/materializer
+   policy revisions, image digest, fixtures, SBOM, provenance, and E2E reports.
+8. Block release on any old downstream name in a public distribution surface,
+   missing attribution, obsolete accepted schema, partial composition exposure,
+   cache mutation, incorrect editable isolation, Git-based workspace evaluation,
+   continuation source traffic, credential leak, stock regression, or unpinned
+   input.
 
-Only after the downstream digest and evidence are available may maintainers
-prepare an upstream issue or proposal for the generic contract and runner seams.
-That work cites measured Git/OCI behavior, cache reuse, security failures, and
-stock compatibility. Upstream discussion, acceptance, UEP timing, and merge are
-outside the release critical path; a later upstream implementation replaces the
-fork delta only after equivalent behavior passes the same gates.
+Only after downstream evidence exists MAY maintainers propose generic seams
+upstream. Upstream issue, UEP, acceptance, merge, and release timing remain
+outside the downstream critical path.
 
 ## Failure contract
 
-Workspace failures use bounded stable detail codes under the existing UHP error
-shape. Exact HTTP mapping follows existing HarnessRouter conventions, but these
-observable distinctions must remain:
+Workspace failures MUST use bounded stable detail codes under the existing UHP
+error shape. Exact HTTP mapping follows pinned upstream conventions.
 
-| Condition | Required behavior |
+| Condition | Required behavior and timing |
 |---|---|
-| Invalid shape, field, digest, destination, or working directory | Reject before session source work |
-| Unauthorized `persistent` retention | Reject before source lookup/network work |
-| Workspace metadata on a reused session | Reject without changing the existing binding or TTL |
-| `read_only` input equal to or beneath a source destination | Repository mode rejects before network work; snapshot mode rejects after verified root-map resolution but before layers, outer writes, attachment, or harness execution; outer inputs remain valid |
-| Repository ref missing/ambiguous/moved | Fail repository resolution; no alternate ref/source |
-| Server cannot satisfy depth-2 fetch | Fail repository acquisition; no deepen/full clone/OCI fallback |
-| Submodule or LFS content | Fail repository validation; no helper execution |
-| OCI catalog name/digest/media mismatch | Fail snapshot resolution; do not reveal catalog origin |
-| Layer digest, whiteout, path, link, type, limit, or workspace-manifest failure | Fail extraction/validation; no publication or Git fallback |
-| Generation capacity unavailable | Return bounded retryable capacity failure before unbounded work |
-| Source timeout or cancellation | Stop descendants, detach waiter, clean incomplete private state |
-| Attachment evidence missing/corrupt on continuation | Fail closed; no source access or replacement generation |
-| Read-only write attempt | Filesystem denial; generation and sibling sessions unchanged |
-| Provider failure | Existing provider error; source and route binding unchanged |
-| Cleanup failure | Session/path remains unavailable and accounted for retry |
+| Invalid/obsolete shape, count, field, URL, digest, destination, overlap, or cwd syntax | Reject before cache lookup, network, session workspace write, or component claim |
+| Input/generated/reserved-path collision at or below any destination | Reject before network for Git and OCI and for both access modes; outer paths remain valid |
+| Unauthorized `persistent` retention | Reject before cache lookup or network |
+| Workspace metadata on reused session | Reject without changing binding, checkpoint, or TTL |
+| Git ref missing, ambiguous, non-commit, or moved | Fail that component; no alternate ref or source |
+| Server cannot satisfy depth-2 Git fetch | Fail that component; no deepen, full clone, history stripping, or OCI fallback |
+| Submodule or LFS-backed content | Fail Git validation; no helper execution |
+| OCI catalog, manifest, media, or digest mismatch | Fail that component without revealing catalog origin |
+| Invalid canonical OCI source manifest | Fail before any layer request |
+| OCI layer digest, whiteout, path, link, type, sparse, ratio, or final-manifest mismatch | Fail extraction; no publication or Git fallback |
+| Per-source limit exceeded | Stop that component, clean staging, and fail the composition |
+| Request aggregate limit/capacity exceeded | Cancel/detach request-local work, preserve valid shared work, attach none |
+| One component fails after siblings succeed | Publish no composition attachment; release request-local references; retain only independently valid shared cache entries |
+| Cancellation/timeout during component or composition work | Stop unneeded descendants, detach waiter, clean private staging, expose no partial roots |
+| Mount/copy/atomic handoff failure | Reverse-unwind all roots; session never becomes ready |
+| Missing/corrupt attachment, checkpoint, or baseline on continuation | Fail closed; no source access, replacement component, or empty root |
+| Read-only mutation attempt or changed final manifest | Filesystem denial/integrity failure; cache and siblings unchanged |
+| Manifest collection limit or unsafe traversal | Fail collection/checkpoint; do not publish an incomplete result/baseline |
+| Provider failure | Return existing provider error; source/composition/route binding remains unchanged |
+| Cleanup failure | Keep session/path unavailable, quarantined, and accounted for idempotent retry |
 
-Failures before attachment-ready expose no generation or source provenance.
-Failures after attachment-ready may return already committed public provenance,
-but never internal paths, registry origins, credentials, raw tool stderr, or
-private network details.
+Failures before attachment-ready MUST expose no component/composition provenance.
+Every failure after readiness MUST return the complete stored sanitized
+`metadata.workspace` object while excluding internal paths, registry origins,
+credentials, raw tool stderr, and private network details.
 
 ## Verification matrix
 
 | Gate | Observable evidence |
 |---|---|
-| Stock compatibility | Requests without `metadata.workspace` match pinned status, stream, hydrate/checkpoint, files, cancellation, and provider behavior |
-| Request/session binding | Both source variants bind only on a new session; continuation omits metadata and reuses the exact binding |
-| Multiple repositories | Pairwise non-overlapping destinations compose correctly; overlap and source escape fail before acquisition |
-| Git depth policy | Advertisement/default/branch/tag resolve exactly; fetch uses depth 2; tip matches; `.git/shallow`, recent history, and merge parents work offline; unsupported shallow fetch has no fallback |
-| OCI integrity | Direct manifest and workspace-manifest digests, fixed `100` per-layer and aggregate expansion-ratio ceilings, bounded layers, whiteouts, paths, links, types, tree manifest, and optional normalized Git history all verify |
-| Mandatory large OCI | A fixture with at least 2 GiB expanded source and 100,000 source-visible entries completes for both harnesses from the digest-pinned image; no Git acquisition occurs |
-| Generation publication | Concurrent identical Git or OCI identities singleflight to one acquisition and one publication; failed/partial mirror snapshots or generations never attach |
-| Git mirror/generation reuse | One operator-only bare shallow mirror exists per canonical repository identity; a second resolved-identity hit has zero clone/pack transfer/checkout/tree copy and directly attaches the same immutable generation |
-| OCI generation reuse | A second exact-digest request has zero registry request/extraction/tree copy/publication and directly attaches the same immutable generation |
-| Read-only sharing | Every matching session bind-mounts the same verified generation roots with zero copy; source writes and aliases fail while outer workspace paths remain private and writable |
-| Mount boundary | Destinations are non-root directories, symlinks are never attachments, mount flags/identity verify, and root Git, Files, archive, hydrate, and cleanup never cross a source mount |
-| Read-only checkpoint | The outer archive contains allowed inputs/outputs but no source bytes; continuation restores outer state, validates empty mountpoints, then reattaches the exact generation |
-| Editable isolation | Private source copies share no mutable inode; one session's changes and source-root checkpoint never alter the generation or siblings |
-| Working directory | Workspace root and valid directories inside or outside source roots become cwd; missing, file, traversal, and symlink escape fail before harness execution |
-| Produced files | Existing API reports writable outer and editable nested-root changes once, excludes source baselines/admin/mount/secrets, survives continuation/restart, and respects bounds |
-| Continuation | Exact access, retention, generation, provenance, cwd, harness, conversation, and editable mutations restore without source traffic |
-| Cancellation | Git, OCI, build wait, copy, harness, checkpoint, and collection cancellation reap descendants and leave recoverable state |
-| Restart | Every generation/attachment/cleanup transition reconciles before readiness; exact attachments resume or fail closed |
-| Cleanup | Expiry/deletion is unavailable-first, confined, idempotent, reference-safe, and quarantine-preserving on error |
-| Provider boundary | Codex Responses and OMP Chat Completions use one operator route with brokered credentials, no caller override, fallback, or retained secrets |
-| Release | GHCR image, digest, SBOM, provenance, source/runtime pins, UHP conformance, and direct Promptfoo reports identify the same candidate |
+| Naming/distribution | Repository is `allagentsdev/allagents-gateway`, image is `ghcr.io/allagentsdev/allagents-gateway`, service is `allagents-gateway`, and public product text says AllAgents Gateway |
+| Upstream relationship | `HarnessRouter/harnessrouter`, fork point, license, notices, attribution, and selective-intake procedure are recorded and intact |
+| Stock compatibility | Requests without `metadata.workspace` match pinned root-Git hydrate/checkpoint/Files, stream, continuation, cancellation, and provider behavior |
+| Closed ordered schema | `sources` accepts 1..128 Git/OCI/mixed entries; obsolete singular/bundle forms and unknown fields fail |
+| Pre-network ownership | Root/equal/ancestor destinations and all input/asset/reserved collisions fail with zero source/cache/component activity |
+| Component semantics | Every entry owns exactly one non-root tree; OCI never supplies a runtime or multi-root workspace |
+| Git depth policy | Default/branch/tag resolve exactly; depth is 2; shallow recent history and merge parents work offline; refusal has no fallback |
+| OCI integrity | Direct image and canonical source-manifest digests, pre-layer manifest validation, bounded layers, whiteouts, paths, links, types, and exact final tree verify |
+| Per-source/aggregate limits | Bytes, entries, ratio, path, file, inode, time, and output limits fail at the correct component or composition boundary |
+| Independent singleflight | Identical components publish once even across different compositions; unrelated entries proceed independently |
+| Composition identity | Ordered exact component identities plus destinations determine the ID without copying bytes |
+| Atomic composition | Late failure/cancellation exposes no subset to Files, checkpoint, provider, or harness; success reveals all roots together |
+| Git cache reuse | Exact hit has zero pack acquisition, checkout, tree copy, manifest recomputation, or publication |
+| OCI cache reuse | Exact hit has zero registry request, extraction, tree copy, manifest recomputation, or publication |
+| Read-only sharing | Matching sessions bind the same immutable component inodes with enforced flags/no aliases; outer paths remain private and writable |
+| Editable isolation | Git and OCI copies/reflinks share no mutable inode; mutations survive continuation and cannot affect cache/siblings |
+| Canonical baselines | Every component and outer workspace have persisted canonical path/type/digest/mode/link manifests |
+| Manifest final diff | Add/modify/delete/mode/symlink/binary changes across outer, Git, and Git-free OCI roots reflect final-tree equality independent of Git state |
+| Exclusions | `.git`, credentials, caches, runner state, attachment evidence, checkpoint metadata, and component paths never appear as reported changes |
+| Checkpoint | Outer archive contains no source bytes; editable roots persist separately; read-only roots reattach by exact identity |
+| Continuation | Exact composition/access/cwd/provenance/baselines and editable mutations restore with zero source traffic or fallback |
+| Cancellation/restart | Every claim/publication/composition/attachment/checkpoint/cleanup transition reconciles or fails closed |
+| Cleanup | Expiry/deletion is unavailable-first, mount-aware, confined, idempotent, reference-safe, and quarantine-preserving |
+| Multiple OCI E2E | Two independent OCI entries compose, execute, and reuse independently in a second session |
+| Mixed E2E | Git and OCI compose atomically; partial cache warmth builds only missing components; both harnesses consume the result |
+| Editable OCI E2E | Bug-fix evaluation mutates OCI content and manifest comparison reports exact persistent final changes |
+| Provider boundary | Codex Responses and OMP Chat Completions use fixed brokered routes with no caller override, fallback, or retained secrets |
+| Release | Candidate digest, GHCR image, deployed service, SBOM, provenance, pins, UHP conformance, and Promptfoo report all identify the same build |
 
 ## Definition of done
 
-1. `allagentsdev/harnessrouter` remains the existing fork and the release image is
-   `ghcr.io/allagentsdev/harnessrouter` with the established
-   `<upstream-tag>-allagents.<revision>` tag and a deployed manifest digest.
-2. The stock behavior inventory is protected by characterization coverage, and
-   requests without workspace metadata remain unchanged.
-3. The exact first-turn-only snake_case contract supports required `access`,
-   optional `retention`, required repositories or workspace-snapshot `source`,
-   and optional workspace-relative `working_directory`, with no nested version.
-4. Session state binds exact source provenance, generation/manifest identity,
-   access, retention, working directory, harness, and attachment evidence.
-   Continuation omits the descriptor and reuses that exact attachment.
-5. Repository mode supports multiple non-overlapping destinations, resolves
-   advertised default/branch/tag refs, fetches at depth 2, verifies the fetched
-   tip, preserves shallow recent history and merge semantics, and never silently
-   deepens or falls back. Submodules and LFS remain off.
-6. OCI snapshot mode is implemented and release-tested with direct manifests,
-   workspace-manifest verification, bounded layer extraction, whiteouts,
-   path/link/type checks, optional normalized offline Git history, and no Git
-   fallback. Callers never provide or observe registry origins or credentials.
-7. Repository acquisition uses one operator-only bare shallow mirror per canonical
-   repository identity, serialized singleflight refresh, immutable exact-commit
-   snapshots, and a separate immutable multi-repository generation. OCI uses the
-   exact digest-keyed generation cache. Identical normalized source identities
-   publish once; access/retention/cwd/harness/session do not fragment identity.
-8. Every matching read-only session leases and directly binds the same verified
-   generation bytes with zero clone, source-byte transfer, materialization, or
-   tree copy. Mirror internals are never session-visible. Editable sessions
-   receive inode-independent private copies.
-9. Existing hydrate, root Git, user/sandbox isolation, cancellation, TTL,
-   restart, deletion, files, artifacts, and cleanup own the complete session
-   lifecycle. The private outer workspace remains writable in both access modes.
-   Read-only inputs are allowed outside source destinations; source-targeting
-   inputs fail. Outer checkpoints exclude source destinations and source bytes;
-   editable roots use a separate private source-root checkpoint path. No
-   parallel workspace system remains.
-10. Existing produced-file cursor semantics retain root Git for writable outer
-    paths, explicitly exclude every source destination, and add declared
-    editable nested/multiple repository and tree-only/history-bearing cursors
-    without traversing mounts, writing bookkeeping state into an immutable
-    generation, or adding a second Files API.
-11. Direct Promptfoo E2E against the tested image proves Git and large OCI,
-    multiple repositories, nested working directory, continuation, read-only
-    enforcement, editable isolation, produced files, cancellation, restart,
-    cleanup, provider boundaries, and unchanged stock requests.
-12. Required second-session proof covers both caches: Git performs zero clone,
-    pack transfer, checkout/materialization, or tree copy after exact identity
-    resolution; OCI performs zero registry request, extraction, publication, or
-    tree copy. Both read-only sessions bind the same immutable generation bytes
-    while session/runtime state remains isolated. Editable reuse has independent
-    inodes and mutations.
-13. Codex and OMP use their fixed protocol adapters through the existing external
-    OAuth-to-OpenAI-compatible gateway with brokered short-lived credentials and
-    no fallback or caller override.
-14. UHP remains the only northbound protocol. There is no AllAgents CLI work,
-    local profile synchronization, `workspace.yaml` change, provider-login
-    implementation, runtime-image contract, or benchmark-environment coupling.
-15. The release is blocked unless UHP conformance, focused integration coverage,
-    large-OCI Promptfoo E2E, generation-reuse evidence, credential scans, SBOM,
-    provenance, and digest-pinned fresh/restart deployment all pass for the same
-    image.
-16. Any later upstream proposal is based on this downstream evidence and remains
-    outside the release path; no upstream issue, UEP, acceptance, or wait period
-    blocks implementation or publication.
+1. All public downstream repository, image, service, and product names use
+   AllAgents Gateway. `HarnessRouter/harnessrouter` remains the attributed
+   upstream with its recorded fork point, license, notices, and selective-intake
+   process.
+2. Requests without `metadata.workspace` remain stock-compatible and are the
+   only requests permitted to use stock root-Git change collection and
+   checkpoint correctness.
+3. The first-turn-only closed contract requires `access` and an ordered
+   `sources` array of 1–128 independent `git`/`oci` entries, permits mixed and
+   repeated identities at distinct destinations, and accepts no obsolete alias.
+4. Every source has one required non-root pairwise-non-overlapping destination.
+   All source ownership and input/asset/reserved collisions fail before network,
+   cache lookup, claims, or workspace writes.
+5. Git components use canonical public HTTPS, exact advertised commit resolution,
+   mandatory depth 2, useful bounded offline history, no submodule/LFS helpers,
+   and no deepening/full-clone/source fallback.
+6. OCI components use an operator catalog, direct image manifest digest, direct
+   canonical source manifest digest, pre-layer relative-tree validation, bounded
+   secure extraction, exact final-tree verification, and no Git fallback. Each
+   OCI image is one source-tree transport/cache unit, never a runtime or bundle.
+7. Per-source and aggregate bounds are enforced for all acquisition kinds and at
+   composition time.
+8. Components cache and singleflight independently. The composition identity
+   references ordered exact component identities and destinations. A composition
+   is atomically visible only after every component and attachment verifies.
+9. `read_only` Git and OCI roots bind immutable cached bytes. `editable` Git and
+   OCI roots use inode-independent private writable copies/reflinks. Bug-fix
+   evaluation uses editable mode. Cached publications never mutate.
+10. Every component publishes a canonical baseline keyed by normalized relative
+    path with type, content digest, executable/mode semantics, and symlink target.
+    Every workspace-backed session persists an equivalent outer baseline.
+11. Final collection/evaluation compares source and outer filesystem manifests,
+    detects add/modify/delete/mode/symlink/binary changes, treats final-tree
+    equality as authoritative, and does not rely on root/nested Git state or
+    rename detection.
+12. `.git`, runner-owned state, credentials, caches, attachment evidence, and
+    checkpoint metadata are excluded from reported changes. OCI roots work with
+    no Git metadata.
+13. The private outer workspace remains writable. Inputs/assets outside source
+    destinations work; paths at or below destinations fail before network.
+14. Checkpoint and continuation are mount-aware. Outer archives exclude all
+    source bytes, editable roots persist separately, read-only roots reattach by
+    exact identity, baselines remain stable, and continuation performs no source
+    traffic.
+15. Direct Promptfoo against the tested image proves multiple OCI, mixed Git/OCI,
+    partial cache warmth, component and composition singleflight, atomic
+    visibility, editable OCI mutation/evaluation, manifest final diffs, both
+    harnesses, lifecycle failures, security boundaries, and stock compatibility.
+16. A second exact-identity session proves zero Git source-byte work and zero OCI
+    registry/extraction work while reusing immutable publications; editable
+    reuse proves independent mutation.
+17. Codex and OMP use fixed adapters through the existing external provider
+    gateway with brokered short-lived credentials, no caller override, and no
+    fallback.
+18. The same digest-pinned `ghcr.io/allagentsdev/allagents-gateway` candidate
+    passes UHP conformance, focused integration, large/multiple/mixed Promptfoo
+    E2E, restart deployment, secret scans, SBOM, and provenance gates under
+    service name `allagents-gateway`.
+19. No upstream issue, UEP, acceptance, merge, or release blocks downstream
+    implementation or publication.

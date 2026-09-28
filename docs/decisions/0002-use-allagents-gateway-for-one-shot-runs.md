@@ -14,13 +14,13 @@ Each request creates a fresh workspace, runs one agent once, optionally collects
 
 The public contracts are `AgentRunRequest v1` and `AgentRunResult v1`. They are closed, versioned JSON schemas. Unknown fields are rejected, and incompatible changes require a new version. The detailed fields belong in the gateway schemas and are recorded in the [implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md).
 
-This decision supersedes the earlier two-repository snapshot design and HarnessRouter issue [#304](https://github.com/HarnessRouter/harnessrouter/issues/304). We keep the `allagentsdev/allagents-gateway` name, but none of the earlier HarnessRouter fork, UHP session, workspace-builder, or snapshot contracts remain.
+This decision supersedes the earlier two-repository snapshot design. We keep the `allagentsdev/allagents-gateway` name, but the workspace-builder and snapshot contracts do not remain.
 
 ## Why
 
 AllAgents needs remote, isolated coding-agent execution. It does not currently need long-lived interactive sessions.
 
-The earlier design used HarnessRouter sessions, published workspace snapshots, checkpoints, filesystem journals, and generic change artifacts. Those features solve continuation and state-transfer problems. A one-shot run only needs a clean workspace, one agent attempt, optional evidence from the final state, and reliable cleanup. Keeping the session design would add protocol, storage, recovery, and fork-maintenance work without improving that result.
+The earlier design used reusable sessions, published workspace snapshots, checkpoints, filesystem journals, and generic change artifacts. Those features solve continuation and state-transfer problems. A one-shot run only needs a clean workspace, one agent attempt, optional evidence from the final state, and reliable cleanup. Keeping the session design would add protocol, storage, and recovery work without improving that result.
 
 Supporting research is in [One-shot coding-agent gateway boundary](../research/one-shot-coding-agent-gateway-boundary.md).
 
@@ -158,7 +158,7 @@ A completed result includes source and runtime provenance, bounded agent output,
 
 ### Where transcripts and traces come from
 
-HarnessRouter is no longer in the trace path. While Codex or OMP runs, its adapter reads the structured events emitted by that pinned agent CLI and converts them incrementally to ATIF v1, the public trajectory format for V1. The runner stops recording at `max_trace_bytes` and adds a valid truncation marker rather than producing an invalid or unbounded document.
+While Codex or OMP runs, its adapter reads the structured events emitted by that pinned agent CLI and converts them incrementally to ATIF v1, the public trajectory format for V1. The runner stops recording at `max_trace_bytes` and adds a valid truncation marker rather than producing an invalid or unbounded document.
 
 ```mermaid
 flowchart LR
@@ -172,7 +172,7 @@ flowchart LR
   R --> P
 ```
 
-The agent's final answer is captured separately as bounded final output. V1 returns a trajectory for one run; it does not preserve a HarnessRouter-style session transcript or enough state to resume the conversation. The native vendor event stream is normalized rather than exposed as a second public trace format.
+The agent's final answer is captured separately as bounded final output. V1 returns a trajectory for one run; it does not preserve a resumable session transcript or enough state to continue the conversation. The native vendor event stream is normalized rather than exposed as a second public trace format.
 
 All captured data is bounded. The request reserves enough artifact capacity for the declared output-file maxima. Actual output files use that capacity first, followed by agent output, command output in request order, and trajectory data. If optional artifact storage is exhausted, the gateway returns bounded inline, truncated, or explicitly omitted data rather than storing an unbounded value.
 
@@ -201,7 +201,6 @@ V1 supports direct Codex and OMP execution only.
 
 It does not include:
 
-- UHP or a HarnessRouter fork;
 - reusable or interactive sessions;
 - continuation, checkpoints, or workspace recovery;
 - generic diffs, patches, or modified-workspace export;

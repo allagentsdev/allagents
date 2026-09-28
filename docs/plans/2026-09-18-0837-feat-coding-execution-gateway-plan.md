@@ -15,7 +15,7 @@ execution: code
 - **Objective:** Run one Codex or OMP coding-agent attempt in a fresh composed workspace and return bounded output, usage, bounded trajectory, provenance, and optional raw post-run evidence with authenticated artifact retrieval.
 - **Means:** Build one repository and service, `allagentsdev/allagents-gateway`, containing the Promptfoo provider, gateway API, worker/runner, contracts, workspace composition, post-run collector, and agent adapters.
 - **First caller:** Promptfoo is the evaluation layer. It owns rendered prompts, workspace-source JSON, matrices, repetitions, JavaScript/LLM graders, pass/fail decisions, scores, and reports.
-- **Stop conditions:** Do not build UHP, a HarnessRouter fork, reusable sessions, continuation, checkpoints, composed-workspace/snapshot caches, generic diffs, change artifacts, or a second repository.
+- **Stop conditions:** Do not build reusable sessions, continuation, checkpoints, composed-workspace or snapshot caches, generic diffs, change artifacts, or a second repository.
 
 The authoritative decision is [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md). Supporting evidence is in [One-shot coding-agent gateway boundary](../research/one-shot-coding-agent-gateway-boundary.md).
 
@@ -51,8 +51,6 @@ V1 supports **direct mode** only, owned completely by this repository.
 ### Excluded
 
 - Pass/fail, reward, rubric, or grading fields and decisions in the gateway contract.
-- UHP endpoints, objects, conformance, or compatibility.
-- HarnessRouter code, forking, routing, or provider abstractions.
 - Long-lived or reusable coding sessions, additional turns, continuation, resume, replay, or checkpoints.
 - Reusable composed workspaces, mutable source caches, unkeyed Git clones, prepared snapshots, or OCI workspace publication. Immutable exact-source generations are required only as specified below.
 - A workspace-builder service or repository.
@@ -1045,4 +1043,4 @@ CI may retain sanitized JSON, immutable cache fixtures, and referenced evidence,
 - [ ] Provider persists run/upload identities, downloads/verifies all artifact-backed output/evidence/trajectory, exposes partial evidence diagnostically, and leaves grading to Promptfoo.
 - [ ] Cleanup removes every process/namespace/flow/service/mount/clone/root and releases leases before result visibility; cleanup failure forces infrastructure_error while retaining evidence through reconciliation.
 - [ ] Credentials/policy remain outside caller JSON, run environments, cache, evidence, errors, artifacts, and logs.
-- [ ] No UHP, HarnessRouter fork, reusable session, continuation, checkpoint, composed-workspace/snapshot publication cache, generic core change artifact, or second repository remains.
+- [ ] No reusable session, continuation, checkpoint, composed-workspace or snapshot publication cache, generic core change artifact, or second repository remains.

@@ -172,8 +172,8 @@ Before implementing any Harbor, Terminal-Bench, or SWE-bench adapter:
 The practical conclusion is narrow: Harbor is useful primary-source evidence
 for content-addressed task packages, isolated tasks, and colocated checks. None
 of Harbor, Terminal-Bench, or SWE-bench is an approved current adapter, control
-plane, provenance variant, or result contract. They do not justify UHP,
-HarnessRouter, or reusable sessions.
+plane, provenance variant, or result contract. They do not justify reusable
+sessions.
 
 ## Primary sources
 

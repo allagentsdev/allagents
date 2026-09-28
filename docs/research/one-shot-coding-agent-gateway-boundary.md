@@ -30,16 +30,13 @@ source materializers, artifact service, and Promptfoo provider. One public
 Source credentials, source policy, credential selection, network policies, and
 runtime profiles are operator configuration, never caller-supplied policy
 bodies. Harbor and Terminal-Bench integration is outside the current v1 and
-requires a future ADR plus closed adapter request/result mapping. HarnessRouter
-and UHP are unnecessary:
-the gateway has no reusable sessions, checkpoint/continuation contracts, or
-generic produced-file service. Any exact patch production belongs only in a
-future benchmark adapter whose upstream evaluator requires it.
+requires a future ADR plus closed adapter request/result mapping. The gateway
+has no reusable sessions, checkpoint or continuation contract, or generic
+produced-file service. Any exact patch production belongs only in a future
+benchmark adapter whose upstream evaluator requires it.
 
-This replaces the former immutable-snapshot/HarnessRouter recommendation at
-this path. See
-[ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md) for the current
-decision record.
+See [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md)
+for the current decision record.
 
 ## Why Promptfoo is the control plane
 
@@ -258,31 +255,6 @@ filename, diff-format, size, and evaluator compatibility rules. Core
 `AgentRun v1` exposes no generic diff, patch, modified workspace, or change
 artifact.
 
-## Why stock HarnessRouter evidence does not change the decision
-
-The superseded research established several stock behaviors that remain factually useful:
-
-- UHP continuation binds a response chain to the same session, working directory, files, and
-  harness ([UHP sessions](https://github.com/HarnessRouter/harnessrouter/blob/8f7868ccb2c97d1f611acf11e7cad0357a43064e/protocol/versions/2026-09-12/sessions.md#L7-L31));
-- HarnessRouter derives per-session directories and has a durable hydrate/checkpoint lifecycle
-  ([runner workspace isolation](https://github.com/HarnessRouter/harnessrouter/blob/8f7868ccb2c97d1f611acf11e7cad0357a43064e/runner/server.py#L78-L171),
-  [runner hydrate/checkpoint routes](https://github.com/HarnessRouter/harnessrouter/blob/8f7868ccb2c97d1f611acf11e7cad0357a43064e/runner/server.py#L6982-L7110)); and
-- its produced-file collector is a root-Git cursor with gateway-side artifact capture and
-  acknowledgement
-  ([runner produced routes](https://github.com/HarnessRouter/harnessrouter/blob/8f7868ccb2c97d1f611acf11e7cad0357a43064e/runner/server.py#L7111-L7205),
-  [gateway collector](https://github.com/HarnessRouter/harnessrouter/blob/8f7868ccb2c97d1f611acf11e7cad0357a43064e/gateway/app.py#L2428-L2524)).
-
-Those are valuable product-session behaviors, but they solve a different
-problem. A Promptfoo coding eval needs one isolated attempt plus raw final-state
-evidence; Promptfoo code or LLM graders decide pass/fail and reward. The general
-gateway can run optional named post-run checks in the same trial runtime and
-final workspace, preserving declared source access modes, after stopping
-agent-owned descendants, removing credentials, and injecting hidden checks. It
-owns no evaluation verdict.
-
-Adopting UHP, forking HarnessRouter, or proposing upstream
-snapshot/journal/finalization seams would add session, checkpoint, and artifact
-semantics that this boundary does not use.
 
 ## Recommendation
 
@@ -328,4 +300,4 @@ not own pass/fail or reward, and no mutable trial state is shared. Source
 credentials and policy/credential routes stay out-of-band. Harbor,
 Terminal-Bench, and SWE-bench are future work requiring dedicated ADRs and
 closed extensions. No reusable-session layer, generic diff service, checkpoint
-architecture, UHP endpoint, or HarnessRouter change is warranted.
+architecture or session protocol is warranted.

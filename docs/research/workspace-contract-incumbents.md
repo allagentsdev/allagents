@@ -23,8 +23,8 @@ publishes `AgentRunResult v1`. Cleanup failure is `infrastructure_error` with
 partial evidence. Tenant/run-authorized artifact retrieval is time-bounded and
 the provider verifies byte size and digest. Promptfoo alone decides pass/fail
 and reward. Harbor, Terminal-Bench, and SWE-bench require future ADRs and closed
-adapter extensions; none is part of current v1. No incumbent justifies UHP,
-HarnessRouter, or reusable execution sessions.
+adapter extensions; none is part of current v1, and no incumbent justifies
+reusable execution sessions.
 
 The current boundary is defined by
 [One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
@@ -32,8 +32,8 @@ and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
 
 ## Historical contract evaluated
 
-The comparisons below originally evaluated a product execution stack with UHP,
-a separate source builder, an immutable OCI handoff, and a long-lived gateway.
+The comparisons below originally evaluated a product execution stack with a
+separate source builder, an immutable OCI handoff, and a long-lived gateway.
 That architecture is rejected for the chosen evaluation-only scope. Statements
 below that prescribe source descriptors, snapshot manifests, builder ownership,
 or gateway behavior are retained as historical comparison, not current
@@ -88,7 +88,7 @@ It is not a safe wholesale replacement:
 - ZIP sources have no required content digest. There is no OCI workspace-source variant.
 - Devfile has no standard resolved-commit result, canonical source-visible manifest, generation identity, or attachment-commit acknowledgement.
 - Runtime implementations own credential behavior. The DevWorkspace Operator, for example, may expose configured Git credentials to workspace containers; that is weaker than acquisition-only credentials.
-- Devfile lifecycle events and component `sourceMapping` configure a development environment. They do not define the UHP timing rule that source is attached before the harness starts and metadata appears only after attachment commit.
+- Devfile lifecycle events and component `sourceMapping` configure a development environment. They do not define the AllAgents timing rule that source is attached before the agent starts and metadata appears only after attachment completes.
 
 AllAgents should cite and follow Devfile's vocabulary where it fits, while preserving stricter semantics:
 

@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Run Release Please
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           # Release Please computes the next version from the conventional
           # commits on main and maintains a release pull request that updates

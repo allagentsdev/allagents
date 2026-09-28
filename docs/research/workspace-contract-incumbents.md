@@ -2,33 +2,32 @@
 
 ## Current conclusion
 
-No examined incumbent replaces the chosen boundary. Promptfoo is the first
-caller and sole evaluation owner, while `allagentsdev/allagents-gateway` owns the
-general one-shot `AgentRun v1` API, policy-bound immutable source cache,
-operator-authorized immutable runtime profiles with profile/image and tool/service
-implementation digests, disposable trial workers, agent adapters,
-phase-separated default-drop networking, bounded raw evidence,
-cleanup, and first Promptfoo provider. Promptfoo JSON may describe several
-workspace sources; policy/credential routes and runtime profiles remain operator
-configuration.
+No examined incumbent is needed between Promptfoo and the coding agents for the
+initial trusted local/CI scope. Promptfoo's built-in Claude Agent SDK and Codex
+SDK providers already accept a prepared `working_dir`, while Promptfoo lifecycle
+hooks can reset that directory around each serial evaluation row.
 
-Each `AgentRun` creates one fresh workspace and runs Codex or OMP under the
-required `runtime_profile_id`. After the agent terminates, the worker tears down
-its process/cgroup and network namespace, verifies descendants are absent, and
-removes credentials. Hidden-bundle bytes are materialized only after that
-boundary; structured post-run commands then use the retained runtime/final
-workspace with declared source modes intact. The gateway durably seals complete
-or partial observations, destroys trial state, releases leases, and only then
-publishes `AgentRunResult v1`. Cleanup failure is `infrastructure_error` with
-partial evidence. Tenant/run-authorized artifact retrieval is time-bounded and
-the provider verifies byte size and digest. Promptfoo alone decides pass/fail
-and reward. Harbor, Terminal-Bench, and SWE-bench require future ADRs and closed
-adapter extensions; none is part of current v1, and no incumbent justifies
-reusable execution sessions.
+The selected boundary is one disposable job:
 
-The current boundary is defined by
-[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
-and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
+- job bootstrap resolves exact sources and creates read-only seeds;
+- `beforeEach` privately copies the selected seed to `.eval/workspace`;
+- the built-in provider runs there;
+- Promptfoo assertions inspect the final filesystem and native trace; and
+- `afterEach` removes the workspace before the next row.
+
+Promptfoo owns matrices, repetitions, assertions, pass/fail, rewards, metrics,
+OpenTelemetry traces, and result presentation. The extension owns only
+workspace setup, bounded diagnostics, reset, and cleanup. A container or VM owns
+the outer process and filesystem isolation boundary.
+
+The gateway, source-builder, snapshot, and long-lived session contracts
+evaluated below are rejected for V1. Their incumbent comparisons remain useful
+if a future remote multi-tenant execution service needs stronger authorization,
+credential, artifact, cancellation, or recovery boundaries.
+
+The current decision is
+[ADR 0002](../decisions/0002-use-promptfoo-native-agent-execution.md), supported
+by [Promptfoo native agent workspaces](./promptfoo-native-agent-workspaces.md).
 
 ## Historical contract evaluated
 
@@ -137,55 +136,40 @@ For Git, a full commit object ID is the resolved source identity. The request st
 
 ## Current recommendation
 
-Adopt the following rule for future evaluation work:
+Adopt the native Promptfoo boundary for initial evaluation work:
 
-- **First caller:** Promptfoo owns prompt/provider matrices, repeats, assertions,
-  code/LLM grading, rewards, metrics, and result presentation.
-- **Invocation contract:** use the normative
-  [`AgentRunRequest v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunrequest-v1),
-  [`PostRunSpec v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#postrunspec-v1),
-  and
-  [`AgentRunResult v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunresult-v1);
-  this research note defines no alternate wire shape.
-- **Runtime boundary:** admission resolves and persists one authorized immutable
-  runtime-profile revision and `profile_digest`; dispatch uses only that revision
-  and re-verifies its profile/image, tool/service implementation, and applicable
-  service-image digests. `RuntimeProvenance` returns those identities with
-  `runtime_profile_id`, versions, and sandbox-policy version.
-- **Source route:** canonical Git URL or OCI repository plus authenticated
-  caller must match exactly one operator policy/credential route; reject zero or
-  ambiguous matches before network access. Deny redirects and pin any OCI auth
-  realm through the matched route.
-- **Gateway ownership:** `allagentsdev/allagents-gateway` contains the general
-  one-shot API, disposable trial worker, materializers, agent adapters, lifecycle
-  fencing, artifact service, post-run execution, raw evidence, cleanup, and
-  Promptfoo provider.
-- **Cache boundary:** repeat source authorization on every hit; publish only
-  verified exact generations. Mount read-only generations directly; give
-  writable sources a private reflink/CoW clone or full-copy fallback.
-- **Post-run boundary:** tear down the agent process/cgroup and network
-  namespace, verify descendants are absent, and remove credentials before hidden
-  bundle bytes exist in the run filesystem. Only then materialize an authorized
-  optional bundle and run structured commands in the final workspace with
-  declared source modes intact. Phase-separated namespaces default-drop traffic;
-  post-run policy may allow only declared localhost/sidecars.
-- **Result boundary:** bound agent final output as `CapturedText`; preserve full
-  request-order complete/partial `PostRunEvidence`; seal evidence, clean the
-  workspace, and release leases before publishing `completed`, `cancelled`, or
-  `infrastructure_error`. Cleanup failure retains partial evidence.
-- **Artifact boundary:** status, cancel, result, and artifact access are
-  tenant/run authorized. Expiring artifact references are dereferenced through
-  the authenticated endpoint and verified for streamed size and digest.
-- **Judgment boundary:** Promptfoo alone assigns behavioral pass/fail/reward.
-- **Benchmark compatibility:** Harbor, Terminal-Bench, and SWE-bench are future
-  work requiring dedicated ADRs and closed adapter extensions. None changes the
-  current v1 schemas.
+- **Evaluation owner:** Promptfoo owns prompt/provider matrices, repeats,
+  assertions, grading, rewards, metrics, traces, and result presentation.
+- **Agent invocation:** use Promptfoo's built-in Claude Agent SDK and Codex SDK
+  providers rather than a custom provider or AllAgents adapter.
+- **Working directory:** configure every write-capable provider with
+  `working_dir: ./.eval/workspace`.
+- **Workspace lifecycle:** stage exact read-only seeds once per disposable job;
+  `beforeEach` creates a private writable copy and `afterEach` removes it.
+- **Concurrency:** set `evaluateOptions.maxConcurrency: 1`; parallelize only by
+  running independent disposable jobs with separate `.eval` roots.
+- **Caching:** disable Promptfoo response caching so a cached response cannot
+  bypass the agent and leave filesystem assertions grading an unrelated
+  workspace.
+- **Judgment:** run deterministic command and file assertions after the provider
+  returns and before workspace teardown.
+- **Trace:** retain Promptfoo OpenTelemetry data and use its built-in
+  `trajectory:*` assertions. Do not add ATIF without a named interoperability
+  consumer.
+- **Isolation:** use a disposable rootless container or VM for write-capable
+  evals. Provider sandboxes are not a hostile tenant boundary.
+- **Future service:** reconsider a gateway only for remote callers, mutually
+  untrusted tenants, centrally enforced network policy, credential brokering,
+  secret verifier injection, durable cancellation/recovery, or cross-machine
+  scheduling and retention.
 
 ## Existing research status
 
+- [Promptfoo native agent workspaces](./promptfoo-native-agent-workspaces.md) is
+  the current execution research.
 - [One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
-  is the current boundary analysis.
+  records the rejected hosted-service alternative.
 - [Harbor repository materialization](./harbor-repository-materialization.md)
   remains useful evidence for task packages and separate verifiers.
-- General and private research wikis were discovery inputs only; cited primary
-  sources and ADR 0002 carry the decision.
+- The incumbent descriptions above remain primary-source evidence; their
+  historical gateway prescriptions are not current implementation requirements.

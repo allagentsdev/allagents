@@ -1,45 +1,28 @@
 # Source credential broker precedents
 
-## Current conclusion
+## Status
 
-`allagentsdev/allagents-gateway` materializes sources declared by normative
-[`AgentRunRequest v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunrequest-v1).
-Git supplies a canonical URL and ref; OCI supplies a canonical repository plus
-direct descriptor because a digest alone has no fetch location. Caller JSON
-never carries a credential, policy-route name, or credential selector.
+This note records credential and policy precedents for the rejected hosted
+gateway design. Its primary-source findings remain relevant if AllAgents later
+accepts remote callers or must broker source and model credentials across a
+tenant boundary.
 
-The authenticated caller plus canonical Git URL or OCI repository must match
-exactly one operator-configured policy/credential route; zero or ambiguous
-matches reject before network access. The same match runs on every cache lookup.
-Private acquisition denies redirects and permits only the matched route; any OCI
-bearer-token realm is operator-pinned rather than accepted from an arbitrary
-challenge. A miss may use the matched credential, while a hit needs no source
-credential. Cached generations contain neither credentials nor mutable state.
+The current trusted local/CI design has no gateway credential broker. Disposable
+job bootstrap resolves exact sources and materializes job-private seeds before
+Promptfoo starts. Acquisition credentials must not enter the seed, mutable
+workspace, test variables, result metadata, or trace attributes, and should be
+removed from the environment before agent execution whenever the source
+transport permits it.
 
-The required `runtime_profile_id` is independently authorized at admission,
-which persists one immutable revision and `profile_digest`; dispatch uses only
-that revision and re-verifies its profile/image, tool/service implementation,
-and applicable service-image digests. `RuntimeProvenance` returns those exact
-digests plus the logical ID, versions, and sandbox-policy version. Source
-acquisition, task-service, agent, and post-run network namespaces are
-phase-separated and default-drop. The agent
-uses a run-scoped, credential-free local model proxy; model credentials never
-enter its workspace. After any terminal state, the worker tears down the agent
-process/cgroup and network namespace, verifies descendants are absent, and
-removes acquisition/model material. Hidden-bundle bytes are not materialized
-until that boundary has passed. Post-run commands preserve declared source modes
-and receive no source/model credentials.
-Status, cancellation, and result access enforce tenant/run
-ownership; bundle upload enforces tenant ownership; expiring result-artifact
-downloads enforce tenant/run ownership and are verified for size and digest. No
-credential may enter bundles, raw evidence, logs, or retained artifacts.
+Promptfoo then invokes its built-in Claude or Codex provider in
+`.eval/workspace`. The outer disposable container or VM is the selected
+isolation boundary; this is not equivalent to the operator-authorized,
+phase-separated credential and network controls described below.
 
-Git credential helpers, GitHub App installation tokens, and BuildKit secret
-mounts establish the phase-boundary precedents below. A standalone network
-credential broker is unnecessary for the initial deployment. The current
-boundary is defined by
-[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
-and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
+See [ADR 0002](../decisions/0002-use-promptfoo-native-agent-execution.md) and
+[Promptfoo native agent workspaces](./promptfoo-native-agent-workspaces.md) for
+the current decision. The detailed broker design below is historical
+future-service research, not a V1 implementation contract.
 
 ## Precedents
 
@@ -190,7 +173,10 @@ mount/socket/environment before agent execution. Like BuildKit, this delivery
 mechanism does not mint credentials and does not make code with access to the
 secret trustworthy.
 
-## Recommendation for evaluations
+## Historical gateway recommendation
+
+If a future hosted execution service needs the stronger boundary studied here,
+the prior recommendation was:
 
 1. Use the normative `AgentRunRequest v1`, `PostRunSpec v1`, and
    `AgentRunResult v1` contracts rather than a second credential-specific shape.
@@ -227,7 +213,8 @@ secret trustworthy.
     artifacts through the authenticated endpoint and verify streamed size and
     digest.
 
-A central token minter, delivery lease, or generic credential-broker protocol is
-out of scope until remote multi-tenant workers create a concrete need. The rule
-for the current gateway is: **credentials exist only in the phase that consumes
-them and never enter raw post-run evidence or durable trial state.**
+A central token minter, delivery lease, or generic credential-broker protocol
+remains out of scope until remote or otherwise untrusted workers create a
+concrete need. The future-service rule is: **credentials exist only in the
+phase that consumes them and never enter raw post-run evidence or durable trial
+state.**

@@ -1,25 +1,23 @@
 # Harbor repository materialization lessons
 
-## Current conclusion
+## Status
 
-Treat this note as future-adapter evidence only. Harbor, Terminal-Bench, and
-SWE-bench integration are not part of the current v1 contract or plan. Harbor
-can still inform a later design because it packages an instruction,
-environment, workdir, test script, and reward artifact around one disposable
-task, but it must not mediate ordinary Promptfoo Git/OCI runs or become a core
-source kind.
+This note remains future-adapter research. Harbor, Terminal-Bench, and
+SWE-bench are not part of the native Promptfoo V1.
 
-Any future integration requires its own ADR and closed adapter request/result
-mapping. That decision must define provenance, bounded complete/partial
-evidence, artifact authorization/expiry, cancellation, cleanup-gated
-publication, and how Promptfoo consumes raw observations. It must not reuse or
-extend the current v1 request/result schemas without an explicit future contract
-decision. Harbor may own its sandbox and checks, but the gateway must
-not convert Harbor scores into pass/fail or reward.
+Harbor is still useful evidence because it packages an instruction,
+environment, workdir, verifier, and reward artifact around one disposable task.
+The selected design does not put Harbor between Promptfoo and its built-in
+Claude or Codex providers, and does not treat Harbor as a source kind.
+
+Any future Harbor integration needs its own decision covering task provenance,
+workspace ownership, verifier visibility, result mapping, and which system owns
+the sandbox. It must not silently reintroduce the rejected gateway contracts or
+move behavioral judgment out of the selected evaluation owner.
 
 The current boundary is defined by
-[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
-and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
+[ADR 0002](../decisions/0002-use-promptfoo-native-agent-execution.md) and
+[Promptfoo native agent workspaces](./promptfoo-native-agent-workspaces.md).
 
 ## What Harbor fetches
 
@@ -38,10 +36,11 @@ is not a mechanism for assembling several application repositories into one agen
 workspace.
 
 Harbor also accepts an omitted commit or a mutable ref and resolves it to a
-commit. AllAgents permits a caller to override a declared repository with a
-branch, tag, or commit for developer convenience, but resolves and records the
-full commit before agent execution. Reproducibility-sensitive callers use a full
-commit; OCI snapshots remain digest-pinned at admission.
+commit. The native source catalog may declare a branch, tag, or commit for
+developer convenience, but job bootstrap resolves and records the full commit
+before publishing the seed. Reproducibility-sensitive catalog entries use a full
+commit; OCI entries resolve and record the verified manifest digest before seed
+publication.
 
 ### Task packages from the package registry
 
@@ -152,20 +151,17 @@ through to the other after admission.
 
 Before implementing any Harbor, Terminal-Bench, or SWE-bench adapter:
 
-1. Write a dedicated ADR and closed adapter request/result mapping. Do not add a
-   Harbor source kind or field to the current `AgentRun v1` schemas.
+1. Write a dedicated ADR and adapter mapping. Do not add a Harbor source kind to
+   the native workspace catalog implicitly.
 2. Decide and specify who owns the sandbox, agent invocation, checks,
-   cancellation, cleanup, and terminal publication. Do not imply direct-mode
-   isolation governed a Harbor-owned sandbox.
-3. Define authoritative registry/task/version/environment provenance and, where
-   a runtime profile exists, immutable profile/image/tool/service implementation
-   digests.
-4. Preserve bounded raw complete/partial agent and check evidence without
-   translating Harbor scores into gateway pass/fail or reward.
-5. Define authenticated expiring artifact access and consumer digest/size
-   verification.
-6. Prove cleanup before terminal result visibility and define the
-   infrastructure-error behavior for Harbor outages and cleanup failure.
+   cancellation, cleanup, and result publication.
+3. Define authoritative registry, task, version, environment, and agent
+   provenance.
+4. Preserve bounded raw agent and check evidence without translating Harbor
+   scores into an unrelated pass/fail shape.
+5. Define artifact ownership, retention, integrity, and consumer access when
+   evidence must outlive the disposable job.
+6. Prove cleanup and define behavior for Harbor outages and cleanup failure.
 7. Keep direct Promptfoo runs independent of Harbor and let Promptfoo assertions
    or graders make every behavioral judgment.
 

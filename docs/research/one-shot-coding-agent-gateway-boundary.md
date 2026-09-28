@@ -1,42 +1,34 @@
 # One-shot coding-agent gateway boundary
 
-## Decision
+## Status
 
-Use **Promptfoo as the first caller of
-`allagentsdev/allagents-gateway`**, a general one-shot coding-agent gateway.
-Promptfoo owns prompts, provider and model variants, test matrices, repetition,
-assertions, metrics, and result presentation. Promptfoo authoring may declare
-multiple Git, OCI, or provider-local workspace sources; the provider packages
-local content as an uploaded bundle before submitting `AgentRunRequest v1`.
+This note records the hosted one-shot gateway alternative that was considered
+and rejected for the initial trusted local/CI evaluation scope. Its source,
+sandbox, credential, and artifact analysis remains useful if AllAgents later
+needs a remote multi-tenant execution service.
 
-The same repository contains the API, disposable trial worker, agent adapters,
-source materializers, artifact service, and Promptfoo provider. One public
-`AgentRun` request owns one fresh internal trial:
+The current decision uses Promptfoo's built-in Claude and Codex providers with
+an extension-managed disposable workspace. See
+[ADR 0002](../decisions/0002-use-promptfoo-native-agent-execution.md) and
+[Promptfoo native agent workspaces](./promptfoo-native-agent-workspaces.md).
 
-1. authorize every source, reuse or populate exact Git/OCI cache generations,
-   and materialize the requested read-only or writable views;
-2. authorize the required immutable runtime profile and run Codex or OMP in its
-   isolated runtime;
-3. after the agent reaches a terminal state, tear down its process/cgroup and
-   network namespace, verify descendant absence, and remove credentials; only
-   then materialize any authorized hidden bundle and run configured structured
-   post-run commands in the retained runtime/final workspace with declared
-   source modes preserved;
-4. durably seal bounded agent output plus complete or partial raw command/file
-   observations;
-5. complete workspace/runtime cleanup and release cache/artifact leases; and
-6. only then publish `AgentRunResult v1`.
+## Historical decision
 
-Source credentials, source policy, credential selection, network policies, and
-runtime profiles are operator configuration, never caller-supplied policy
-bodies. Harbor and Terminal-Bench integration is outside the current v1 and
-requires a future ADR plus closed adapter request/result mapping. The gateway
-has no reusable sessions, checkpoint or continuation contract, or generic
-produced-file service. Any exact patch production belongs only in a future
-benchmark adapter whose upstream evaluator requires it.
+The prior proposal placed a general one-shot `AgentRun` API between Promptfoo
+and coding agents. It assigned source materialization, immutable caching,
+runtime profiles, agent adapters, post-run evidence, artifacts, and cleanup to
+`allagentsdev/allagents-gateway`.
 
-See [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md)
-for the current decision record.
+That boundary is not part of V1. Promptfoo now invokes its built-in agent
+providers directly inside one disposable job. A lifecycle extension resets
+`.eval/workspace` for every serial row, deterministic assertions inspect the
+final filesystem, and Promptfoo retains its native result and OpenTelemetry
+trace formats.
+
+The gateway alternative remains relevant only if later requirements demand
+remote callers, hostile tenant isolation, credential brokering, hidden
+verifiers, durable cancellation/recovery, or retention independent of a
+disposable job.
 
 ## Why Promptfoo is the control plane
 
@@ -55,16 +47,12 @@ Promptfoo already owns the evaluation-shaped abstractions:
   structured `output`, `error`, usage, cost, and arbitrary metadata
   ([custom JavaScript provider](https://www.promptfoo.dev/docs/providers/custom-api/)).
 
-Promptfoo's stock Codex provider is useful when evaluating text, traces, or
-operations in an already prepared directory. It creates an ephemeral thread by
-default and accepts an explicit working directory and sandbox policy
-([OpenAI Codex SDK provider](https://www.promptfoo.dev/docs/providers/openai-codex-sdk/)).
-It does not by itself materialize several Git/OCI sources, create a pristine
-remote trial, optionally verify the resulting filesystem, or guarantee cleanup.
-The repository's custom provider is therefore a thin Promptfoo-to-gateway
-adapter; the general gateway supplies materialization, one-shot agent execution,
-same-runtime post-run checks, raw evidence, and cleanup while Promptfoo retains
-all grading and reward policy.
+Promptfoo's stock Codex and Claude Agent SDK providers accept an explicit
+working directory and expose provider-native output, usage, metadata, and
+tracing. They do not materialize pristine source trees themselves. The selected
+design supplies that missing lifecycle with job bootstrap plus Promptfoo
+`beforeEach` and `afterEach` hooks; it does not require a custom provider or
+gateway.
 
 ## Multi-turn and sandboxed-code boundaries
 
@@ -73,32 +61,30 @@ resends the complete transcript on each turn. With `stateful: true`, Promptfoo
 sends only the newest user message after the target returns a session ID and
 expects that target to retain its own history
 ([simulated-user provider](https://www.promptfoo.dev/docs/providers/simulated-user/)).
-The gateway can accept a fully rendered transcript as one instruction, but every
-provider call still creates a fresh run and workspace. That can test textual
-conversation continuity; it cannot test a coding conversation that depends on
-files, processes, tools, or services from an earlier turn. The provider therefore
-must not return a reusable session ID or pool native Codex/OMP sessions in V1.
+The native V1 deliberately disables cross-row session persistence. Provider
+turns that occur inside one Promptfoo row share that row's private workspace,
+but the next provider/test/repetition row starts from a new seed copy. A later
+multi-turn evaluation that intentionally preserves filesystem state needs an
+explicit case-level lifecycle rather than accidental thread pooling.
 
 Promptfoo's
 [sandboxed-code guide](https://www.promptfoo.dev/docs/guides/sandboxed-code-evals/)
 does not put Promptfoo or its provider inside a sandbox. Its `type: python`
-assertion runs trusted user code, and that assertion explicitly calls Epicbox to
-launch the generated code snippet in a one-time Docker container. This is useful
-for grading code returned as text. It does not prepare a repository, isolate a
-write-capable coding agent, preserve the agent's final workspace for hidden
-checks, or provide the source, credential, artifact, and cleanup contracts needed
-here. A larger custom assertion could rebuild those responsibilities, but that
-would be another implementation of the gateway rather than a Promptfoo feature.
+assertion runs trusted user code, and that assertion explicitly calls Epicbox
+to launch generated code in a one-time Docker container. The current design
+therefore uses a disposable outer container or VM for write-capable agent
+execution and uses Promptfoo JavaScript assertions only for trusted
+deterministic checks against the retained final workspace.
 
-## AgentRun contract
+## Historical `AgentRun` contract
 
-The normative wire contracts are
-[`AgentRunRequest v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunrequest-v1),
-[`PostRunSpec v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#postrunspec-v1),
-and
-[`AgentRunResult v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunresult-v1).
-Their checked-in JSON Schemas are authoritative for implementation. This
-research note deliberately does not publish a second pseudo-wire schema.
+The rejected gateway proposal defined closed `AgentRunRequest`,
+`PostRunSpec`, and `AgentRunResult` wire contracts. They are not current
+implementation contracts and the superseded implementation plan has been
+replaced by the
+[Promptfoo coding-agent evaluation plan](../plans/2026-09-18-0837-feat-promptfoo-coding-agent-evals-plan.md).
+The details below are retained only to document what a future hosted execution
+service would need to decide.
 
 The request contract is closed. At a logical level it carries request identity,
 the instruction, ordered workspace sources and working directory, an agent
@@ -256,11 +242,10 @@ in that environment; the script writes a numeric or structured reward under
 ([task overview](https://docs.harborframework.com/core-concepts/tasks/overview),
 [task tutorial](https://docs.harborframework.com/tutorials/create-a-task)).
 
-Harbor and Terminal-Bench are not part of the current `AgentRun v1` contract or
-implementation plan. Any future integration requires its own ADR and closed
-adapter request/result mapping, including provenance, evidence, artifact,
-cancellation, and cleanup semantics. It must remain optional, must not become a
-core source kind, and must not move pass/fail or reward into the gateway.
+Harbor and Terminal-Bench are outside the native Promptfoo V1. A future
+integration should define its own adapter boundary and provenance rather than
+revive the rejected gateway implicitly. Promptfoo remains the owner of
+behavioral pass/fail and reward.
 
 ## SWE-bench is future adapter research
 
@@ -273,14 +258,13 @@ logs
 That is useful evidence that any future SWE-bench adapter owns its exact patch
 transport.
 
-SWE-bench is outside the current v1 contract and implementation plan. A future
-adapter requires its own ADR and closed extension, including base-commit,
-filename, diff-format, size, and evaluator compatibility rules. Core
-`AgentRun v1` exposes no generic diff, patch, modified workspace, or change
-artifact.
+SWE-bench is outside the native Promptfoo V1. A future adapter must define its
+base-commit, filename, diff-format, size, and evaluator compatibility rules.
+The current workspace extension does not expose a generic diff, patch,
+modified-workspace, or change-artifact API.
 
 
-## Recommendation
+## Historical recommendation
 
 Implement the smallest complete loop:
 
@@ -306,22 +290,13 @@ flowchart LR
   X --> J[Promptfoo code / LLM graders]
 ```
 
-Promptfoo is the first caller and sole evaluation owner.
-`allagentsdev/allagents-gateway` owns the general one-shot `AgentRun v1` API,
-policy-rechecked immutable source cache, read-only mounts, private CoW/full-copy
-writable views, operator-authorized immutable runtime profiles with profile and
-image digests plus tool/service implementation digests, disposable trial workers,
-agent adapters, phase-separated default-drop networking, lifecycle fencing, optional
-same-runtime post-run commands, bounded structured agent output, raw
-complete/partial evidence, and cleanup. Result and artifact access
-is tenant/run authorized; the provider dereferences expiring artifacts and
-verifies size and digest.
+The diagram above summarizes the rejected hosted-service recommendation. It
+would be appropriate only if AllAgents needed a remote execution product with
+tenant authorization, strong sandboxing, policy-bound source and model
+credentials, cleanup-gated results, and durable artifacts.
 
-The gateway assembles and seals evidence, completes cleanup and lease release,
-and only then returns `completed`, `cancelled`, or `infrastructure_error`;
-cleanup failure produces `infrastructure_error` with partial evidence. It does
-not own pass/fail or reward, and no mutable trial state is shared. Source
-credentials and policy/credential routes stay out-of-band. Harbor,
-Terminal-Bench, and SWE-bench are future work requiring dedicated ADRs and
-closed extensions. No reusable-session layer, generic diff service, checkpoint
-architecture or session protocol is warranted.
+For the selected trusted local/CI scope, those controls would duplicate the
+disposable job and Promptfoo's built-in providers while adding a second API,
+provider, adapter, trace, and persistence stack. The current design therefore
+keeps the reusable insight—fresh private workspaces and post-agent filesystem
+checks—but implements it with Promptfoo lifecycle hooks and assertions.

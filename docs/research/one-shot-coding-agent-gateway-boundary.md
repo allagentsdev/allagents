@@ -187,12 +187,8 @@ bundles, post-run mutations, credentials, processes, and service state remain
 trial-private. Cleanup removes those trial views but not the immutable cache
 generation.
 
-This adopts the useful cache mechanism, not E2B itself. E2B hashes template
-steps, caches reusable immutable layers, and overlays writes for new sandboxes
-([template mechanics](https://docs.e2b.dev/template/how-it-works.md),
-[cache semantics](https://docs.e2b.dev/template/caching.md)); Linux reflinks
-provide the local copy-on-write primitive with same-filesystem constraints
-([`FICLONE`](https://man7.org/linux/man-pages/man2/ioctl_ficlonerange.2.html)).
+Linux reflinks provide the local copy-on-write primitive, with same-filesystem
+constraints ([`FICLONE`](https://man7.org/linux/man-pages/man2/ioctl_ficlonerange.2.html)).
 
 ## Authenticated private precedent
 

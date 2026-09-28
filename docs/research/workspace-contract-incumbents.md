@@ -113,13 +113,11 @@ This is the most credible portable standard for a possible future **development-
 
 Primary evidence: pinned [normative specification](https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/docs/specs/devcontainer-reference.md), [JSON Schema](https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/schemas/devContainer.base.schema.json), [field and lifecycle reference](https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/docs/specs/devcontainerjson-reference.md), [supporting tools](https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/docs/specs/supporting-tools.md), and [contribution process](https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/CONTRIBUTING.md).
 
-### E2B and Daytona: runtime providers with clone operations
-
-E2B creates a sandbox from a template and exposes filesystem, process, pause/resume, snapshot, and Git operations. Its sandbox-creation schema has template, timeout, network, metadata, environment, MCP, IAM, and volume fields, but no repository source. Git clone is a runtime SDK operation with URL/path/branch/depth and inline credentials. E2B warns that credentials stored in the sandbox are readable by the agent. E2B is consequently a possible runtime backend, not an agent-neutral execution or workspace contract.
+### Daytona: runtime provider with clone operations
 
 Daytona is the closest field-level operational match: its Git clone operation accepts `url`, `path`, optional branch or commit, credentials, depth, and an insecure-TLS option. But this is an imperative operation against an already-created Daytona sandbox. It does not standardize multi-source declaration, strict canonicalization, immutable result provenance, or committed attachment timing. Its per-operation credentials and optional TLS bypass also conflict with the AllAgents trust boundary. Older Daytona workspace models coupled repository metadata, devcontainer/build configuration, and provider workspace state, illustrating the portability cost of adopting a vendor workspace object.
 
-Primary evidence: pinned E2B [OpenAPI schema](https://github.com/e2b-dev/E2B/blob/ccaf9fc0ffe6ac39c7ec786af7608ab1de19467b/spec/openapi.yml), [sandbox SDK](https://docs.e2b.dev/sdk-reference/js-sdk/v2.51.0/sandbox), [template definition](https://docs.e2b.dev/template/defining-template), [Git integration](https://docs.e2b.dev/sandbox/git-integration), Daytona [Git operations](https://www.daytona.io/docs/en/git-operations), and pinned Daytona [workspace](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/models/workspace.go), [repository](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/apiclient/model_git_repository.go), and [workspace-creation](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/apiclient/model_create_workspace_dto.go) models.
+Primary evidence: Daytona [Git operations](https://www.daytona.io/docs/en/git-operations), and pinned Daytona [workspace](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/models/workspace.go), [repository](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/apiclient/model_git_repository.go), and [workspace-creation](https://github.com/daytonaio/daytona/blob/dfb50e8a31e9a93b31181113d7b44b657cf27168/pkg/apiclient/model_create_workspace_from_git_repository.go) models.
 
 ### GitHub Codespaces and Gitpod Classic: lifecycle precedents, not portable standards
 
@@ -182,8 +180,6 @@ Adopt the following rule for future evaluation work:
 - **Benchmark compatibility:** Harbor, Terminal-Bench, and SWE-bench are future
   work requiring dedicated ADRs and closed adapter extensions. None changes the
   current v1 schemas.
-- **Runtime precedent:** evaluate E2B, Daytona, Dev Containers, or Harbor ASP
-  only if a concrete isolation or imported-task requirement needs them.
 
 ## Existing research status
 
@@ -191,7 +187,5 @@ Adopt the following rule for future evaluation work:
   is the current boundary analysis.
 - [Harbor repository materialization](./harbor-repository-materialization.md)
   remains useful evidence for task packages and separate verifiers.
-- [E2B execution-gateway patterns](./e2b-execution-gateway-patterns.md) remains
-  useful sandbox evidence, but E2B is not required by the default runner.
 - General and private research wikis were discovery inputs only; cited primary
   sources and ADR 0002 carry the decision.

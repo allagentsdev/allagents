@@ -1,14 +1,25 @@
 # Harbor repository materialization lessons
 
-## Decision
+## Current conclusion
 
-Use Harbor's content-addressed package cache, sparse Git reads, staged publication, and prebuilt-environment model in **AllAgents Workspace Builder**. Publish one complete immutable workspace snapshot before invoking AllAgents Gateway.
+Treat this note as future-adapter evidence only. Harbor, Terminal-Bench, and
+SWE-bench integration are not part of the current v1 contract or plan. Harbor
+can still inform a later design because it packages an instruction,
+environment, workdir, test script, and reward artifact around one disposable
+task, but it must not mediate ordinary Promptfoo Git/OCI runs or become a core
+source kind.
 
-Harbor does not expose a first-class general-purpose “repositories in a workspace” layer. It first downloads a Harbor task package. The task then defines an execution environment with a Dockerfile, Compose file, or prebuilt image. Acquisition of the repository the agent edits may be baked into an image, cloned by a Dockerfile, copied as task content, or prepared by the task author.
+Any future integration requires its own ADR and closed adapter request/result
+mapping. That decision must define provenance, bounded complete/partial
+evidence, artifact authorization/expiry, cancellation, cleanup-gated
+publication, and how Promptfoo consumes raw observations. It must not reuse or
+extend the current v1 request/result schemas without an explicit future contract
+decision. Harbor may own its sandbox and checks, but the gateway must
+not convert Harbor scores into pass/fail or reward.
 
-AllAgents keeps source selection and provenance explicit in the builder contract. The gateway receives only a direct digest-pinned OCI workspace-snapshot descriptor. Git URLs, mutable refs, source credentials, destinations, and custom preparation behavior do not cross into HarnessRouter.
-
-This replaces the earlier recommendation to invoke a materializer inside HarnessRouter. The primary-source observations below remain valid; the current boundary is defined by [snapshot-boundary research](./allagents-gateway-snapshot-boundary.md) and [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md).
+The current boundary is defined by
+[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
+and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
 
 ## What Harbor fetches
 
@@ -65,7 +76,11 @@ an upstream `mswebench/...:pr-...` base image that already contains the reposito
 `/home/{repo_name}`. Its Dockerfile creates `/workspace/{repo_name}` as a symlink and
 sets that as `WORKDIR`; Harbor itself never clones that application repository.
 
-## Lessons for the AllAgents workspace materializer
+## Superseded materializer lessons (historical)
+
+The sections below preserve conclusions from the rejected builder/snapshot
+architecture. They are evidence about Harbor's implementation, not current
+recommendations for the evaluation-only runner.
 
 ### Adopt
 
@@ -133,21 +148,32 @@ through to the other after admission.
   correct files while obscuring which repositories, commits, generator, and setup
   produced them.
 
-## Recommended boundary
+## Future-adapter questions
 
-AllAgents Workspace Builder runs before UHP execution:
+Before implementing any Harbor, Terminal-Bench, or SWE-bench adapter:
 
-1. The builder validates the versioned source plan, destination ownership, configured repository/snapshot identities, and principal authorization before source network access.
-2. It resolves phase-scoped source credentials without exposing them to the eventual coding agent or gateway.
-3. It populates a private staging tree from exact Git commits and digest-pinned OCI inputs.
-4. It verifies commits, history completeness, paths, limits, links, content, the canonical workspace manifest, and digest-covered provenance.
-5. It stops acquisition processes and removes credentials, helpers, unsafe Git state, and mounts.
-6. It publishes config, provenance, layers, and blobs completely before publishing and returning one direct OCI image-manifest descriptor.
-7. AllAgents Gateway authorizes that descriptor, independently verifies/materializes it into a private session tree, establishes checkpoint and collection baselines, applies UHP inputs, and only then launches the coding agent.
+1. Write a dedicated ADR and closed adapter request/result mapping. Do not add a
+   Harbor source kind or field to the current `AgentRun v1` schemas.
+2. Decide and specify who owns the sandbox, agent invocation, checks,
+   cancellation, cleanup, and terminal publication. Do not imply direct-mode
+   isolation governed a Harbor-owned sandbox.
+3. Define authoritative registry/task/version/environment provenance and, where
+   a runtime profile exists, immutable profile/image/tool/service implementation
+   digests.
+4. Preserve bounded raw complete/partial agent and check evidence without
+   translating Harbor scores into gateway pass/fail or reward.
+5. Define authenticated expiring artifact access and consumer digest/size
+   verification.
+6. Prove cleanup before terminal result visibility and define the
+   infrastructure-error behavior for Harbor outages and cleanup failure.
+7. Keep direct Promptfoo runs independent of Harbor and let Promptfoo assertions
+   or graders make every behavioral judgment.
 
-Project or user `setup` shell commands are not run as trusted preparation. Additional source kinds or caller-selected builders require a new decision for trust, credential, provenance, and isolation boundaries.
-
-The practical conclusion is narrow: Harbor is strong evidence for content-addressed input bundles, isolated staging, and prebuilt publication. It is not evidence for resolving repositories inside the execution gateway or making preparation task-authored and opaque.
+The practical conclusion is narrow: Harbor is useful primary-source evidence
+for content-addressed task packages, isolated tasks, and colocated checks. None
+of Harbor, Terminal-Bench, or SWE-bench is an approved current adapter, control
+plane, provenance variant, or result contract. They do not justify UHP,
+HarnessRouter, or reusable sessions.
 
 ## Primary sources
 

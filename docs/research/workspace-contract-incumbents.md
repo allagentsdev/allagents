@@ -1,36 +1,43 @@
 # Workspace contract incumbents
 
-## Decision
+## Current conclusion
 
-No examined incumbent replaces the complete AllAgents preparation and execution stack. The useful separation is now:
+No examined incumbent replaces the chosen boundary. Promptfoo is the first
+caller and sole evaluation owner, while `allagentsdev/allagents-gateway` owns the
+general one-shot `AgentRun v1` API, policy-bound immutable source cache,
+operator-authorized immutable runtime profiles with profile/image and tool/service
+implementation digests, disposable trial workers, agent adapters,
+phase-separated default-drop networking, bounded raw evidence,
+cleanup, and first Promptfoo provider. Promptfoo JSON may describe several
+workspace sources; policy/credential routes and runtime profiles remain operator
+configuration.
 
-1. **Northbound execution:** UHP remains the sole request/response protocol.
-2. **Source layout:** an AllAgents Workspace Builder contract owns Git/OCI inputs, destinations, history selection, credentials, and composition before execution.
-3. **Immutable handoff:** one direct OCI workspace-snapshot descriptor crosses into execution.
-4. **Runtime:** AllAgents Gateway initializes a private session tree and retains HarnessRouter's UHP/session lifecycle.
+Each `AgentRun` creates one fresh workspace and runs Codex or OMP under the
+required `runtime_profile_id`. After the agent terminates, the worker tears down
+its process/cgroup and network namespace, verifies descendants are absent, and
+removes credentials. Hidden-bundle bytes are materialized only after that
+boundary; structured post-run commands then use the retained runtime/final
+workspace with declared source modes intact. The gateway durably seals complete
+or partial observations, destroys trial state, releases leases, and only then
+publishes `AgentRunResult v1`. Cleanup failure is `infrastructure_error` with
+partial evidence. Tenant/run-authorized artifact retrieval is time-bounded and
+the provider verifies byte size and digest. Promptfoo alone decides pass/fail
+and reward. Harbor, Terminal-Bench, and SWE-bench require future ADRs and closed
+adapter extensions; none is part of current v1. No incumbent justifies UHP,
+HarnessRouter, or reusable execution sessions.
 
-Devfile 2.3 remains the closest portable source-layout precedent. Daytona, Codespaces, and Gitpod remain provider-specific operational precedents. Harbor's prebuilt environments and content-addressed packages are stronger evidence for the new build-then-execute boundary than for runtime composition.
-
-This note's incumbent comparisons remain useful. Its earlier recommendation to send caller-selected Git/OCI sources directly to the gateway is superseded by [Prebuilt immutable workspace snapshots at the HarnessRouter boundary](./allagents-gateway-snapshot-boundary.md) and [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md).
-
-## The four contracts are different
-
-| Layer | AllAgents boundary | Best established precedent | Assessment |
-| --- | --- | --- | --- |
-| Northbound execution | UHP requests, events, results, cancellation, continuation, files, and artifacts | UHP | A workspace standard should not displace the execution protocol. |
-| Preparation | Builder-owned Git/OCI source plan and deterministic composition | Devfile `projects`, Daytona clone operations, Harbor prebuilds | No incumbent covers the complete source/history/provenance contract; keep it outside HarnessRouter. |
-| Immutable handoff | One direct OCI workspace-snapshot descriptor with digest-covered manifest/provenance | OCI Image Specification 1.1.1 | Adopt OCI identity directly and reject tags/indexes at execution. |
-| Runtime sandbox | Private writable session tree behind AllAgents Gateway | HarnessRouter, Harbor ASP, E2B, Daytona | Runtime providers stay southbound and do not become the source contract. |
-
-This separation avoids exposing provider operations northbound or source credentials to the execution plane.
+The current boundary is defined by
+[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
+and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
 
 ## Historical contract evaluated
 
-The comparisons below originally evaluated a runtime source descriptor with repository URLs, refs, destinations, OCI snapshots, logical working directory, pre-agent materialization, and immutable returned provenance.
-
-Those properties remain requirements, but ownership changed: source selection, ref resolution, credentials, destination composition, and full-history verification now belong to AllAgents Workspace Builder. AllAgents Gateway receives one already-published direct manifest descriptor, verifies its digest-covered working directory and provenance identities, and never receives the source plan.
-
-The comparison below evaluates semantic coverage rather than current field placement.
+The comparisons below originally evaluated a product execution stack with UHP,
+a separate source builder, an immutable OCI handoff, and a long-lived gateway.
+That architecture is rejected for the chosen evaluation-only scope. Statements
+below that prescribe source descriptors, snapshot manifests, builder ownership,
+or gateway behavior are retained as historical comparison, not current
+recommendations. Their primary-source descriptions of incumbents remain useful.
 
 ## Incumbent comparison
 
@@ -130,24 +137,61 @@ For OCI snapshots, the [OCI Image Specification 1.1.1 descriptor](https://github
 
 For Git, a full commit object ID is the resolved source identity. The request still needs the original ref because a branch/tag name and its resolved commit answer different audit questions. OCI snapshot provenance instead retains the verified `snapshotName` and `imageManifestDigest`; each history-bearing root adds only its destination, resolved commit, and object-set digest, with no repository URL or requested ref. Neither Git nor OCI defines when a runner has successfully attached that content, so `effectiveDescriptorDigest`, `generationId`, `sourceIdentity`, `workingDirectory`, and `workspaceManifestDigest` must remain AllAgents result fields.
 
-## Recommendation and adoption rule
+## Current recommendation
 
-Adopt the following rule for future changes:
+Adopt the following rule for future evaluation work:
 
-- **Normative execution:** UHP northbound and the AllAgents vendor snapshot descriptor only on a first turn.
-- **Normative preparation:** the builder owns source-layout fields informed by Devfile/Daytona, but claims no conformance to either.
-- **Normative handoff:** direct OCI manifest identity plus digest-covered canonical workspace manifest and provenance.
-- **Benchmark compatibility:** ingest Harbor task packages and SWE-bench/Hugging Face records through preparation adapters, preserving their task/environment/verifier separation.
-- **Runtime precedent:** evaluate Harbor ASP, E2B, Daytona, or Dev Containers only as southbound sandbox/runtime layers.
-- **Do not conflate:** benchmark repository with target source; runtime image with workspace snapshot; snapshot digest with authorization; or provider sandbox identity with the UHP session.
-
-This remains a layered answer rather than a claim that AllAgents invented a universal workspace standard. The builder contract exists because source-layout standards stop before the required immutable provenance. The gateway extension remains narrow because execution receives only the published result.
+- **First caller:** Promptfoo owns prompt/provider matrices, repeats, assertions,
+  code/LLM grading, rewards, metrics, and result presentation.
+- **Invocation contract:** use the normative
+  [`AgentRunRequest v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunrequest-v1),
+  [`PostRunSpec v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#postrunspec-v1),
+  and
+  [`AgentRunResult v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunresult-v1);
+  this research note defines no alternate wire shape.
+- **Runtime boundary:** admission resolves and persists one authorized immutable
+  runtime-profile revision and `profile_digest`; dispatch uses only that revision
+  and re-verifies its profile/image, tool/service implementation, and applicable
+  service-image digests. `RuntimeProvenance` returns those identities with
+  `runtime_profile_id`, versions, and sandbox-policy version.
+- **Source route:** canonical Git URL or OCI repository plus authenticated
+  caller must match exactly one operator policy/credential route; reject zero or
+  ambiguous matches before network access. Deny redirects and pin any OCI auth
+  realm through the matched route.
+- **Gateway ownership:** `allagentsdev/allagents-gateway` contains the general
+  one-shot API, disposable trial worker, materializers, agent adapters, lifecycle
+  fencing, artifact service, post-run execution, raw evidence, cleanup, and
+  Promptfoo provider.
+- **Cache boundary:** repeat source authorization on every hit; publish only
+  verified exact generations. Mount read-only generations directly; give
+  writable sources a private reflink/CoW clone or full-copy fallback.
+- **Post-run boundary:** tear down the agent process/cgroup and network
+  namespace, verify descendants are absent, and remove credentials before hidden
+  bundle bytes exist in the run filesystem. Only then materialize an authorized
+  optional bundle and run structured commands in the final workspace with
+  declared source modes intact. Phase-separated namespaces default-drop traffic;
+  post-run policy may allow only declared localhost/sidecars.
+- **Result boundary:** bound agent final output as `CapturedText`; preserve full
+  request-order complete/partial `PostRunEvidence`; seal evidence, clean the
+  workspace, and release leases before publishing `completed`, `cancelled`, or
+  `infrastructure_error`. Cleanup failure retains partial evidence.
+- **Artifact boundary:** status, cancel, result, and artifact access are
+  tenant/run authorized. Expiring artifact references are dereferenced through
+  the authenticated endpoint and verified for streamed size and digest.
+- **Judgment boundary:** Promptfoo alone assigns behavioral pass/fail/reward.
+- **Benchmark compatibility:** Harbor, Terminal-Bench, and SWE-bench are future
+  work requiring dedicated ADRs and closed adapter extensions. None changes the
+  current v1 schemas.
+- **Runtime precedent:** evaluate E2B, Daytona, Dev Containers, or Harbor ASP
+  only if a concrete isolation or imported-task requirement needs them.
 
 ## Existing research status
 
-- [Harbor repository materialization](./harbor-repository-materialization.md) supplies the content-addressed-cache, staging, and prebuilt-publication precedents now adopted by the builder.
-- [E2B execution-gateway patterns](./e2b-execution-gateway-patterns.md) remains correct that E2B is a runtime provider rather than a replacement northbound protocol.
-- [Prebuilt immutable workspace snapshots at the HarnessRouter boundary](./allagents-gateway-snapshot-boundary.md) is the current boundary analysis and supersedes runtime-composition conclusions in earlier notes.
-- General and private research wikis were discovery inputs only; public primary sources and ADR 0002 are normative for this decision.
-
-ADR 0002 and the implementation plan now codify a builder-to-gateway OCI artifact boundary. Direct Git URLs, refs, destinations, history policy, and source credentials are builder inputs; the gateway accepts one authorized direct descriptor and returns its verified manifest/provenance identities.
+- [One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
+  is the current boundary analysis.
+- [Harbor repository materialization](./harbor-repository-materialization.md)
+  remains useful evidence for task packages and separate verifiers.
+- [E2B execution-gateway patterns](./e2b-execution-gateway-patterns.md) remains
+  useful sandbox evidence, but E2B is not required by the default runner.
+- General and private research wikis were discovery inputs only; cited primary
+  sources and ADR 0002 carry the decision.

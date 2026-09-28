@@ -126,28 +126,37 @@ The runtime and dashboard repositories use Apache-2.0 ([runtime license](https:/
 
 ### Verdict
 
-**Reject E2B as a replacement for the planned UHP/HarnessRouter gateway. Trial it later only as a stronger sandbox runtime beneath the runner if hostile-code isolation becomes a product requirement.**
+**Do not add E2B to the default gateway backend.**
+`allagentsdev/allagents-gateway` can use local disposable containers or
+processes, a policy-bound immutable source cache, direct read-only mounts,
+private CoW/full-copy writable views, and required operator-authorized immutable
+runtime profiles. E2B remains an optional worker backend only if a later
+requirement needs its microVM boundary or managed sandbox lifecycle.
 
-The current AllAgents decision is accepted but not implemented: [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md) selects UHP `2026-09-12` through a pinned HarnessRouter CE fork, and the [implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md) assigns the wire protocol, caller authentication, normalized streaming, cancellation, idempotency, conversation continuity, harness execution, usage, and artifacts to HarnessRouter. A separate AllAgents Workspace Builder owns Git/OCI preparation and publishes one immutable snapshot before execution.
+This conclusion follows the boundary in
+[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
+and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
 
-E2B does not implement that contract. It creates an isolated machine and exposes low-level process, filesystem, network, and lifecycle APIs. Its official Codex and Pi integrations leave command construction, harness credentials, event parsing, continuation, and result extraction in caller code. Replacing HarnessRouter with E2B would therefore recreate the custom gateway, session, event-normalization, harness-adapter, and artifact layers that ADR 0002 rejected.
+E2B still does not own the gateway abstraction. It creates a sandbox and exposes
+process, filesystem, network, and lifecycle APIs. The AllAgents gateway owns the
+normative `AgentRun v1` contract, source materialization, runtime-profile
+resolution, agent launch, phase-separated isolation, lifecycle fencing, bounded
+raw evidence, authenticated artifact service, and cleanup. Promptfoo is its
+first caller and solely owns evaluation and grading.
 
-### Does E2B do the same thing?
-
-No. The systems overlap at the execution-workspace layer but own different abstractions.
-
-| Concern | Planned AllAgents gateway | E2B |
+| Concern | One-shot coding-agent gateway | E2B |
 | --- | --- | --- |
-| Northbound contract | UHP request, ordered events, cancellation, idempotency, continuation, files, usage, artifacts, and normalized errors | Sandbox REST API plus process/filesystem APIs; no agent-neutral request/event/result protocol |
-| Harness execution | HarnessRouter selects and runs configured Codex or Pi targets | Caller starts an agent-specific command inside a sandbox and interprets its output |
-| Session identity | `previous_response_id` binds conversation, writable workspace, harness target, auth binding, and provenance | Sandbox ID binds machine state; agent thread/session identity remains harness- and caller-specific |
-| Workspace acquisition | Separate builder resolves sources and publishes one direct OCI snapshot; gateway authorizes, verifies, privately materializes, and returns immutable manifest/provenance identities before agent start | Caller uploads files, clones Git, or starts from a template/snapshot; no agent-run source-provenance contract |
-| Isolation | Private per-session UID/workspace; explicitly not a hostile-code sandbox | One Firecracker microVM and guest kernel per sandbox |
-| Credentials | Separate caller, source, and provider trust domains; native OAuth owner-trust mode or explicit brokered proxy | Core sandbox auth plus caller-supplied agent/Git credentials; managed egress secrets and workload identity are not fully present in standard Embed |
-| Results | UHP output, usage, artifacts, produced-file collection, and identical provenance across stream/retrieval/replay paths | Guest files, command streams, VM snapshots, and templates; the caller defines an agent result or artifact manifest |
-| Deployment | Planned pinned private HarnessRouter image with durable sessions and a narrow AllAgents hook | Multi-service KVM stack with API, proxies, orchestrator, guest daemon, three datastores, and template/snapshot storage |
-
-E2B could occupy the runner's future sandbox-runtime slot. HarnessRouter and the separate AllAgents Workspace Builder would still remain above and before it respectively.
+| Caller policy | Promptfoo is the first caller and owns evaluation policy | No experiment matrix or assertion owner |
+| AgentRun | One public request, fresh internal trial, one agent attempt, then verified deletion | Sandbox lifecycle and guest APIs |
+| Sources | Reauthorize exact cached generation; direct read-only mount or private CoW/full copy | Caller uploads or acquires content |
+| Runtime | Required authorized `runtime_profile_id`; provenance pins profile/image, tool/service implementation, and applicable service-image digests | Caller selects/builds template |
+| Checks | Agent process/cgroup and netns gone, descendants absent, credentials removed, then optional bundle bytes materialized and structured commands run in the retained runtime/final workspace | Caller-defined commands |
+| Network | Phase-separated default-drop namespaces; named agent/post-run policy | Caller-defined sandbox networking |
+| Evidence | Bounded `CapturedText` plus full request-order complete/partial `PostRunEvidence` | Caller-defined files and command output |
+| Artifacts | Expiring tenant/run-authorized references; provider verifies streamed size/digest | Caller-defined download/storage |
+| Lifecycle | Seal evidence, clean trial and release leases, then publish `completed`, `cancelled`, or `infrastructure_error`; cleanup failure retains partial evidence | Caller-defined |
+| Judgment | Promptfoo code or LLM graders | Caller-defined |
+| Adoption | Default local worker backend | Optional backend after a concrete isolation need |
 
 ### Is it completely self-hosted?
 
@@ -161,26 +170,29 @@ The answer depends on the operating standard:
 
 The [enterprise page](https://e2b.dev/enterprise) markets Embed as an available self-hosting pattern. The [Embed source guide](https://github.com/e2b-dev/runtime/blob/9dd5b727318831ebbdd84cc9f51b25c5f3af96c8/embed/README.md) sets the narrower operational boundary. For architecture decisions, use the source guide's single-node/evaluation limit.
 
-### No E2B-derived changes for version one
+### Adopt the cache pattern without E2B
 
-Version one should adopt none of E2B's runtime patterns. The accepted gateway already has a coherent private owner-trust scope, and E2B addresses requirements that version one explicitly excludes: hostile-code isolation, public multi-tenancy, VM suspension and forking, multi-node placement, and microVM startup optimization.
+Do not add an E2B dependency, generic sandbox-provider interface, guest daemon,
+memory snapshots, forking, or multi-node placement. Do adopt the evidence-backed
+mechanism directly: content-address exact immutable source generations, share
+read-only layers, and give writable trials private CoW overlays/clones with a
+full-copy fallback. E2B's template build cache and overlay-backed sandbox starts
+are precedent for that mechanism, not a reason to adopt its platform.
+The local disposable gateway worker remains the default backend.
 
-Do not add an E2B dependency, a sandbox-provider interface, a guest daemon, egress-policy machinery, runtime telemetry infrastructure, or any other future-runtime seam to version one. The runner boundary is already a sufficient future integration point. Building an abstraction before a second runtime and a measured requirement exist would increase the initial implementation and verification burden without satisfying an acceptance criterion.
+If mutually untrusted tenant code or measured sandbox-start requirements later
+outgrow that boundary, trial E2B behind the normative
+[`AgentRun v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#public-contract)
+contract. It must preserve required authorized runtime profiles and their
+profile/image, tool/service implementation, and applicable service-image
+digests; fresh workspaces and declared source modes; verified agent
+process/netns teardown before hidden-bundle
+materialization, phase-separated default-drop networking, bounded
+complete/partial evidence, tenant/run-bound artifact access, and cleanup/lease
+release before terminal-result publication. E2B remains only an execution
+backend, never another caller/result protocol or grading layer.
 
-Existing requirements for private runner routes, credential containment, crash-consistent materialization, immutable source identity, release pinning, and provenance remain necessary on their own merits. They are not E2B adoption.
-
-If a reconsideration trigger is reached later, E2B provides a useful checklist for that separate design: place stronger isolation beneath the runner; separate public and private control routes; bind egress and ingress policy to the execution identity; keep environment identity distinct from source provenance; keep long-lived credentials outside the guest; reclaim orphaned runtime resources after crashes; correlate runtime telemetry with UHP identifiers without creating another agent protocol; and pin the sandbox SDK, API, guest daemon, kernel, and runtime as one tested compatibility set.
-
-### Patterns to defer or reject
-
-- **Defer Firecracker, memory snapshots, forking, lazy restore, COW root filesystems, placement, and multi-node scheduling.** They solve hostile multi-tenancy, recovery, or startup-cost problems that v1 does not claim. Adopt them only after a requirement or measurement justifies their operational weight.
-- **Reject E2B's API as the AllAgents northbound contract.** It would discard UHP conformance and make callers own harness-specific behavior.
-- **Reject caller-side repository acquisition and inline long-lived credentials.** E2B's convenience examples conflict with the server-authoritative source catalog, hermetic materializer, and credential-containment requirements.
-- **Reject open internet by default for a future sandboxed mode.** Outbound access should be an explicit target policy.
-- **Reject live VM snapshots as source provenance.** They are useful recovery artifacts, not reproducible evidence of which repositories and commits an agent received.
-
-### Reconsideration conditions
-
-Evaluate E2B as a runner backend when AllAgents must execute mutually untrusted tenant code, support public multi-tenancy, preserve in-flight processes across suspension, fork live workspaces, or meet measured sandbox-start targets that process/UID isolation cannot satisfy. The trial must keep UHP and AllAgents provenance above E2B, pin an SDK/runtime compatibility pair, prove private-route containment and default-deny egress, and exercise crash recovery on the exact self-hosted deployment shape.
-
-E2B is not the ADR's “second independent UHP implementation” reconsideration trigger because it does not implement UHP. It becomes relevant when the isolation requirement changes, not because it duplicates the current gateway.
+Useful patterns to carry forward without adopting E2B are narrow guest APIs,
+explicit lifecycle states, immutable environment identity, credential
+containment, and orphan cleanup. Live VM snapshots remain recovery artifacts,
+not proof that a coding task passed.

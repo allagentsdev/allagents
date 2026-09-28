@@ -1,18 +1,45 @@
 # Source credential broker precedents
 
-## Decision
+## Current conclusion
 
-The initial trusted-network deployment supplies source credentials only to AllAgents Workspace Builder. Build specifications contain source identities and policy-selected references, never literal credentials. The builder receives only allowlisted credential variables or secret-channel handles in its acquisition process.
+`allagentsdev/allagents-gateway` materializes sources declared by normative
+[`AgentRunRequest v1`](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md#agentrunrequest-v1).
+Git supplies a canonical URL and ref; OCI supplies a canonical repository plus
+direct descriptor because a digest alone has no fetch location. Caller JSON
+never carries a credential, policy-route name, or credential selector.
 
-Git credentials are exposed only through a short-lived builder-owned credential helper or registry-auth channel. The builder uses hermetic Git and registry configuration, removes temporary auth state before publication, and emits no secret in logs, provenance, snapshots, descriptors, or response metadata. It never consults arbitrary ambient credential helpers and never falls through to a different credential identity after failure.
+The authenticated caller plus canonical Git URL or OCI repository must match
+exactly one operator-configured policy/credential route; zero or ambiguous
+matches reject before network access. The same match runs on every cache lookup.
+Private acquisition denies redirects and permits only the matched route; any OCI
+bearer-token realm is operator-pinned rather than accepted from an arbitrary
+challenge. A miss may use the matched credential, while a hit needs no source
+credential. Cached generations contain neither credentials nor mutable state.
 
-AllAgents Gateway receives no source credentials or Git configuration. It has separate read-only credentials for trusted snapshot repositories, and those credentials never enter the session or harness environment.
+The required `runtime_profile_id` is independently authorized at admission,
+which persists one immutable revision and `profile_digest`; dispatch uses only
+that revision and re-verifies its profile/image, tool/service implementation,
+and applicable service-image digests. `RuntimeProvenance` returns those exact
+digests plus the logical ID, versions, and sandbox-policy version. Source
+acquisition, task-service, agent, and post-run network namespaces are
+phase-separated and default-drop. The agent
+uses a run-scoped, credential-free local model proxy; model credentials never
+enter its workspace. After any terminal state, the worker tears down the agent
+process/cgroup and network namespace, verifies descendants are absent, and
+removes acquisition/model material. Hidden-bundle bytes are not materialized
+until that boundary has passed. Post-run commands preserve declared source modes
+and receive no source/model credentials.
+Status, cancellation, and result access enforce tenant/run
+ownership; bundle upload enforces tenant ownership; expiring result-artifact
+downloads enforce tenant/run ownership and are verified for size and digest. No
+credential may enter bundles, raw evidence, logs, or retained artifacts.
 
 Git credential helpers, GitHub App installation tokens, and BuildKit secret
-mounts establish the process- and phase-boundary precedents. The deployment does
-not require a standalone network credential broker. Central token minting,
-delivery leases, remote workers, and multi-tenant credential policy require a
-separate decision if the deployment boundary changes.
+mounts establish the phase-boundary precedents below. A standalone network
+credential broker is unnecessary for the initial deployment. The current
+boundary is defined by
+[One-shot coding-agent gateway boundary](./one-shot-coding-agent-gateway-boundary.md)
+and [ADR 0002](../decisions/0002-use-allagents-gateway-for-one-shot-runs.md).
 
 ## Precedents
 
@@ -163,26 +190,44 @@ mount/socket/environment before agent execution. Like BuildKit, this delivery
 mechanism does not mint credentials and does not make code with access to the
 secret trustworthy.
 
-## Recommendation for AllAgents
+## Recommendation for evaluations
 
-### Initial trusted-network deployment
+1. Use the normative `AgentRunRequest v1`, `PostRunSpec v1`, and
+   `AgentRunResult v1` contracts rather than a second credential-specific shape.
+2. Configure source matchers, redirect policy, OCI auth realms, credential
+   mapping, runtime profiles, network policies, and secret handles out-of-band.
+3. Combine authenticated caller identity with canonical Git URL or OCI
+   repository. Require exactly one source route; reject zero or ambiguous
+   matches before any network access.
+4. Deny source redirects and pin any OCI bearer-token realm through the matched
+   operator route. Repeat source authorization on every immutable-cache lookup.
+5. Give the matched source credential only to bounded private acquisition on a
+   miss; remove it before publishing the verified immutable generation. Never
+   store credentials or mutable trial state in the shared cache.
+6. Resolve and persist an authorized immutable runtime-profile revision and
+   `profile_digest` at admission. Dispatch uses only that revision, re-verifies
+   profile/image, tool/service implementation, and applicable service-image
+   digests, and returns them in `RuntimeProvenance`. Give the agent model access
+   only through its run-scoped local proxy; never expose model credentials in
+   the process, environment, workspace, or artifacts.
+7. Keep acquisition, task-service, agent, and post-run networks phase-separated
+   and default-drop. Apply only the named policy authorized for each phase.
+8. Tear down the agent process/cgroup and network namespace, verify descendants
+   are absent, and remove credentials before any hidden-bundle bytes are
+   materialized. Only then authorize/materialize the optional `BundleReference`
+   and run structured commands with declared source modes intact.
+9. Seal bounded complete/partial raw evidence as observations finish. Promptfoo
+   alone owns pass/fail and reward.
+10. Destroy the workspace, agent home, containers, temporary credential
+    material, and network namespaces and release leases before publishing
+    `AgentRunResult v1`. Cleanup failure is `infrastructure_error` with sealed
+    partial evidence.
+11. Tenant/run-authorize status, cancellation, result, and result-artifact
+    operations; tenant-authorize bundle upload. Dereference expiring result
+    artifacts through the authenticated endpoint and verify streamed size and
+    digest.
 
-1. Store only policy-recognized secret references in builder deployment configuration; reject literal credentials and caller-supplied credential identities in build specifications.
-2. Supply secret values through the builder's protected environment or secret channel and validate required names during preflight without contacting sources.
-3. Pass only the selected allowlisted values to the acquisition child; do not expose them to snapshot packaging, the gateway, or coding-agent processes.
-4. Select one configured credential identity before acquisition. Authentication, authorization, rate-limit, or service failure terminates acquisition and never falls through to another identity or source mode.
-5. Give the credential only to the dedicated acquisition subprocess through a temporary helper or registry-auth channel. Invoke helpers directly without a shell and bound input, output, stderr, and lifetime.
-6. Use isolated Git/registry configuration. Prevent credentials from entering remote URLs, Git config, generated CLI config, workspace files, nested repositories, OCI config/layers, logs, provenance, or descriptors.
-7. Remove helper files, auth configuration, and credential-bearing processes before publishing the immutable snapshot.
-8. Verify containment with a deliberately non-secret-looking environment name, because name-based secret filters are not the security boundary.
-
-### Remote or multi-tenant deployment
-
-A future deployment may require a central token minter, authenticated single-use
-delivery leases, entitlement generations, revocation reconciliation, worker
-identity, fencing, and a snapshot-delivery protocol. Those mechanisms require a
-separate decision when remote workers or tenant isolation become product
-requirements.
-
-The resulting rule is: **source credentials exist only during the materializer's
-acquisition phase and never enter the coding-agent environment.**
+A central token minter, delivery lease, or generic credential-broker protocol is
+out of scope until remote multi-tenant workers create a concrete need. The rule
+for the current gateway is: **credentials exist only in the phase that consumes
+them and never enter raw post-run evidence or durable trial state.**

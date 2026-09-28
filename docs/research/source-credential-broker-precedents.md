@@ -2,18 +2,11 @@
 
 ## Decision
 
-The initial trusted-network deployment uses deployment-supplied source
-credentials referenced from the project `workspace.yaml` as `${ENV_VAR}` values.
-The AllAgents materializer receives only the configured credential variables in
-its allowlisted child environment. HarnessRouter removes every
-materializer-only variable from agent child environments regardless of its name.
+The initial trusted-network deployment supplies source credentials only to AllAgents Workspace Builder. Build specifications contain source identities and policy-selected references, never literal credentials. The builder receives only allowlisted credential variables or secret-channel handles in its acquisition process.
 
-Git credentials are exposed only to the acquisition process through a
-short-lived, materializer-owned credential helper or registry-auth channel.
-The materializer uses hermetic Git and registry configuration, removes temporary
-auth state before returning, and emits no secret in logs, provenance, checkpoints,
-or response metadata. It never consults arbitrary ambient credential helpers and
-never falls through to a different credential identity after a failure.
+Git credentials are exposed only through a short-lived builder-owned credential helper or registry-auth channel. The builder uses hermetic Git and registry configuration, removes temporary auth state before publication, and emits no secret in logs, provenance, snapshots, descriptors, or response metadata. It never consults arbitrary ambient credential helpers and never falls through to a different credential identity after failure.
+
+AllAgents Gateway receives no source credentials or Git configuration. It has separate read-only credentials for trusted snapshot repositories, and those credentials never enter the session or harness environment.
 
 Git credential helpers, GitHub App installation tokens, and BuildKit secret
 mounts establish the process- and phase-boundary precedents. The deployment does
@@ -174,26 +167,14 @@ secret trustworthy.
 
 ### Initial trusted-network deployment
 
-1. Store only `${ENV_VAR}` references in the project workspace configuration;
-   reject literal credentials and caller-supplied credential identifiers.
-2. Supply secret values through the deployment environment and validate required
-   names during materializer preflight without contacting sources.
-3. Pass only the referenced, allowlisted names to the materializer child. Remove
-   the complete allowlist from every coding-agent child independent of
-   secret-looking name patterns.
-4. Select one configured credential identity before acquisition. Authentication,
-   authorization, rate-limit, or service failure terminates acquisition and
-   never falls through to another identity or source mode.
-5. Give the credential only to the dedicated acquisition subprocess through a
-   temporary helper or registry-auth channel. Invoke helpers directly without a
-   shell and bound their input, output, stderr, and lifetime.
-6. Use isolated Git/registry configuration. Prevent credentials from entering
-   remote URLs, Git config, generated CLI config, workspace files, nested
-   repositories, checkpoints, logs, provenance, or response metadata.
-7. Remove helper files, auth configuration, and the credential-bearing process
-   before returning the validated staging tree to HarnessRouter.
-8. Verify containment with a deliberately non-secret-looking environment name,
-   because name-based secret filters are not the security boundary.
+1. Store only policy-recognized secret references in builder deployment configuration; reject literal credentials and caller-supplied credential identities in build specifications.
+2. Supply secret values through the builder's protected environment or secret channel and validate required names during preflight without contacting sources.
+3. Pass only the selected allowlisted values to the acquisition child; do not expose them to snapshot packaging, the gateway, or coding-agent processes.
+4. Select one configured credential identity before acquisition. Authentication, authorization, rate-limit, or service failure terminates acquisition and never falls through to another identity or source mode.
+5. Give the credential only to the dedicated acquisition subprocess through a temporary helper or registry-auth channel. Invoke helpers directly without a shell and bound input, output, stderr, and lifetime.
+6. Use isolated Git/registry configuration. Prevent credentials from entering remote URLs, Git config, generated CLI config, workspace files, nested repositories, OCI config/layers, logs, provenance, or descriptors.
+7. Remove helper files, auth configuration, and credential-bearing processes before publishing the immutable snapshot.
+8. Verify containment with a deliberately non-secret-looking environment name, because name-based secret filters are not the security boundary.
 
 ### Remote or multi-tenant deployment
 

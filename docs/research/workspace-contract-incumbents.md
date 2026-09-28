@@ -2,43 +2,35 @@
 
 ## Decision
 
-AllAgents should **not** replace its execution-gateway workspace descriptor with Harbor, Devfile, Dev Containers, E2B, Daytona, GitHub Codespaces, or Gitpod. No examined contract standardizes the same boundary: caller-selected Git or OCI source, deterministic materialization, attachment before the harness starts, a logical working directory, and immutable resolved provenance returned only after attachment is committed.
+No examined incumbent replaces the complete AllAgents preparation and execution stack. The useful separation is now:
 
-The closest portable **source-layout precedent** is Devfile 2.3's `projects` model. The closest field-level operational API is Daytona's Git clone operation. GitHub Codespaces and Gitpod Classic are stronger examples of products that bind source acquisition to workspace lifecycle, but both are provider-specific. None is a compatible normative replacement.
+1. **Northbound execution:** UHP remains the sole request/response protocol.
+2. **Source layout:** an AllAgents Workspace Builder contract owns Git/OCI inputs, destinations, history selection, credentials, and composition before execution.
+3. **Immutable handoff:** one direct OCI workspace-snapshot descriptor crosses into execution.
+4. **Runtime:** AllAgents Gateway initializes a private session tree and retains HarnessRouter's UHP/session lifecycle.
 
-The recommended contract stack is therefore:
+Devfile 2.3 remains the closest portable source-layout precedent. Daytona, Codespaces, and Gitpod remain provider-specific operational precedents. Harbor's prebuilt environments and content-addressed packages are stronger evidence for the new build-then-execute boundary than for runtime composition.
 
-1. **Northbound execution protocol:** UHP remains the sole request/response protocol.
-2. **Workspace/source descriptor:** retain `metadata["allagents.workspace"]` version 1 as an AllAgents-owned extension.
-3. **Runtime sandbox:** keep provider APIs behind the gateway; Harbor ASP is a promising future runtime seam, not a workspace descriptor.
-4. **Immutable artifacts:** use Git commit identity and OCI Image Specification descriptors/manifests as the normative identities, while retaining the AllAgents workspace manifest and attachment result as the binding provenance record.
-
-Devfile should be cited as design precedent for repository URL/revision/destination concepts, not claimed as an implemented profile or conformance target.
+This note's incumbent comparisons remain useful. Its earlier recommendation to send caller-selected Git/OCI sources directly to the gateway is superseded by [Prebuilt immutable workspace snapshots at the HarnessRouter boundary](./allagents-gateway-snapshot-boundary.md) and [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md).
 
 ## The four contracts are different
 
 | Layer | AllAgents boundary | Best established precedent | Assessment |
 | --- | --- | --- | --- |
-| Northbound execution | UHP requests, events, results, cancellation, and continuation | UHP | Already selected. A workspace standard should not displace the execution protocol. |
-| Workspace/source descriptor | `{url, ref?, destination}` or an OCI snapshot, plus `workingDirectory` | Devfile `projects` is the closest portable schema; Codespaces/Gitpod are product precedents | No incumbent covers AllAgents' complete semantics. Keep the extension. |
-| Runtime sandbox | Process, filesystem, network, and lifecycle implementation behind the gateway | Harbor ASP, E2B, Daytona, Dev Containers | These contracts start at or after sandbox provisioning. They can inform or implement the southbound seam without becoming the northbound source contract. |
-| Immutable artifacts | Resolved Git commit or OCI manifest digest, canonical workspace manifest, committed attachment metadata | Git object identity and OCI Image Specification 1.1.1 | Adopt the artifact standards directly. No workspace incumbent supplies the complete result record. |
+| Northbound execution | UHP requests, events, results, cancellation, continuation, files, and artifacts | UHP | A workspace standard should not displace the execution protocol. |
+| Preparation | Builder-owned Git/OCI source plan and deterministic composition | Devfile `projects`, Daytona clone operations, Harbor prebuilds | No incumbent covers the complete source/history/provenance contract; keep it outside HarnessRouter. |
+| Immutable handoff | One direct OCI workspace-snapshot descriptor with digest-covered manifest/provenance | OCI Image Specification 1.1.1 | Adopt OCI identity directly and reject tags/indexes at execution. |
+| Runtime sandbox | Private writable session tree behind AllAgents Gateway | HarnessRouter, Harbor ASP, E2B, Daytona | Runtime providers stay southbound and do not become the source contract. |
 
-This separation matters. Choosing one product contract across all four layers would either expose provider operations northbound or weaken the source and provenance guarantees already specified in [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md) and the [execution-gateway implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md).
+This separation avoids exposing provider operations northbound or source credentials to the execution plane.
 
-## Current AllAgents contract to preserve
+## Historical contract evaluated
 
-The current design has a small request surface and a comparatively strong result contract:
+The comparisons below originally evaluated a runtime source descriptor with repository URLs, refs, destinations, OCI snapshots, logical working directory, pre-agent materialization, and immutable returned provenance.
 
-- A repository source has a canonical public HTTPS `url`, optional `ref`, and required unique non-root relative `destination`. A request may contain multiple repositories.
-- Omitted `ref` means the remote symbolic HEAD; a supplied ref is resolved fail-closed to a full commit. The result preserves both requested and resolved identities.
-- An OCI workspace source is selected by immutable image/workspace-manifest digests from an operator-owned snapshot catalog.
-- `workingDirectory` is a logical union: `workspaceRoot`, or `workspacePath` with a relative path that must be a directory in the verified workspace manifest. It is not a host path or provider mount path.
-- Source credentials and policy are server-owned and limited to acquisition. They are not request fields or agent environment variables.
-- Materialization and attachment complete before initial UHP files or the provider process are admitted. Public provenance is emitted only after the gateway has committed a `ready` attachment and the runner has acknowledged or reserved it.
-- Continuations reuse the exact descriptor, attachment, access mode, retention, working directory, harness, and authorization context rather than accepting a new source request.
+Those properties remain requirements, but ownership changed: source selection, ref resolution, credentials, destination composition, and full-history verification now belong to AllAgents Workspace Builder. AllAgents Gateway receives one already-published direct manifest descriptor, verifies its digest-covered working directory and provenance identities, and never receives the source plan.
 
-The comparison below treats those properties as requirements rather than matching field names alone.
+The comparison below evaluates semantic coverage rather than current field placement.
 
 ## Incumbent comparison
 
@@ -142,19 +134,20 @@ For Git, a full commit object ID is the resolved source identity. The request st
 
 Adopt the following rule for future changes:
 
-- **Normative:** UHP northbound; AllAgents workspace extension for acquisition and attachment; Git commit identity and OCI Image Specification 1.1.1 for immutable artifacts.
-- **Benchmark compatibility:** ingest Harbor task packages and SWE-bench/Hugging Face records through adapters. Preserve Harbor's task/environment/verifier split and its preference for prebuilt OCI environments; map benchmark source identities into the canonical AllAgents descriptor.
-- **Source-layout precedent:** use Devfile 2.3 `projects` semantics when adding or naming direct repository fields. Document intentional divergence, especially for URL shape, revision behavior, and destination paths.
-- **Runtime precedent:** evaluate Harbor ASP as a southbound execute/filesystem adapter when its draft stabilizes. E2B and Daytona remain provider adapters. Dev Containers may define an optional environment-building layer after source acquisition.
-- **Do not conflate:** Harbor's benchmark repository with the target application source; a runnable environment image with a workspace source snapshot, even when the snapshot preserves Git history; or a vendor sandbox/codespace object with the northbound contract. Do not adopt Devfile's default-on-missing revision behavior, ZIP-without-digest source, or runtime credential exposure.
+- **Normative execution:** UHP northbound and the AllAgents vendor snapshot descriptor only on a first turn.
+- **Normative preparation:** the builder owns source-layout fields informed by Devfile/Daytona, but claims no conformance to either.
+- **Normative handoff:** direct OCI manifest identity plus digest-covered canonical workspace manifest and provenance.
+- **Benchmark compatibility:** ingest Harbor task packages and SWE-bench/Hugging Face records through preparation adapters, preserving their task/environment/verifier separation.
+- **Runtime precedent:** evaluate Harbor ASP, E2B, Daytona, or Dev Containers only as southbound sandbox/runtime layers.
+- **Do not conflate:** benchmark repository with target source; runtime image with workspace snapshot; snapshot digest with authorization; or provider sandbox identity with the UHP session.
 
-This is deliberately a layered answer rather than a claim that AllAgents has invented a universal workspace standard. The narrow extension exists because the examined standards stop either before source acquisition or before committed, immutable provenance.
+This remains a layered answer rather than a claim that AllAgents invented a universal workspace standard. The builder contract exists because source-layout standards stop before the required immutable provenance. The gateway extension remains narrow because execution receives only the published result.
 
 ## Existing research status
 
-- [Harbor repository materialization](./harbor-repository-materialization.md) correctly identifies Harbor's task-repository cloning, package cache, staged publication, and prebuilt-environment model. Its statement that Harbor lacks a first-class arbitrary target-repository layer remains accurate, but should not be read as saying Harbor lacks workspace materialization. Its descriptions of AllAgents selecting configured repository names or overriding a declared repository ref are stale: current Git mode accepts caller-supplied canonical public HTTPS URLs; only OCI snapshots use the operator-owned catalog.
-- [E2B execution-gateway patterns](./e2b-execution-gateway-patterns.md) remains correct that E2B is a runtime provider rather than a replacement northbound protocol. Its description of a server-authoritative logical source catalog is stale for Git sources and remains applicable only to the OCI snapshot catalog.
-- The general AI research wiki has relevant Harbor and benchmark-provenance coverage but no dedicated Devfile, Dev Containers, E2B, Daytona, or Codespaces contract comparison. Its primary-source links informed source discovery; its prose is not a normative input here.
-- The private AllAgents research wiki contains one execution-gateway comparison based on the older A2A-era decision baseline. That coverage is now historical because ADR 0002 selects UHP. No private synthesis or conclusion is reproduced in this public note.
+- [Harbor repository materialization](./harbor-repository-materialization.md) supplies the content-addressed-cache, staging, and prebuilt-publication precedents now adopted by the builder.
+- [E2B execution-gateway patterns](./e2b-execution-gateway-patterns.md) remains correct that E2B is a runtime provider rather than a replacement northbound protocol.
+- [Prebuilt immutable workspace snapshots at the HarnessRouter boundary](./allagents-gateway-snapshot-boundary.md) is the current boundary analysis and supersedes runtime-composition conclusions in earlier notes.
+- General and private research wikis were discovery inputs only; public primary sources and ADR 0002 are normative for this decision.
 
-ADR 0002 and the implementation plan now codify this layered result: the canonical JSON request keeps `url`, `ref`, `destination`, and logical `workingDirectory`; local `workspace.yaml` replaces `source` plus `repo` with `url` while retaining `path`; OCI requests use explicit `snapshotName`, `imageManifestDigest`, and `workspaceManifestDigest`; workspace-manifest version 2 lets each snapshot root be tree-only or carry normalized offline Git history without a configured Git remote; and benchmark task/environment ingestion remains a separate future adapter boundary. The two older public research notes still need their stale pre-cutover descriptions corrected when they are next maintained; any private-wiki refresh remains a separate private edit.
+ADR 0002 and the implementation plan now codify a builder-to-gateway OCI artifact boundary. Direct Git URLs, refs, destinations, history policy, and source credentials are builder inputs; the gateway accepts one authorized direct descriptor and returns its verified manifest/provenance identities.

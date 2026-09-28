@@ -128,7 +128,7 @@ The runtime and dashboard repositories use Apache-2.0 ([runtime license](https:/
 
 **Reject E2B as a replacement for the planned UHP/HarnessRouter gateway. Trial it later only as a stronger sandbox runtime beneath the runner if hostile-code isolation becomes a product requirement.**
 
-The current AllAgents decision is accepted but not implemented: [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md) selects UHP `2026-09-12` through a pinned HarnessRouter CE fork, and the [implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md) assigns the wire protocol, caller authentication, normalized streaming, cancellation, idempotency, conversation continuity, harness execution, usage, and artifacts to HarnessRouter. AllAgents owns deterministic Git/OCI materialization and source provenance. Repository inspection found no gateway, fork, materializer, or deployment implementation yet.
+The current AllAgents decision is accepted but not implemented: [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md) selects UHP `2026-09-12` through a pinned HarnessRouter CE fork, and the [implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md) assigns the wire protocol, caller authentication, normalized streaming, cancellation, idempotency, conversation continuity, harness execution, usage, and artifacts to HarnessRouter. A separate AllAgents Workspace Builder owns Git/OCI preparation and publishes one immutable snapshot before execution.
 
 E2B does not implement that contract. It creates an isolated machine and exposes low-level process, filesystem, network, and lifecycle APIs. Its official Codex and Pi integrations leave command construction, harness credentials, event parsing, continuation, and result extraction in caller code. Replacing HarnessRouter with E2B would therefore recreate the custom gateway, session, event-normalization, harness-adapter, and artifact layers that ADR 0002 rejected.
 
@@ -141,13 +141,13 @@ No. The systems overlap at the execution-workspace layer but own different abstr
 | Northbound contract | UHP request, ordered events, cancellation, idempotency, continuation, files, usage, artifacts, and normalized errors | Sandbox REST API plus process/filesystem APIs; no agent-neutral request/event/result protocol |
 | Harness execution | HarnessRouter selects and runs configured Codex or Pi targets | Caller starts an agent-specific command inside a sandbox and interprets its output |
 | Session identity | `previous_response_id` binds conversation, writable workspace, harness target, auth binding, and provenance | Sandbox ID binds machine state; agent thread/session identity remains harness- and caller-specific |
-| Workspace acquisition | Server-authoritative logical source catalog; exact Git commits or immutable OCI digests; pre-agent checkpoint; returned provenance | Caller uploads files, clones Git, or starts from a template/snapshot; no agent-run source-provenance contract |
+| Workspace acquisition | Separate builder resolves sources and publishes one direct OCI snapshot; gateway authorizes, verifies, privately materializes, and returns immutable manifest/provenance identities before agent start | Caller uploads files, clones Git, or starts from a template/snapshot; no agent-run source-provenance contract |
 | Isolation | Private per-session UID/workspace; explicitly not a hostile-code sandbox | One Firecracker microVM and guest kernel per sandbox |
 | Credentials | Separate caller, source, and provider trust domains; native OAuth owner-trust mode or explicit brokered proxy | Core sandbox auth plus caller-supplied agent/Git credentials; managed egress secrets and workload identity are not fully present in standard Embed |
 | Results | UHP output, usage, artifacts, produced-file collection, and identical provenance across stream/retrieval/replay paths | Guest files, command streams, VM snapshots, and templates; the caller defines an agent result or artifact manifest |
 | Deployment | Planned pinned private HarnessRouter image with durable sessions and a narrow AllAgents hook | Multi-service KVM stack with API, proxies, orchestrator, guest daemon, three datastores, and template/snapshot storage |
 
-E2B could occupy the runner's future sandbox-runtime slot. HarnessRouter and the AllAgents materializer would still remain above it.
+E2B could occupy the runner's future sandbox-runtime slot. HarnessRouter and the separate AllAgents Workspace Builder would still remain above and before it respectively.
 
 ### Is it completely self-hosted?
 

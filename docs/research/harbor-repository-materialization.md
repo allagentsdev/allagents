@@ -2,21 +2,13 @@
 
 ## Decision
 
-Use Harbor's content-addressed package cache, sparse Git reads, staged
-publication, and prebuilt-environment model as inputs to the AllAgents workspace
-materializer. Keep source selection and provenance in the AllAgents contract
-rather than adopting Harbor's task-owned workspace model.
+Use Harbor's content-addressed package cache, sparse Git reads, staged publication, and prebuilt-environment model in **AllAgents Workspace Builder**. Publish one complete immutable workspace snapshot before invoking AllAgents Gateway.
 
-Harbor does not expose a first-class, general-purpose “repositories in a
-workspace” layer. It first downloads a Harbor **task package**. The task then
-defines an execution environment with a Dockerfile, Compose file, or prebuilt
-image. Acquisition of the repository the agent edits may be baked into an image,
-cloned by a Dockerfile, copied as task content, or prepared by the task author.
+Harbor does not expose a first-class general-purpose “repositories in a workspace” layer. It first downloads a Harbor task package. The task then defines an execution environment with a Dockerfile, Compose file, or prebuilt image. Acquisition of the repository the agent edits may be baked into an image, cloned by a Dockerfile, copied as task content, or prepared by the task author.
 
-AllAgents keeps repository and workspace provenance explicit in the initial
-workspace descriptor and response metadata. The materializer accepts only
-declared Git repositories and named digest-pinned OCI workspace snapshots;
-custom materializers are outside the version-one contract.
+AllAgents keeps source selection and provenance explicit in the builder contract. The gateway receives only a direct digest-pinned OCI workspace-snapshot descriptor. Git URLs, mutable refs, source credentials, destinations, and custom preparation behavior do not cross into HarnessRouter.
+
+This replaces the earlier recommendation to invoke a materializer inside HarnessRouter. The primary-source observations below remain valid; the current boundary is defined by [snapshot-boundary research](./allagents-gateway-snapshot-boundary.md) and [ADR 0002](../decisions/0002-adopt-uhp-through-harnessrouter.md).
 
 ## What Harbor fetches
 
@@ -143,33 +135,19 @@ through to the other after admission.
 
 ## Recommended boundary
 
-The HarnessRouter runner invokes the AllAgents materializer before provider
-selection:
+AllAgents Workspace Builder runs before UHP execution:
 
-1. HarnessRouter validates generic metadata bounds, creates the session, and
-   enters the durable materialization state.
-2. The materializer validates the workspace descriptor and configured repository
-   or snapshot identities before source network access.
-3. The materializer resolves phase-scoped source credentials without exposing
-   them to the coding agent or later evidence collection.
-4. The materializer populates a fixed staging directory on the publication
-   filesystem, or pulls and unpacks a digest-pinned workspace snapshot there.
-5. The materializer verifies commits, paths, limits, content, the expected
-   manifest digest, and the standard workspace manifest; snapshot-attested claims
-   remain distinct from independently verified identities.
-6. The materializer stops acquisition processes, removes credentials, helpers,
-   and mounts, and returns only the validated credential-free staging tree plus
-   bounded provenance.
-7. The runner independently validates staging, publishes it, creates checkpoint
-   and collection baselines, applies UHP input files, and only then launches the
-   coding agent. Project or user `setup` shell commands are not run.
+1. The builder validates the versioned source plan, destination ownership, configured repository/snapshot identities, and principal authorization before source network access.
+2. It resolves phase-scoped source credentials without exposing them to the eventual coding agent or gateway.
+3. It populates a private staging tree from exact Git commits and digest-pinned OCI inputs.
+4. It verifies commits, history completeness, paths, limits, links, content, the canonical workspace manifest, and digest-covered provenance.
+5. It stops acquisition processes and removes credentials, helpers, unsafe Git state, and mounts.
+6. It publishes config, provenance, layers, and blobs completely before publishing and returning one direct OCI image-manifest descriptor.
+7. AllAgents Gateway authorizes that descriptor, independently verifies/materializes it into a private session tree, establishes checkpoint and collection baselines, applies UHP inputs, and only then launches the coding agent.
 
-Operator-selected builders and additional source variants require a new decision
-for trust, configuration, credential, provenance, and isolation boundaries.
+Project or user `setup` shell commands are not run as trusted preparation. Additional source kinds or caller-selected builders require a new decision for trust, credential, provenance, and isolation boundaries.
 
-The practical conclusion is narrow: Harbor is strong evidence for content-
-addressed input bundles and staged publication. It is not evidence for making
-repository acquisition opaque or task-defined in the AllAgents public contract.
+The practical conclusion is narrow: Harbor is strong evidence for content-addressed input bundles, isolated staging, and prebuilt publication. It is not evidence for resolving repositories inside the execution gateway or making preparation task-authored and opaque.
 
 ## Primary sources
 

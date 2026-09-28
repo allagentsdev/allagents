@@ -66,6 +66,30 @@ adapter; the general gateway supplies materialization, one-shot agent execution,
 same-runtime post-run checks, raw evidence, and cleanup while Promptfoo retains
 all grading and reward policy.
 
+## Multi-turn and sandboxed-code boundaries
+
+Promptfoo's simulated-user provider has two different transport modes. Its default
+resends the complete transcript on each turn. With `stateful: true`, Promptfoo
+sends only the newest user message after the target returns a session ID and
+expects that target to retain its own history
+([simulated-user provider](https://www.promptfoo.dev/docs/providers/simulated-user/)).
+The gateway can accept a fully rendered transcript as one instruction, but every
+provider call still creates a fresh run and workspace. That can test textual
+conversation continuity; it cannot test a coding conversation that depends on
+files, processes, tools, or services from an earlier turn. The provider therefore
+must not return a reusable session ID or pool native Codex/OMP sessions in V1.
+
+Promptfoo's
+[sandboxed-code guide](https://www.promptfoo.dev/docs/guides/sandboxed-code-evals/)
+does not put Promptfoo or its provider inside a sandbox. Its `type: python`
+assertion runs trusted user code, and that assertion explicitly calls Epicbox to
+launch the generated code snippet in a one-time Docker container. This is useful
+for grading code returned as text. It does not prepare a repository, isolate a
+write-capable coding agent, preserve the agent's final workspace for hidden
+checks, or provide the source, credential, artifact, and cleanup contracts needed
+here. A larger custom assertion could rebuild those responsibilities, but that
+would be another implementation of the gateway rather than a Promptfoo feature.
+
 ## AgentRun contract
 
 The normative wire contracts are

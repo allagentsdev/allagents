@@ -51,7 +51,7 @@ V1 supports **direct mode** only, owned completely by this repository.
 ### Excluded
 
 - Pass/fail, reward, rubric, or grading fields and decisions in the gateway contract.
-- Long-lived or reusable coding sessions, additional turns, continuation, resume, replay, or checkpoints.
+- Long-lived or reusable coding sessions, additional target turns, continuation, resume, session-event replay, or checkpoints.
 - Reusable composed workspaces, mutable source caches, unkeyed Git clones, prepared snapshots, or OCI workspace publication. Immutable exact-source generations are required only as specified below.
 - A workspace-builder service or repository.
 - Generic before/after diffs, patch output, or a core modified-workspace artifact.
@@ -804,9 +804,11 @@ The provider enforces the same conditional invariant as the gateway schema: `bun
 
 Local mode starts an ephemeral loopback gateway and worker using the same API handlers, runner, schemas, and states with SQLite/local artifacts. It does not bypass admission or call an adapter directly. Remote mode uses authenticated HTTPS. Promptfoo's secret mechanism supplies gateway authentication outside provider config and request JSON.
 
+The provider treats `renderedPrompt` as opaque input. Promptfoo may include a complete `_conversation` transcript in that value; every `callApi` still creates a distinct run with a fresh workspace and no retained agent or tool state. The provider does not return a reusable `sessionId`, enable backend thread pooling, or claim support for Promptfoo simulated-user `stateful: true`, which sends only the newest turn and requires the target to retain its own session. Stateful interactive coding evaluation requires a separate session contract.
+
 For each `callApi(renderedPrompt, context)` the provider:
 
-1. derives stable Promptfoo evaluation/case/repetition identity, allocates and persists one UUIDv7 `run_id` plus idempotency key before side effects;
+1. derives a stable Promptfoo evaluation/case/repetition conversation key and atomically claims the next durable provider-call record containing an ordinal, request digest, UUIDv7 `run_id`, and idempotency key before side effects. Re-entry into an unfinished call with the same digest reuses that record; a completed call advances the ordinal even when the next rendered prompt is byte-identical;
 2. deterministically packages each local source/optional post-run bundle, allocates and persists one UUIDv7 `upload_id` per package, then idempotently reserves/uploads and substitutes bundle references without changing order/destinations;
 3. builds and locally schema-validates the complete request, including `runtime_profile_id`, all ten limits, and requested-file artifact reservation;
 4. submits, polls the tenant-owned run, and propagates Promptfoo abort to cancellation using the same identity;
@@ -981,6 +983,7 @@ Implement provider modes, crash-safe run/upload identities, multi-source/runtime
 - inline and artifact-backed agent output, command streams, files, and trajectories are byte/digest/media verified; expiry/corruption becomes typed infrastructure, never a grader input;
 - cancelled/infrastructure errors carry their result/partial evidence to diagnostics but are excluded from behavioral rates;
 - a Codex/OMP matrix with two repetitions creates four private runs sharing authorized immutable generations; JS/LLM graders alone decide outcomes from verified raw evidence;
+- a two-turn full-history Promptfoo conversation receives distinct durable provider-call ordinals, run IDs, and fresh workspaces; losing and retrying turn 2's response reuses only turn 2's unfinished identity, while the provider returns no reusable session identity and never pools Codex/OMP state across calls;
 - cross-tenant run/cancel/artifact attempts fail identically in local and remote modes; no host path, credential, policy body, process, mount, clone, or run directory survives.
 
 ## Deferred integrations
@@ -1040,7 +1043,7 @@ CI may retain sanitized JSON, immutable cache fixtures, and referenced evidence,
 - [ ] Optional bundle is present iff a bundle executable is requested; dispatch creates only an empty reserved late-mount point and does not acquire or mount bundle bytes until agent cgroup/network/flows and credentials/home are gone. Runtime tools come only from the pinned profile revision's PATH; args are literal; commands use the exact final workspace.
 - [ ] Post-run initializes one full ordered evidence skeleton, seals each command/file before advancing, and represents completed/timed_out/not_run/unavailable plus all file states.
 - [ ] Cancelled/infrastructure results retain durable partial evidence; behavioral nonzero/timeout/missing/limit/non-regular observations do not become infrastructure.
-- [ ] Provider persists run/upload identities, downloads/verifies all artifact-backed output/evidence/trajectory, exposes partial evidence diagnostically, and leaves grading to Promptfoo.
+- [ ] Provider persists per-conversation call ordinals plus run/upload identities, reuses only an unfinished matching call, downloads/verifies all artifact-backed output/evidence/trajectory, exposes partial evidence diagnostically, and leaves grading to Promptfoo.
 - [ ] Cleanup removes every process/namespace/flow/service/mount/clone/root and releases leases before result visibility; cleanup failure forces infrastructure_error while retaining evidence through reconciliation.
 - [ ] Credentials/policy remain outside caller JSON, run environments, cache, evidence, errors, artifacts, and logs.
-- [ ] No reusable session, continuation, checkpoint, composed-workspace or snapshot publication cache, generic core change artifact, or second repository remains.
+- [ ] No reusable session, provider session identity, backend thread pooling, continuation, checkpoint, composed-workspace or snapshot publication cache, generic core change artifact, or second repository remains; full-history Promptfoo conversation rendering still creates a fresh run per turn.

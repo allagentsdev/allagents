@@ -12,6 +12,8 @@ Promptfoo will be the first caller. Promptfoo owns evaluation cases, prompt and 
 
 Each request creates a fresh workspace, runs one agent once, optionally collects evidence, and destroys the workspace. V1 has no reusable session, continuation, checkpoint, generic workspace diff, or implicit rerun.
 
+Promptfoo may render earlier conversational turns into that one instruction. This is transcript replay into a new run, not continuation: previous workspace mutations, tool state, and agent state do not survive. Promptfoo's stateful target mode is outside V1 because it sends only the newest turn and requires the target to own a reusable session.
+
 The public contracts are `AgentRunRequest v1` and `AgentRunResult v1`. They are closed, versioned JSON schemas. Unknown fields are rejected, and incompatible changes require a new version. The detailed fields belong in the gateway schemas and are recorded in the [implementation plan](../plans/2026-09-18-0837-feat-coding-execution-gateway-plan.md).
 
 This decision supersedes the earlier two-repository snapshot design. We keep the `allagentsdev/allagents-gateway` name, but the workspace-builder and snapshot contracts do not remain.

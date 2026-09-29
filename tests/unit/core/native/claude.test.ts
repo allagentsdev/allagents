@@ -124,6 +124,11 @@ describe('native/claude', () => {
       },
     ]);
     expect(parseClaudePluginInventory('{')).toBeNull();
+    expect(
+      parseClaudePluginInventory(
+        JSON.stringify([{ id: 'unexpected@catalog', scope: 'unknown' }]),
+      ),
+    ).toBeNull();
     expect(parseClaudeMarketplaceInventory('{}')).toBeNull();
   });
 
@@ -222,6 +227,7 @@ describe('native/claude', () => {
             { id: 'active@catalog', scope: 'user', enabled: true },
             { id: 'disabled@catalog', scope: 'user', enabled: false },
             { id: 'project@catalog', scope: 'project', enabled: true },
+            { id: 'canva@synced', scope: 'synced', enabled: true },
           ]),
         ),
     });

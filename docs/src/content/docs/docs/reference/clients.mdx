@@ -143,6 +143,10 @@ marketplace cleanup to Claude's user scope inside the selected root. Native
 skill filters and sparse marketplace paths are rejected; file installation is
 the deterministic alternative.
 
+Claude plugins synced from claude.ai (`synced` scope) are recognized during
+inventory inspection but are not treated as AllAgents-managed user or project
+plugins.
+
 The isolated root also holds Claude-managed credentials, sessions, trust state,
 plugin caches, and runtime metadata. Removing an AllAgents-created profile
 intentionally removes that isolated runtime state after native cleanup. Ambient

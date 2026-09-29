@@ -37,7 +37,7 @@ allagents status
 
 ### update
 
-Updates plugins in the workspace using non-destructive sync. By default, remote plugins are updated to their latest version. Also available as `allagents workspace update` or `allagents workspace sync`.
+Updates plugins in the workspace using non-destructive sync. By default, remote plugins are updated to their latest version. Also available as `allagents workspace update`; `allagents workspace sync` remains as the legacy alias.
 
 | Flag | Description |
 |------|-------------|
@@ -174,8 +174,8 @@ allagents workspace setup
 ```
 
 This explicit action is the only path that executes setup commands. `workspace
-init`, `update`, and `workspace sync` never run them because workspace templates
-may come from untrusted remote sources. Review every command before running
+init` and `update` never run them because workspace templates may come from
+untrusted remote sources. Review every command before running
 setup.
 
 String entries run everywhere. Object entries may restrict execution with

@@ -285,7 +285,7 @@ const setupCmd = command({
 });
 
 // =============================================================================
-// workspace sync
+// workspace update
 // =============================================================================
 
 export interface WorkspaceSyncCommandOptions {
@@ -488,7 +488,7 @@ export async function executeWorkspaceSyncCommand(
         if (isJsonMode()) {
           jsonOutput({
             success: true,
-            command: 'workspace sync',
+            command: 'workspace update',
             data: { message: 'No plugins configured', profiles: [] },
           });
         } else {
@@ -551,6 +551,12 @@ export async function executeWorkspaceSyncCommand(
     const ordinarySuccess =
       combined === null ||
       (combined.success && combined.totalFailed === 0);
+    // A pass that aborts early returns a failed result rather than throwing, so
+    // its reason lives on the result instead of in passErrors.
+    const failureMessages = [
+      ...passErrors,
+      ...(combined?.error ? [combined.error] : []),
+    ];
     const success =
       passErrors.length === 0 &&
       ordinarySuccess &&
@@ -559,15 +565,15 @@ export async function executeWorkspaceSyncCommand(
     if (isJsonMode()) {
       jsonOutput({
         success,
-        command: 'workspace sync',
+        command: 'workspace update',
         data: {
           ...(combined ? buildSyncData(combined) : {}),
           profiles: profileResults.map(buildProfileData),
         },
         ...(!success && {
           error:
-            passErrors.length > 0
-              ? passErrors.join('; ')
+            failureMessages.length > 0
+              ? failureMessages.join('; ')
               : 'Sync completed with failures',
         }),
       });
@@ -588,9 +594,9 @@ export async function executeWorkspaceSyncCommand(
       separateProfileOutput = true;
     }
 
-    if (passErrors.length > 0) {
+    if (!success && failureMessages.length > 0) {
       if (combined || profileResults.length > 0) console.error('');
-      for (const error of passErrors) {
+      for (const error of failureMessages) {
         console.error(`Error: ${error}`);
       }
     }
@@ -601,7 +607,7 @@ export async function executeWorkspaceSyncCommand(
       if (isJsonMode()) {
         jsonOutput({
           success: false,
-          command: 'workspace sync',
+          command: 'workspace update',
           error: error.message,
         });
         dependencies.exit(1);
@@ -1051,7 +1057,7 @@ export const workspaceCmd = conciseSubcommands({
   cmds: {
     init: initCmd,
     setup: setupCmd,
-    sync: syncCmd,
+    update: syncCmd,
     status: statusCmd,
     prune: pruneCmd,
     repo: repoCmd,

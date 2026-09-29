@@ -193,3 +193,60 @@ describe('mergeSyncResults', () => {
     ]);
   });
 });
+
+describe('mergeSyncResults error propagation', () => {
+  // A pass that aborts early (unreadable config, invalid plan) returns a failed
+  // result instead of throwing, so the merge is the only thing that can keep its
+  // reason alive.
+  function result(overrides: Partial<SyncResult> = {}): SyncResult {
+    return {
+      success: true,
+      pluginResults: [],
+      totalCopied: 0,
+      totalFailed: 0,
+      totalSkipped: 0,
+      totalGenerated: 0,
+      ...overrides,
+    };
+  }
+
+  test('carries the first result error forward', () => {
+    const merged = mergeSyncResults(
+      result({ success: false, error: 'user pass failed' }),
+      result(),
+    );
+    expect(merged.error).toBe('user pass failed');
+    expect(merged.success).toBe(false);
+  });
+
+  test('carries the second result error forward', () => {
+    const merged = mergeSyncResults(
+      result(),
+      result({ success: false, error: '.allagents/workspace.yaml validation failed' }),
+    );
+    expect(merged.error).toBe('.allagents/workspace.yaml validation failed');
+    expect(merged.success).toBe(false);
+  });
+
+  test('joins distinct errors in order', () => {
+    const merged = mergeSyncResults(
+      result({ success: false, error: 'user pass failed' }),
+      result({ success: false, error: 'project pass failed' }),
+    );
+    expect(merged.error).toBe('user pass failed; project pass failed');
+  });
+
+  test('does not repeat an identical error', () => {
+    const merged = mergeSyncResults(
+      result({ success: false, error: 'same failure' }),
+      result({ success: false, error: 'same failure' }),
+    );
+    expect(merged.error).toBe('same failure');
+  });
+
+  test('omits the error field when neither result failed', () => {
+    const merged = mergeSyncResults(result(), result());
+    expect(merged.error).toBeUndefined();
+    expect('error' in merged).toBe(false);
+  });
+});

@@ -11,6 +11,7 @@ import { parse } from 'cmd-ts';
 import {
   executeWorkspaceSyncCommand,
   syncCmd,
+  workspaceCmd,
 } from '../../../src/cli/commands/workspace.js';
 import type {
   WorkspaceSyncCommandDependencies,
@@ -293,7 +294,7 @@ describe('workspace update command', () => {
     const envelope = JSON.parse(String(consoleLog.mock.calls[0]?.[0]));
     expect(envelope).toMatchObject({
       success: true,
-      command: 'workspace sync',
+      command: 'workspace update',
       data: {
         copied: 0,
         generated: 0,
@@ -339,6 +340,13 @@ describe('workspace update command', () => {
     });
   });
 
+  test('accepts the canonical workspace name and the legacy alias', async () => {
+    for (const name of ['update', 'sync']) {
+      const result = await parse(workspaceCmd, [name]);
+      expect(result._tag).toBe('ok');
+    }
+  });
+
   test('rejects unsupported scope and client selectors during parsing', async () => {
     for (const args of [
       ['--scope', 'user'],
@@ -349,5 +357,52 @@ describe('workspace update command', () => {
       const result = await parse(syncCmd, args);
       expect(result._tag).toBe('error');
     }
+  });
+
+  test('reports the reason from a pass that returned a failure instead of throwing', async () => {
+    const exitCodes: number[] = [];
+
+    await executeWorkspaceSyncCommand(
+      defaultOptions,
+      commandDependencies({
+        // User pass succeeds, project pass aborts early the way `syncWorkspace`
+        // does for an unreadable or invalid workspace config.
+        syncWorkspace: async () => ({
+          ...successfulSyncResult(),
+          success: false,
+          error:
+            '.allagents/workspace.yaml validation failed:\n  - repositories.0.path: Invalid input: expected string, received undefined',
+        }),
+        exit: (code) => {
+          exitCodes.push(code);
+        },
+      }),
+    );
+
+    expect(exitCodes).toEqual([1]);
+    const stderr = consoleError.mock.calls.flat().join('\n');
+    expect(stderr).toContain(
+      'repositories.0.path: Invalid input: expected string, received undefined',
+    );
+    expect(stderr).not.toContain('Sync completed with failures');
+  });
+
+  test('surfaces a returned failure reason in the JSON error field', async () => {
+    setJsonMode(true);
+
+    await executeWorkspaceSyncCommand(
+      defaultOptions,
+      commandDependencies({
+        syncWorkspace: async () => ({
+          ...successfulSyncResult(),
+          success: false,
+          error: 'project config is invalid',
+        }),
+      }),
+    );
+
+    const envelope = JSON.parse(String(consoleLog.mock.calls[0]?.[0]));
+    expect(envelope.success).toBe(false);
+    expect(envelope.error).toBe('project config is invalid');
   });
 });

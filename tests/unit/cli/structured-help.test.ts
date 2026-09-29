@@ -209,10 +209,20 @@ describe('findMetaByCommand', () => {
 
   test('resolves public workspace aliases to their shared metadata', () => {
     expect(findMetaByCommand('workspace init ./project')?.command).toBe('init');
-    expect(findMetaByCommand('workspace sync --profile work')?.command).toBe(
+    expect(findMetaByCommand('workspace update --profile work')?.command).toBe(
       'update',
     );
     expect(findMetaByCommand('workspace status')?.command).toBe('status');
+  });
+
+  test('keeps legacy alias paths resolvable for metadata lookups', () => {
+    // `--json=<fields>` validation and other lookups resolve through the raw
+    // command path, so a legacy spelling must keep returning metadata even
+    // though it is no longer advertised in the command index.
+    expect(findMetaByCommand('sync')?.command).toBe('update');
+    expect(findMetaByCommand('workspace sync --profile work')?.command).toBe(
+      'update',
+    );
   });
 
   test('resolves command metadata when rest-positionals follow the command', () => {

@@ -107,6 +107,14 @@ clients:
 The colon shorthand and object form are equivalent. A plugin object may set its
 own `install: file` or `install: native` override.
 
+Native installation always installs the whole plugin. A plugin with
+`install: native` (or targeting a client configured for native installation)
+cannot use `skills` or `exclude` filters, even if another selected client uses
+file mode.
+AllAgents rejects those declarations before installation or update; set
+`install: file` on the plugin to use filters. The interactive Plugins and Skills
+menus also omit individual skill controls for native plugins.
+
 Per-plugin `mcpServers.exclude` names servers in the plugin's `.mcp.json`.
 Omitting it enables all plugin servers; an empty `exclude` list also enables
 all. It filters only AllAgents-managed MCP entries for file-installed clients.

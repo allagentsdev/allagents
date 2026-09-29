@@ -49,7 +49,7 @@ import { terminalSafe } from '../../terminal-output.js';
 import { formatVerboseSyncLines } from '../../format-sync.js';
 import { parseMarketplaceManifest } from '../../../utils/marketplace-manifest-parser.js';
 import { getWorkspaceStatus } from '../../../core/status.js';
-import { getAllSkillsFromPlugins, discoverSkillNames } from '../../../core/skills.js';
+import { getAllSkillsFromPlugins, getNativePluginSources, discoverSkillNames, NATIVE_SKILL_SELECTION_ERROR } from '../../../core/skills.js';
 import {
   CONFIG_DIR,
   WORKSPACE_CONFIG_FILE,
@@ -821,7 +821,13 @@ async function runPluginDetail(
 
   while (true) {
     const workspacePath = context.workspacePath ?? process.cwd();
-    const currentMode = await getPluginSkillsMode(pluginSource, scope, workspacePath);
+    const native = (await getNativePluginSources(
+      scope === 'user' ? getHomeDir() : workspacePath,
+      scope,
+    )).has(pluginSource);
+    const currentMode = native
+      ? null
+      : await getPluginSkillsMode(pluginSource, scope, workspacePath);
     if (mcpSelection === undefined) {
       mcpSelection = await getPluginMcpSelection(pluginSource, scope, workspacePath, index);
     }
@@ -830,13 +836,17 @@ async function runPluginDetail(
       : 'Auto-enable new skills: ON';
 
     const action = await select({
-      message: `Plugin: ${pluginSource} [${scope}]`,
+      message: `Plugin: ${pluginSource} [${scope}]${native ? ' · native' : ''}`,
       options: [
-        { label: 'Browse skills', value: 'browse' as const },
+        ...(!native
+          ? [{ label: 'Browse skills', value: 'browse' as const }]
+          : []),
         ...(mcpSelection
           ? [{ label: 'MCP servers', value: 'mcp_servers' as const }]
           : []),
-        { label: autoEnableLabel, value: 'toggle_auto_enable' as const },
+        ...(!native
+          ? [{ label: autoEnableLabel, value: 'toggle_auto_enable' as const }]
+          : []),
         { label: 'Update', value: 'update' as const },
         { label: 'Remove', value: 'remove' as const },
         { label: 'Back', value: 'back' as const },
@@ -977,7 +987,14 @@ export async function runBrowsePluginSkills(
   cache?: TuiCache,
 ): Promise<void> {
   try {
-    const workspacePath = scope === 'user' ? getHomeDir() : context.workspacePath ?? process.cwd();
+    const workspacePath =
+      scope === 'user'
+        ? getHomeDir()
+        : context.workspacePath ?? process.cwd();
+    if ((await getNativePluginSources(workspacePath, scope)).has(pluginSource)) {
+      p.note(NATIVE_SKILL_SELECTION_ERROR, 'Skills');
+      return;
+    }
     const allSkills = await getAllSkillsFromPlugins(workspacePath);
     
     // Filter skills to only those from this plugin

@@ -198,7 +198,10 @@ describe('installed plugin MCP selection', () => {
 
     await runPlugins(context(), statusCache('project', first));
 
-    const options = updateSelectMock.mock.calls.find(([input]) => input.message === `Plugin: ${first} [project]`)?.[0].options;
+    const options = updateSelectMock.mock.calls.find(
+      ([input]) => input.message.startsWith(`Plugin: ${first} [project]`),
+    )?.[0].options;
+    expect(options).toBeDefined();
     expect(options?.some(({ value }: { value: string }) => value === 'mcp_servers')).toBe(false);
     expect(updateMultiselectMock).not.toHaveBeenCalled();
     expect(await readFile(path, 'utf8')).toBe(before);
@@ -215,6 +218,15 @@ describe('installed plugin MCP selection', () => {
     updateMultiselectResponses.push(CLACK_CANCEL);
 
     await runPlugins(context(), statusCache('project', first));
+
+    const detail = updateSelectMock.mock.calls.find(
+      ([input]) => input.message.startsWith(`Plugin: ${first} [project]`),
+    )?.[0];
+    expect(detail).toBeDefined();
+    const actions = detail?.options?.map(({ value }) => value);
+    expect(actions).toContain('mcp_servers');
+    expect(actions).not.toContain('browse');
+    expect(actions).not.toContain('toggle_auto_enable');
 
     expect(updateMultiselectMock.mock.calls[0]?.[0].initialValues).toEqual(['beta']);
     expect(await readFile(path, 'utf8')).toBe(before);

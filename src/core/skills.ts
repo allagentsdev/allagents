@@ -6,8 +6,10 @@ import {
   type PluginSkillsConfig,
   type WorkspaceConfig,
   getPluginSource,
+  pluginUsesNativeInstall,
 } from '../models/workspace-config.js';
 import { isGitHubUrl, parseGitHubUrl } from '../utils/plugin-path.js';
+import { parseUserWorkspaceConfig, parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { loadYaml } from '../utils/yaml.js';
 import { parseSkillMetadata } from '../validators/skill.js';
 import {
@@ -169,6 +171,26 @@ async function walkForSkillMd(
   }
 
   return discovered;
+}
+
+export const NATIVE_SKILL_SELECTION_ERROR =
+  'Native plugins install all skills together. Change to install: file to select skills.';
+
+/** Sources whose selected clients install the plugin as an indivisible native unit. */
+export async function getNativePluginSources(
+  workspacePath: string,
+  scope: 'user' | 'project',
+): Promise<Set<string>> {
+  const configPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
+  if (!existsSync(configPath)) return new Set();
+  const config = scope === 'user'
+    ? await parseUserWorkspaceConfig(configPath)
+    : await parseWorkspaceConfig(configPath);
+  return new Set(
+    config.plugins
+      .filter((plugin) => pluginUsesNativeInstall(plugin, config.clients))
+      .map(getPluginSource),
+  );
 }
 
 /**

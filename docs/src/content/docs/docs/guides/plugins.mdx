@@ -163,6 +163,10 @@ See the [CLI reference](/docs/reference/cli/#skill-add) for all source formats.
 
 You can disable specific skills from a plugin without uninstalling the entire plugin:
 
+Individual skill selection is available only with file installation. Native
+plugin managers install the whole plugin; use `install: file` to enable skill
+filters or toggle individual skills in the interactive menus.
+
 ```bash
 # List all skills with their status
 allagents plugin skills list

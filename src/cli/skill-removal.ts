@@ -1,4 +1,4 @@
-import { type SkillInfo, getAllSkillsFromPlugins } from '../core/skills.js';
+import { type SkillInfo, getAllSkillsFromPlugins, getNativePluginSources, NATIVE_SKILL_SELECTION_ERROR } from '../core/skills.js';
 import {
   addUserDisabledSkill,
   removeUserEnabledSkill,
@@ -30,6 +30,12 @@ export async function removeInstalledSkill(
   options: RemoveInstalledSkillOptions,
 ): Promise<RemoveInstalledSkillResult> {
   const { targetSkill, isUser, workspacePath } = options;
+  if ((await getNativePluginSources(workspacePath, isUser ? 'user' : 'project')).has(targetSkill.pluginSource)) {
+    return {
+      success: false,
+      error: NATIVE_SKILL_SELECTION_ERROR,
+    };
+  }
   const allSkills =
     options.allSkills ?? (await getAllSkillsFromPlugins(workspacePath));
   const pluginSkills = allSkills.filter(

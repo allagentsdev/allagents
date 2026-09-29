@@ -1608,6 +1608,7 @@ export function buildPluginSyncPlans(
 
     const fileClients: ClientType[] = [];
     const nativeClients: ClientType[] = [];
+    let nativeRequested = false;
     for (const client of pluginClientTypes) {
       const clientEntry = normalizeClientEntry(
         clientEntries.find(
@@ -1620,6 +1621,7 @@ export function buildPluginSyncPlans(
         continue;
       }
 
+      nativeRequested = true;
       const adapter = getNativeClient(client);
       if (!adapter) {
         errors.push(
@@ -1653,6 +1655,14 @@ export function buildPluginSyncPlans(
     const pluginSkillsConfig =
       typeof plugin === 'string' ? undefined : plugin.skills;
     const mcpServers = typeof plugin === 'string' ? undefined : plugin.mcpServers;
+    if (
+      (nativeRequested || (typeof plugin !== 'string' && plugin.install === 'native')) &&
+      (exclude !== undefined || pluginSkillsConfig !== undefined)
+    ) {
+      errors.push(
+        `skill/exclude filters are not supported for native plugins ('${source}'). Change to install: file to use filters.`,
+      );
+    }
     return {
       configurationIndex,
       source,

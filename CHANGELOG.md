@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/allagentsdev/allagents/compare/v1.16.7...v1.17.0) (2026-09-29)
+
+
+### Miscellaneous Chores
+
+* pin the next release to 1.17.0 ([#524](https://github.com/allagentsdev/allagents/issues/524)) ([140bc82](https://github.com/allagentsdev/allagents/commit/140bc828891e84cbe583620f9dbb5da46107a74f))
+
 ## [1.16.7](https://github.com/allagentsdev/allagents/compare/v1.16.6...v1.16.7) (2026-09-23)
 
 

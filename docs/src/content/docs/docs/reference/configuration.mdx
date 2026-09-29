@@ -589,6 +589,13 @@ silently ignored; rename the key to `ref`.
 
 The optional top-level `mcpServers` field defines MCP servers managed directly by a project or ordinary user workspace. Project servers sync to configured project MCP clients; user servers sync to the corresponding user destinations.
 
+In the interactive MCP Servers menu, choose **Project** to add a server to the
+current directory. This option is available before a project workspace exists;
+adding the first server creates `.allagents/workspace.yaml`. Configure project
+clients (for example, `claude` and `copilot`) to sync it to their project MCP
+files (`.mcp.json` and `.github/mcp.json`, respectively). From the home
+directory, use **User** instead: its workspace config is the same file.
+
 ```yaml
 mcpServers:
   deepwiki:

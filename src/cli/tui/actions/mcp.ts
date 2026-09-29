@@ -12,7 +12,7 @@ import {
   type McpDestination,
   resolveMcpDestination,
 } from '../../../core/mcp-servers.js';
-import { getUserWorkspaceConfig } from '../../../core/user-workspace.js';
+import { getUserWorkspaceConfig, isUserConfigPath } from '../../../core/user-workspace.js';
 import type {
   ClientType,
   McpServerConfig,
@@ -146,13 +146,14 @@ async function buildDestinationChoices(
   dependencies: McpTuiDependencies,
 ): Promise<DestinationChoice[]> {
   const choices: DestinationChoice[] = [];
-  if (context.hasWorkspace && context.workspacePath) {
+  const projectPath = context.workspacePath ?? process.cwd();
+  if (!isUserConfigPath(projectPath)) {
     choices.push({
       key: 'project',
       label: 'Project',
       hint: 'current workspace',
       destination: dependencies.resolveDestination({
-        cwd: context.workspacePath,
+        cwd: projectPath,
         scope: 'project',
       }),
       clients: mcpClientIdsForScope('project'),

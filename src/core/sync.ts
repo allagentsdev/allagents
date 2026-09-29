@@ -248,6 +248,12 @@ export interface SyncResult {
  */
 export function mergeSyncResults(a: SyncResult, b: SyncResult): SyncResult {
   const warnings = [...(a.warnings || []), ...(b.warnings || [])];
+  // A pass that aborts early returns a failed result instead of throwing, so
+  // its reason only survives if the merge carries it forward.
+  const errors = [
+    ...(a.error ? [a.error] : []),
+    ...(b.error && b.error !== a.error ? [b.error] : []),
+  ];
   const messages = [...(a.messages || []), ...(b.messages || [])];
   const purgedPaths = [...(a.purgedPaths || []), ...(b.purgedPaths || [])];
   const deletedArtifacts = [
@@ -270,6 +276,7 @@ export function mergeSyncResults(a: SyncResult, b: SyncResult): SyncResult {
     totalFailed: a.totalFailed + b.totalFailed,
     totalSkipped: a.totalSkipped + b.totalSkipped,
     totalGenerated: a.totalGenerated + b.totalGenerated,
+    ...(errors.length > 0 && { error: errors.join('; ') }),
     ...(warnings.length > 0 && { warnings }),
     ...(messages.length > 0 && { messages }),
     ...(purgedPaths.length > 0 && { purgedPaths }),

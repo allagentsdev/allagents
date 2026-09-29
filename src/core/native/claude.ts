@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   executeCommand,
   compareNativeVersions,
@@ -40,6 +40,12 @@ export interface ClaudePluginInventoryEntry {
   readonly id: string;
   readonly scope?: 'user' | 'project' | 'local' | 'managed' | 'synced';
   readonly enabled: boolean;
+  /**
+   * Project directory reported for `project`/`local` inventory entries. Claude
+   * Code lists project-scope installs for every project, so this disambiguates
+   * the selected project. Absent on older CLI versions.
+   */
+  readonly projectPath?: string;
 }
 
 export interface ClaudeMarketplaceInventoryEntry {
@@ -156,6 +162,8 @@ function parsePluginEntry(
   return {
     id,
     ...(scope && { scope }),
+    ...(typeof entry.projectPath === 'string' &&
+      entry.projectPath.length > 0 && { projectPath: entry.projectPath }),
     enabled: available ? false : entry.enabled !== false,
   };
 }
@@ -292,6 +300,25 @@ function cliScope(context: NativeOperationContext): string {
 
 function isProfileContext(context: NativeOperationContext): boolean {
   return context.nativeScope.startsWith('profile:');
+}
+
+/**
+ * Claude Code lists `project`/`local` installs for every project regardless of
+ * the selected scope. Entries that name a different project must not be
+ * attributed to the current one. Entries without `projectPath` come from older
+ * CLI versions that scoped the inventory themselves and stay authoritative.
+ */
+function isForeignProjectEntry(
+  entry: ClaudePluginInventoryEntry,
+  context: NativeOperationContext,
+): boolean {
+  if (entry.scope !== 'project' && entry.scope !== 'local') return false;
+  if (!entry.projectPath) return false;
+  const entryRoot = resolve(entry.projectPath);
+  const candidates = [context.root, context.cwd]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => resolve(value));
+  return !candidates.includes(entryRoot);
 }
 
 function marketplaceSourceArgument(resource: NativeResource): string | null {
@@ -521,6 +548,7 @@ export class ClaudeNativeClient implements NativeClient {
       ) {
         continue;
       }
+      if (isForeignProjectEntry(entry, context)) continue;
       const pluginId = parseClaudePluginId(entry.id);
       const resource: NativeResource = {
         kind: 'plugin',

@@ -123,6 +123,28 @@ describe('native/claude', () => {
         ref: 'stable',
       },
     ]);
+    expect(
+      parseClaudePluginInventory(
+        JSON.stringify([
+          {
+            id: 'tool@catalog',
+            scope: 'project',
+            enabled: true,
+            projectPath: '/work/a',
+          },
+        ]),
+      ),
+    ).toEqual({
+      installed: [
+        {
+          id: 'tool@catalog',
+          scope: 'project',
+          projectPath: '/work/a',
+          enabled: true,
+        },
+      ],
+      available: [],
+    });
     expect(parseClaudePluginInventory('{')).toBeNull();
     expect(
       parseClaudePluginInventory(
@@ -243,6 +265,48 @@ describe('native/claude', () => {
         }),
       }),
     ]);
+  });
+
+  test('ignores project scope installs from other projects', async () => {
+    const context = await fixture();
+    const projectContext: NativeOperationContext = {
+      ...context,
+      scope: 'project',
+      nativeScope: 'project',
+    };
+    await mkdir(projectContext.root, { recursive: true });
+    const otherProject = join(tmpdir(), 'allagents-other-project');
+    const client = new ClaudeNativeClient({
+      execute: async () =>
+        result(
+          JSON.stringify([
+            {
+              id: 'installed@catalog',
+              scope: 'project',
+              enabled: true,
+              projectPath: projectContext.root,
+            },
+            {
+              id: 'blocked@catalog',
+              scope: 'project',
+              enabled: false,
+              projectPath: otherProject,
+            },
+            {
+              id: 'skipped@catalog',
+              scope: 'project',
+              enabled: true,
+              projectPath: otherProject,
+            },
+            { id: 'skipped@catalog', scope: 'user', enabled: true },
+          ]),
+        ),
+    });
+    const inspection = await client.inspect(projectContext);
+    expect(
+      inspection.resources.map((resource) => resource.resolvedIdentity),
+    ).toEqual(['installed@catalog']);
+    expect(inspection.observations ?? []).toEqual([]);
   });
 
   test('registers, installs, updates, and removes in isolated user scope', async () => {

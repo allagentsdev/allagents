@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.17.1](https://github.com/allagentsdev/allagents/compare/v1.17.0...v1.17.1) (2026-09-29)
+
+
+### Fixed
+
+* **claude:** scope project-scope plugin inventory to the selected project ([#531](https://github.com/allagentsdev/allagents/issues/531)) ([1d63045](https://github.com/allagentsdev/allagents/commit/1d630455846bae5ee0fd800703623f9aa72de2e8))
+* **cli:** accept Claude synced plugin inventory scope ([#527](https://github.com/allagentsdev/allagents/issues/527)) ([13ff391](https://github.com/allagentsdev/allagents/commit/13ff39123ff307f27bfcc0daa8b207303588ff31))
+* **cli:** report workspace update failures and use its canonical name ([#528](https://github.com/allagentsdev/allagents/issues/528)) ([5326497](https://github.com/allagentsdev/allagents/commit/5326497d77217c858f0beadb774d99e7c1419c42))
+
 ## [1.17.0](https://github.com/allagentsdev/allagents/compare/v1.16.7...v1.17.0) (2026-09-29)
 
 

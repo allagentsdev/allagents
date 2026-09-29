@@ -38,7 +38,7 @@ export interface ClaudeMarketplaceRegistrationInspection {
 
 export interface ClaudePluginInventoryEntry {
   readonly id: string;
-  readonly scope?: 'user' | 'project' | 'local' | 'managed';
+  readonly scope?: 'user' | 'project' | 'local' | 'managed' | 'synced';
   readonly enabled: boolean;
 }
 
@@ -141,7 +141,8 @@ function parsePluginEntry(
     entry.scope === 'user' ||
     entry.scope === 'project' ||
     entry.scope === 'local' ||
-    entry.scope === 'managed'
+    entry.scope === 'managed' ||
+    entry.scope === 'synced'
       ? entry.scope
       : undefined;
   if (!available && entry.scope !== undefined && !scope) return null;

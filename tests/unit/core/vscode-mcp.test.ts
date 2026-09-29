@@ -19,7 +19,7 @@ function makeTempDir(): string {
 
 /** Helper to create a validated plugin with a resolved path */
 function makePlugin(resolved: string, plugin = 'test-plugin'): ValidatedPlugin {
-  return { plugin, resolved, success: true };
+  return { plugin, resolved, success: true, clients: ['vscode'], nativeClients: [] };
 }
 
 describe('getVscodeMcpConfigPath', () => {
@@ -124,6 +124,77 @@ describe('collectMcpServers', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('plugin-b');
     expect(warnings[0]).toContain('dup');
+  });
+
+  test('exclusions apply per plugin before duplicate precedence and workspace overrides', () => {
+    writeFileSync(
+      join(tempDir1, '.mcp.json'),
+      JSON.stringify({ mcpServers: {
+        shared: { command: 'first' },
+        removed: { command: 'removed' },
+        override: { command: 'plugin' },
+      } }),
+    );
+    writeFileSync(
+      join(tempDir2, '.mcp.json'),
+      JSON.stringify({ mcpServers: { shared: { command: 'second' } } }),
+    );
+    const first = makePlugin(tempDir1, 'first');
+    first.nativeClients = ['claude'];
+    first.mcpServers = { exclude: ['shared', 'removed', 'override'] };
+    const second = makePlugin(tempDir2, 'second');
+
+    const { servers, warnings } = collectMcpServers(
+      [first, second],
+      { override: { command: 'workspace' } },
+    );
+
+    expect(Object.fromEntries(servers)).toEqual({
+      shared: { command: 'second' },
+      override: { command: 'workspace' },
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  test('an empty exclusion leaves plugin MCP servers enabled', () => {
+    writeFileSync(
+      join(tempDir1, '.mcp.json'),
+      JSON.stringify({ mcpServers: { kept: { command: 'kept' } } }),
+    );
+    const plugin = makePlugin(tempDir1);
+    plugin.mcpServers = { exclude: [] };
+    expect(Object.fromEntries(collectMcpServers([plugin]).servers)).toEqual({
+      kept: { command: 'kept' },
+    });
+  });
+
+  test('does not collect file MCP servers from native-only plugin units', () => {
+    writeFileSync(
+      join(tempDir1, '.mcp.json'),
+      JSON.stringify({ mcpServers: { nativeOnly: { command: 'native' } } }),
+    );
+    const native = makePlugin(tempDir1);
+    native.clients = [];
+    native.nativeClients = ['claude'];
+    native.mcpServers = { exclude: [] };
+
+    expect(Object.fromEntries(collectMcpServers([native]).servers)).toEqual({});
+  });
+
+  test('mixed installs only supply MCP servers to file-installed clients', () => {
+    writeFileSync(
+      join(tempDir1, '.mcp.json'),
+      JSON.stringify({ mcpServers: { fileOnly: { command: 'file' } } }),
+    );
+    const mixed = makePlugin(tempDir1);
+    mixed.nativeClients = ['claude'];
+
+    expect(
+      Object.fromEntries(collectMcpServers([mixed], undefined, 'vscode').servers),
+    ).toEqual({ fileOnly: { command: 'file' } });
+    expect(
+      Object.fromEntries(collectMcpServers([mixed], undefined, 'claude').servers),
+    ).toEqual({});
   });
 
   test('skips MCP servers omitted by a non-strict marketplace entry', () => {

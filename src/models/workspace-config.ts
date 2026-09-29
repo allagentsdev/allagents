@@ -136,6 +136,15 @@ export const PluginSkillsConfigSchema = z.union([
 
 export type PluginSkillsConfig = z.infer<typeof PluginSkillsConfigSchema>;
 
+/** Per-plugin MCP server blocklist for file-installed plugin artifacts. */
+export const PluginMcpServersConfigSchema = z
+  .object({ exclude: z.array(z.string()) })
+  .strict();
+
+export type PluginMcpServersConfig = z.infer<
+  typeof PluginMcpServersConfigSchema
+>;
+
 /**
  * Plugin entry in workspace.yaml
  * Supports string shorthand and object form with optional client override.
@@ -147,6 +156,7 @@ const PluginEntryObjectSchema = z
     install: InstallModeSchema.optional(),
     exclude: z.array(z.string()).optional(),
     skills: PluginSkillsConfigSchema.optional(),
+    mcpServers: PluginMcpServersConfigSchema.optional(),
     /**
      * Optional Git ref (tag or branch). Equivalent to passing the
      * `owner/repo@<ref>` shorthand on install. When set, every sync resolves

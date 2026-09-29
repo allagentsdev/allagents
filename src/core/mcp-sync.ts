@@ -220,7 +220,8 @@ async function prepareMcpOnlySync(
 
   const validatedPlugins = await validateAllPlugins(activePlans, root, offline);
   const validPlugins = validatedPlugins.filter(
-    (plugin): plugin is ValidatedPlugin => plugin.success,
+    (plugin): plugin is ValidatedPlugin =>
+      plugin.success && plugin.clients.length > 0,
   );
   warnings.push(
     ...validatedPlugins

@@ -17,7 +17,7 @@ function makeTempDir(): string {
 }
 
 function makePlugin(resolved: string, plugin = 'test-plugin'): ValidatedPlugin {
-  return { plugin, resolved, success: true };
+  return { plugin, resolved, success: true, clients: ['claude'], nativeClients: [] };
 }
 
 describe('buildClaudeMcpAddArgs', () => {

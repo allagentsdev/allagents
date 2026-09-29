@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import {
   WorkspaceConfigSchema,
+  UserWorkspaceConfigSchema,
   ClientTypeSchema,
   RepositorySchema,
 } from '../../../src/models/workspace-config.js';
@@ -117,6 +118,36 @@ describe('WorkspaceConfigSchema', () => {
 
     const result = WorkspaceConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
+  });
+
+  it('accepts per-plugin MCP server exclusions in project and user configs', () => {
+    const config = {
+      repositories: [],
+      plugins: [{ source: './plugin', mcpServers: { exclude: ['remote'] } }],
+      clients: ['vscode'],
+    };
+    const project = WorkspaceConfigSchema.safeParse(config);
+    expect(project.success).toBe(true);
+    if (project.success) {
+      expect(project.data.plugins[0]).toEqual(config.plugins[0]);
+    }
+    expect(UserWorkspaceConfigSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('rejects malformed per-plugin MCP selection', () => {
+    const base = { repositories: [], clients: ['vscode'] };
+    for (const mcpServers of [
+      { exclude: 'remote' },
+      { exclude: [1] },
+      { exclude: [], include: ['other'] },
+    ]) {
+      expect(
+        WorkspaceConfigSchema.safeParse({
+          ...base,
+          plugins: [{ source: './plugin', mcpServers }],
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('accepts an object-form Git ref', () => {

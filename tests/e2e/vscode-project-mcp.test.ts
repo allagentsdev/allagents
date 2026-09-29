@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { syncWorkspace } from '../../src/core/sync.js';
+import { syncMcpOnly } from '../../src/core/mcp-sync.js';
 
 describe('vscode project-scoped MCP sync e2e', () => {
   let testDir: string;
@@ -132,4 +133,49 @@ clients:
     const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'));
     expect(mcpConfig.servers.deepwiki).toBeUndefined();
   });
+  test('removes newly excluded tracked servers while preserving user-owned servers', async () => {
+    const workspacePath = join(testDir, '.allagents', 'workspace.yaml');
+    const configPath = join(testDir, '.vscode', 'mcp.json');
+    writeFileSync(
+      join(pluginDir, '.mcp.json'),
+      JSON.stringify({ mcpServers: {
+        deepwiki: { command: 'plugin-deepwiki' },
+        retained: { command: 'plugin-retained' },
+        personal: { command: 'plugin-personal' },
+      } }),
+    );
+    writeFileSync(workspacePath, `repositories: []
+plugins:
+  - source: ${pluginDir}
+clients:
+  - vscode
+`);
+    mkdirSync(join(testDir, '.vscode'), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      servers: { personal: { command: 'user-personal' } },
+    }));
+
+    const initial = await syncWorkspace(testDir);
+    expect(initial.success).toBe(true);
+    expect(initial.mcpResults?.vscode?.trackedServers).toEqual(['deepwiki', 'retained']);
+    writeFileSync(workspacePath, `repositories: []
+plugins:
+  - source: ${pluginDir}
+    mcpServers:
+      exclude: [deepwiki, personal]
+clients:
+  - vscode
+`);
+
+    const updated = await syncMcpOnly(testDir, { offline: true });
+    expect(updated.success).toBe(true);
+    expect(updated.mcpResults.vscode?.removedServers).toEqual(['deepwiki']);
+    expect(JSON.parse(readFileSync(configPath, 'utf8')).servers).toEqual({
+      retained: { command: 'plugin-retained' },
+      personal: { command: 'user-personal' },
+    });
+    const state = JSON.parse(readFileSync(join(testDir, '.allagents', 'sync-state.json'), 'utf8'));
+    expect(state.mcpServers.vscode).toEqual(['retained']);
+  });
+
 });

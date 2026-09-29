@@ -320,6 +320,12 @@ marketplace plugins. Use `plugin@owner/marketplace-repository` or
 use the normal marketplace registration flow; the URL form is normalized to
 the canonical GitHub source before registration and deduplication.
 
+In the interactive **Plugins** menu, a plugin with `.mcp.json` servers and at
+least one file-installed MCP-capable client offers **MCP servers**. Select the
+servers to keep enabled; AllAgents immediately reconciles file-managed MCP
+entries. Native-only plugins do not offer this action, and a mixed file/native
+install changes only file-managed MCP entries.
+
 ### plugin update
 
 Update one declared plugin or every plugin in the selected scope.

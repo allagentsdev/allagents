@@ -215,6 +215,16 @@ describe('findMetaByCommand', () => {
     expect(findMetaByCommand('workspace status')?.command).toBe('status');
   });
 
+  test('keeps legacy alias paths resolvable for metadata lookups', () => {
+    // `--json=<fields>` validation and other lookups resolve through the raw
+    // command path, so a legacy spelling must keep returning metadata even
+    // though it is no longer advertised in the command index.
+    expect(findMetaByCommand('sync')?.command).toBe('update');
+    expect(findMetaByCommand('workspace sync --profile work')?.command).toBe(
+      'update',
+    );
+  });
+
   test('resolves command metadata when rest-positionals follow the command', () => {
     const meta = findMetaByCommand('skill update code-review glow-api');
     expect(meta?.command).toBe('skill update');

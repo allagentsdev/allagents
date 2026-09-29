@@ -57,6 +57,12 @@ import {
 interface RegisteredCommand {
   command: string;
   meta: AgentCommandMeta;
+  /**
+   * An alias path for a still-supported legacy spelling. It resolves metadata
+   * for lookups such as `--json=<fields>` validation, but is omitted from the
+   * advertised command index so it never becomes the documented name.
+   */
+  alias?: true;
 }
 
 /**
@@ -67,10 +73,12 @@ interface RegisteredCommand {
 const registeredCommands: RegisteredCommand[] = [
   { command: 'init', meta: initMeta },
   { command: 'update', meta: syncMeta },
+  { command: 'sync', meta: syncMeta, alias: true },
   { command: 'status', meta: statusMeta },
   { command: 'workspace init', meta: initMeta },
   { command: 'workspace setup', meta: setupMeta },
   { command: 'workspace update', meta: syncMeta },
+  { command: 'workspace sync', meta: syncMeta, alias: true },
   { command: 'workspace status', meta: statusMeta },
   { command: 'workspace prune', meta: pruneMeta },
   { command: 'workspace repo add', meta: repoAddMeta },
@@ -180,6 +188,7 @@ function immediateCommandIndex(commandPath: string): Record<string, unknown>[] {
   const result: Record<string, unknown>[] = [];
 
   for (const registered of registeredCommands) {
+    if (registered.alias) continue;
     if (!registered.command.startsWith(prefix)) continue;
     const remainder = registered.command.slice(prefix.length);
     const next = remainder.split(' ')[0];

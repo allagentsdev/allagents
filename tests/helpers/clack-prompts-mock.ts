@@ -23,7 +23,8 @@ export const installConfirmMock = mock(
     installConfirmationResponses.shift() ?? CLACK_CANCEL,
 );
 export const updateSelectMock = mock(
-  async () => updateSelectResponses.shift() ?? '__back__',
+  async (_options: { message: string; options?: Array<{ label: string; value: string }> }) =>
+    updateSelectResponses.shift() ?? '__back__',
 );
 
 export const spinnerStartMock = mock((_message?: string) => {});
@@ -38,6 +39,8 @@ const spinner = {
   error: spinnerErrorMock,
 };
 
+export const skillMultiselectMock = mock(async (_options: { message: string }) => []);
+
 mock.module('@clack/prompts', () => ({
   autocomplete: mock(async () => ''),
   autocompleteMultiselect: mock(
@@ -50,16 +53,16 @@ mock.module('@clack/prompts', () => ({
   ),
   isCancel: (value: unknown) => value === CLACK_CANCEL,
   isCI: () => false,
-  multiselect: mock(async () => []),
+  multiselect: skillMultiselectMock,
   note: mock((message: string, title?: string) => {
     if (title === 'Install summary' || title?.startsWith('Installed: ')) {
       installNoteMock(message, title);
     } else updateNoteMock(message, title);
   }),
-  select: mock(async (options: { message?: string }) =>
+  select: mock(async (options: { message: string; options?: Array<{ label: string; value: string }> }) =>
     options.message === 'Install scope'
       ? (installScopeResponses.shift() ?? CLACK_CANCEL)
-      : updateSelectMock(),
+      : updateSelectMock(options),
   ),
   spinner: () => spinner,
   text: mock(async () => ''),
@@ -85,5 +88,6 @@ export function resetUpdatePromptMocks(): void {
   updateSelectResponses.length = 0;
   updateNoteMock.mockClear();
   updateSelectMock.mockClear();
+  skillMultiselectMock.mockClear();
   resetSpinnerMocks();
 }

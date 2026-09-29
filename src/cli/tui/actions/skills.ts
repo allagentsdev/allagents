@@ -1,5 +1,5 @@
 import * as p from '@clack/prompts';
-import { getAllSkillsFromPlugins, discoverSkillNames, type SkillInfo } from '../../../core/skills.js';
+import { getAllSkillsFromPlugins, getNativePluginSources, discoverSkillNames, type SkillInfo } from '../../../core/skills.js';
 import {
   removeDisabledSkill,
   addEnabledSkill,
@@ -39,11 +39,12 @@ interface ScopedSkill extends SkillInfo {
 async function loadAllSkills(context: TuiContext): Promise<ScopedSkill[]> {
   const skills: ScopedSkill[] = [];
 
-  // User-scope skills
+  const nativeUserPlugins = await getNativePluginSources(getHomeDir(), 'user');
   const userSkills = await getAllSkillsFromPlugins(getHomeDir());
   const userKeys = new Set<string>();
 
   for (const s of userSkills) {
+    if (nativeUserPlugins.has(s.pluginSource)) continue;
     const skillKey = `${s.pluginName}:${s.name}`;
     userKeys.add(skillKey);
     skills.push({
@@ -57,8 +58,10 @@ async function loadAllSkills(context: TuiContext): Promise<ScopedSkill[]> {
   // Project-scope skills (only if workspace exists and isn't the user config)
   if (context.workspacePath && !isUserConfigPath(context.workspacePath)) {
     const projectSkills = await getAllSkillsFromPlugins(context.workspacePath);
+    const nativeProjectPlugins = await getNativePluginSources(context.workspacePath, 'project');
     for (const s of projectSkills) {
       const skillKey = `${s.pluginName}:${s.name}`;
+      if (nativeProjectPlugins.has(s.pluginSource)) continue;
       // Deduplicate: skip if same skill exists in user scope
       if (userKeys.has(skillKey)) continue;
       skills.push({

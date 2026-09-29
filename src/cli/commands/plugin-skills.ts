@@ -40,6 +40,8 @@ import {
   discoverSkillNames,
   findSkillByName,
   getAllSkillsFromPlugins,
+  getNativePluginSources,
+  NATIVE_SKILL_SELECTION_ERROR,
 } from '../../core/skills.js';
 import { upsertSyncStateSource } from '../../core/sync-state.js';
 import {
@@ -2958,6 +2960,10 @@ const addCmd = command({
           process.exit(1);
         }
         targetSkill = filtered;
+      }
+
+      if ((await getNativePluginSources(workspacePath, isUser ? 'user' : 'project')).has(targetSkill.pluginSource)) {
+        throw new Error(NATIVE_SKILL_SELECTION_ERROR);
       }
 
       // Check if already enabled

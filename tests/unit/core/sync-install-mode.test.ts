@@ -108,6 +108,31 @@ describe('syncWorkspace — install mode', () => {
     expect(existsSync(join(testDir, '.github', 'skills', 'test-skill'))).toBe(false);
   });
 
+  it('rejects skill and exclude filters on native plugins before any client work', async () => {
+    for (const filters of [{ skills: ['test-skill'] }, { exclude: ['hooks/**'] }, { skills: { exclude: ['test-skill'] } }]) {
+      await writeFile(
+        join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
+        `repositories: []\nplugins:\n  - source: demo@tools\n    install: native\n    ${'skills' in filters ? `skills: ${JSON.stringify(filters.skills)}` : `exclude: ${JSON.stringify(filters.exclude)}`}\nclients: [claude]\n`,
+      );
+      const result = await syncWorkspace(testDir);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('skill/exclude filters are not supported for native plugins');
+      expect(existsSync(join(testDir, '.claude', 'skills', 'test-skill'))).toBe(false);
+    }
+  });
+
+  it('rejects filters when native mode is inherited from a client, including mixed installs', () => {
+    const result = buildPluginSyncPlans(
+      [{ source: 'demo@tools', clients: ['claude', 'codex'], exclude: ['hooks/**'] }],
+      [{ name: 'claude', install: 'native' }, 'codex'],
+      'project',
+    );
+    expect(result.plans[0]).toMatchObject({ clients: ['codex'], nativeClients: ['claude'] });
+    expect(result.errors).toContain(
+      "skill/exclude filters are not supported for native plugins ('demo@tools'). Change to install: file to use filters.",
+    );
+  });
+
   it('plans Codex native installation through the ordinary user sync path', () => {
     const config = UserWorkspaceConfigSchema.parse({
       repositories: [],

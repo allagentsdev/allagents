@@ -686,6 +686,34 @@ export function ensureObjectPluginEntry(
   return entry;
 }
 
+/**
+ * Replace one installed plugin's file-backed MCP exclusions by its exact
+ * configured source. Names shared by other plugins are left untouched.
+ */
+export function setPluginMcpServersExcludedInConfig(
+  config: WorkspaceConfig,
+  source: string,
+  excludedNames: readonly string[],
+  configurationIndex?: number,
+): ModifyResult {
+  const index = configurationIndex ??
+    config.plugins.findIndex((plugin) => getPluginSource(plugin) === source);
+  const existing = config.plugins[index];
+  if (!existing || getPluginSource(existing) !== source) {
+    return {
+      success: false,
+      error: `Plugin '${source}' not found in workspace config`,
+    };
+  }
+  const entry = ensureObjectPluginEntry(config, index);
+  if (excludedNames.length > 0) {
+    entry.mcpServers = { exclude: [...new Set(excludedNames)] };
+  } else {
+    delete entry.mcpServers;
+  }
+  return { success: true };
+}
+
 function uniqueSkillNames(skillNames: string[]): string[] {
   const unique: string[] = [];
   const seen = new Set<string>();
@@ -1237,6 +1265,40 @@ export async function setPluginSkillsMode(
 
     await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
     return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Persist the complete MCP exclusion set for a project plugin in one write. */
+export async function setPluginMcpServersExcluded(
+  source: string,
+  excludedNames: readonly string[],
+  workspacePath: string = process.cwd(),
+  configurationIndex?: number,
+): Promise<ModifyResult> {
+  const configPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
+  if (!existsSync(configPath)) {
+    return {
+      success: false,
+      error: `${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE} not found in ${workspacePath}`,
+    };
+  }
+
+  try {
+    const config = await parseWorkspaceConfigForEdit(configPath);
+    const result = setPluginMcpServersExcludedInConfig(
+      config,
+      source,
+      excludedNames,
+      configurationIndex,
+    );
+    if (!result.success) return result;
+    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    return result;
   } catch (error) {
     return {
       success: false,

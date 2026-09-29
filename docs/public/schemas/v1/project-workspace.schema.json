@@ -306,6 +306,21 @@
                       }
                     ]
                   },
+                  "mcpServers": {
+                    "type": "object",
+                    "properties": {
+                      "exclude": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "exclude"
+                    ],
+                    "additionalProperties": false
+                  },
                   "ref": {
                     "type": "string"
                   }

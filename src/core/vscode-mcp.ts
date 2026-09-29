@@ -140,11 +140,14 @@ export function collectMcpServers(
   const warnings: string[] = [];
 
   for (const plugin of validatedPlugins) {
+    if (plugin.clients.length === 0) continue;
+    if (targetClient && !plugin.clients.includes(targetClient)) continue;
     if (plugin.fileArtifacts?.mcpServers === false) continue;
     const mcpServers = readPluginMcpConfig(plugin.resolved);
     if (!mcpServers) continue;
 
     for (const [name, config] of Object.entries(mcpServers)) {
+      if (plugin.mcpServers?.exclude.includes(name)) continue;
       if (servers.has(name)) {
         warnings.push(
           `MCP server '${name}' from ${plugin.plugin} conflicts with earlier plugin (skipped)`,

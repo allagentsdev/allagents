@@ -11,6 +11,11 @@ export const installConfirmationResponses: Array<
   boolean | typeof CLACK_CANCEL
 > = [];
 export const updateSelectResponses: string[] = [];
+export const updateMultiselectResponses: Array<string[] | typeof CLACK_CANCEL> = [];
+export const updateMultiselectMock = mock(
+  async (_options: { initialValues?: string[]; options?: Array<{ value: string }> }) =>
+    updateMultiselectResponses.shift() ?? [],
+);
 
 export const installNoteMock = mock(
   (_message: string, _title?: string) => {},
@@ -23,7 +28,8 @@ export const installConfirmMock = mock(
     installConfirmationResponses.shift() ?? CLACK_CANCEL,
 );
 export const updateSelectMock = mock(
-  async () => updateSelectResponses.shift() ?? '__back__',
+  async (_options: { message?: string; options?: Array<{ label: string; value: string }> }) =>
+    updateSelectResponses.shift() ?? '__back__',
 );
 
 export const spinnerStartMock = mock((_message?: string) => {});
@@ -50,16 +56,16 @@ mock.module('@clack/prompts', () => ({
   ),
   isCancel: (value: unknown) => value === CLACK_CANCEL,
   isCI: () => false,
-  multiselect: mock(async () => []),
+  multiselect: updateMultiselectMock,
   note: mock((message: string, title?: string) => {
     if (title === 'Install summary' || title?.startsWith('Installed: ')) {
       installNoteMock(message, title);
     } else updateNoteMock(message, title);
   }),
-  select: mock(async (options: { message?: string }) =>
+  select: mock(async (options: { message?: string; options?: Array<{ label: string; value: string }> }) =>
     options.message === 'Install scope'
       ? (installScopeResponses.shift() ?? CLACK_CANCEL)
-      : updateSelectMock(),
+      : updateSelectMock(options),
   ),
   spinner: () => spinner,
   text: mock(async () => ''),
@@ -82,6 +88,8 @@ export function resetInstallPromptMocks(): void {
 }
 
 export function resetUpdatePromptMocks(): void {
+  updateMultiselectResponses.length = 0;
+  updateMultiselectMock.mockClear();
   updateSelectResponses.length = 0;
   updateNoteMock.mockClear();
   updateSelectMock.mockClear();

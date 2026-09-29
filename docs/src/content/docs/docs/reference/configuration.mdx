@@ -50,6 +50,9 @@ plugins:
     skills:                                # Blocklist: sync all except these
       exclude:
         - verbose-logging
+    mcpServers:                            # File installs: sync all plugin servers except these
+      exclude:
+        - optional-search
 
 clients:
   - claude
@@ -104,6 +107,15 @@ clients:
 The colon shorthand and object form are equivalent. A plugin object may set its
 own `install: file` or `install: native` override.
 
+Per-plugin `mcpServers.exclude` names servers in the plugin's `.mcp.json`.
+Omitting it enables all plugin servers; an empty `exclude` list also enables
+all. It filters only AllAgents-managed MCP entries for file-installed clients.
+Workspace-level `mcpServers` remain independent, including when they use the
+same name as an excluded plugin server. Native plugin managers install whole
+units: AllAgents does not filter individual MCP servers for native clients.
+For a plugin targeting both file and native clients, the selection affects only
+the file-installed clients.
+
 Pi native mode supports npm, Git, and local package sources at project or user
 scope. Project installs require trust recorded outside the project-controlled
 Pi agent root. OMP native mode accepts marketplace-backed plugin specs at
@@ -127,8 +139,8 @@ clients: [claude, codex, cursor]
 Interactive `plugin install` and source-backed `skill add` commands omit the
 override when the selected clients equal the scope default. A first install
 into a new scope seeds its top-level `clients` list. Reinstalling a declaration
-preserves existing `install`, `skills`, `exclude`, `ref`, and other object
-fields while applying the selected client target.
+preserves existing `install`, `skills`, `mcpServers`, `exclude`, `ref`, and
+other object fields while applying the selected client target.
 
 ### Global Profiles
 

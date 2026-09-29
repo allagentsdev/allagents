@@ -190,6 +190,28 @@ When a skill exists in multiple plugins, use `--plugin` to specify which one:
 allagents plugin skills remove coding-standards --plugin my-plugin
 ```
 
+## Selecting Plugin MCP Servers
+
+In the interactive **Plugins** menu, open an installed plugin and choose
+**MCP servers** to select which servers from its `.mcp.json` remain enabled.
+This action appears when the plugin targets at least one file-installed client
+with an MCP destination. Native plugin systems install the whole plugin, so a
+native-only install has no per-server selector. On a mixed install, only
+file-installed client MCP entries change.
+
+You can also exclude individual plugin servers in either project or user
+`workspace.yaml`:
+
+```yaml
+plugins:
+  - source: my-plugin@official
+    mcpServers:
+      exclude: [optional-search]
+```
+
+All other servers remain enabled, including new servers added by a plugin
+update. Workspace-level MCP declarations are not excluded by this setting.
+
 ## Plugin Spec Format
 
 Plugins use the `plugin@marketplace` format:

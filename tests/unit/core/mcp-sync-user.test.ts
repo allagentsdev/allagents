@@ -7,6 +7,7 @@ import { dump, load } from 'js-yaml';
 import { WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import { getCopilotMcpConfigPath } from '../../../src/core/copilot-mcp.js';
 import { syncUserMcpOnly } from '../../../src/core/mcp-sync.js';
+import { syncUserWorkspace } from '../../../src/core/sync.js';
 import { getSyncStatePath } from '../../../src/core/sync-state.js';
 import { getVscodeMcpConfigPath } from '../../../src/core/vscode-mcp.js';
 import { stubHomeDir } from '../../helpers/env.js';
@@ -101,6 +102,46 @@ describe('syncUserMcpOnly', () => {
       claude: ['keep'],
       vscode: ['tradingview'],
       copilot: ['tradingview'],
+    });
+  });
+
+  test('full user sync and MCP-only update reconcile selected plugin servers and workspace overrides', async () => {
+    const pluginPath = join(home, 'plugin');
+    await mkdir(pluginPath);
+    await writeFile(join(pluginPath, '.mcp.json'), JSON.stringify({
+      mcpServers: {
+        ignored: { command: 'plugin-ignored' },
+        replacement: { command: 'plugin-replacement' },
+        kept: { command: 'plugin-kept' },
+      },
+    }));
+    const config = {
+      repositories: [],
+      plugins: [{ source: pluginPath, mcpServers: { exclude: [] } }],
+      clients: ['vscode'],
+      mcpServers: { replacement: { command: 'workspace-replacement' } },
+    };
+    await writeUserConfig(config);
+
+    const full = await syncUserWorkspace({ offline: true });
+    expect(full.success).toBe(true);
+    expect(JSON.parse(await readFile(getVscodeMcpConfigPath(), 'utf8')).servers).toEqual({
+      ignored: { command: 'plugin-ignored' },
+      replacement: { command: 'workspace-replacement' },
+      kept: { command: 'plugin-kept' },
+    });
+    await writeUserConfig({
+      ...config,
+      plugins: [{ source: pluginPath, mcpServers: { exclude: ['ignored', 'replacement'] } }],
+    });
+
+    const result = await syncUserMcpOnly({ offline: true });
+
+    expect(result.success).toBe(true);
+    expect(result.mcpResults.vscode?.removedServers).toEqual(['ignored']);
+    expect(JSON.parse(await readFile(getVscodeMcpConfigPath(), 'utf8')).servers).toEqual({
+      replacement: { command: 'workspace-replacement' },
+      kept: { command: 'plugin-kept' },
     });
   });
 

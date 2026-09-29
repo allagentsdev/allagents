@@ -6,6 +6,7 @@ import {
   removeDisabledSkill,
   addEnabledSkill,
   setPluginSkillsMode,
+  setPluginMcpServersExcluded,
 } from '../../../core/workspace-modify.js';
 import {
   addUserPluginForTarget,
@@ -14,6 +15,7 @@ import {
   removeUserDisabledSkill,
   addUserEnabledSkill,
   setUserPluginSkillsMode,
+  setUserPluginMcpServersExcluded,
   getInstalledUserPlugins,
   getInstalledProjectPlugins,
   getUserPluginsForMarketplace,
@@ -24,8 +26,10 @@ import {
   preflightNativePluginDeclaration,
   syncWorkspace,
   syncUserWorkspace,
+  validateAllPlugins,
   type SyncResult,
 } from '../../../core/sync.js';
+import { syncMcpOnly, syncUserMcpOnly } from '../../../core/mcp-sync.js';
 import {
   listMarketplaces,
   listMarketplacePlugins,
@@ -52,6 +56,8 @@ import {
   getHomeDir,
 } from '../../../constants.js';
 import { getPluginSource } from '../../../models/workspace-config.js';
+import { mcpClientIdsForScope } from '../../../models/client-mapping.js';
+import { readPluginMcpConfig } from '../../../core/vscode-mcp.js';
 import type { TuiContext } from '../context.js';
 import type { TuiCache } from '../cache.js';
 import { removeInstalledSkill } from '../../skill-removal.js';
@@ -588,6 +594,10 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
         { label: '+ Add plugin', value: '__add__' },
       ];
 
+      const pluginTargets = new Map<
+        string,
+        { source: string; scope: 'project' | 'user'; index: number }
+      >();
       // Gather installed plugins from status
       let status = cache?.getStatus();
       if (!status) {
@@ -604,21 +614,22 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
       }
 
       if (status.success) {
-        for (const plugin of status.plugins) {
-          const key = `project:${plugin.source}`;
-          options.push({
-            label: plugin.source,
-            value: key,
-            hint: `${plugin.kind} · ${plugin.type} · project`,
-          });
-        }
-        for (const plugin of status.userPlugins ?? []) {
-          const key = `user:${plugin.source}`;
-          options.push({
-            label: plugin.source,
-            value: key,
-            hint: `${plugin.kind} · ${plugin.type} · user`,
-          });
+        for (const scope of ['project', 'user'] as const) {
+          const plugins = scope === 'project' ? status.plugins : (status.userPlugins ?? []);
+          const counts = new Map<string, number>();
+          for (const plugin of plugins) {
+            counts.set(plugin.source, (counts.get(plugin.source) ?? 0) + 1);
+          }
+          for (const [index, plugin] of plugins.entries()) {
+            const count = counts.get(plugin.source) ?? 1;
+            const key = `${scope}:${plugin.source}${count > 1 ? `\0${index}` : ''}`;
+            pluginTargets.set(key, { source: plugin.source, scope, index });
+            options.push({
+              label: plugin.source,
+              value: key,
+              hint: `${plugin.kind} · ${plugin.type} · ${scope}${count > 1 ? ` · entry ${index + 1}` : ''}`,
+            });
+          }
         }
       }
 
@@ -643,8 +654,10 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
         continue;
       }
 
-      // User selected an installed plugin — show detail screen
-      await runPluginDetail(selected, context, cache);
+      const target = pluginTargets.get(selected);
+      if (target) {
+        await runPluginDetail(target, context, cache);
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -672,21 +685,146 @@ async function getPluginSkillsMode(
   return 'blocklist';
 }
 
+interface PluginMcpSelection {
+  names: string[];
+  excluded: string[];
+  retryRequired?: boolean;
+}
+
+/**
+ * Resolve only this installed declaration, and only when it has file-installed
+ * clients. A native install may have a .mcp.json but never has per-server
+ * controls in allagents.
+ */
+async function getPluginMcpSelection(
+  source: string,
+  scope: 'project' | 'user',
+  workspacePath: string,
+  configurationIndex: number,
+): Promise<PluginMcpSelection | null> {
+  const root = scope === 'user' ? getHomeDir() : workspacePath;
+  const config = scope === 'user'
+    ? await getUserWorkspaceConfig()
+    : await parseWorkspaceConfig(join(root, CONFIG_DIR, WORKSPACE_CONFIG_FILE));
+  if (!config) return null;
+  const entry = config.plugins[configurationIndex];
+  if (!entry || getPluginSource(entry) !== source) return null;
+  const plan = buildPluginSyncPlans([entry], config.clients, scope).plans[0];
+  const mcpClients = mcpClientIdsForScope(scope);
+  if (!plan?.clients.some((client) => mcpClients.includes(client))) return null;
+
+  const [validated] = await validateAllPlugins([plan], root, true);
+  if (!validated?.success || validated.fileArtifacts?.mcpServers === false) {
+    return null;
+  }
+  const servers = readPluginMcpConfig(validated.resolved);
+  const names = Object.keys(servers ?? {});
+  if (names.length === 0) return null;
+  return {
+    names,
+    excluded: typeof entry === 'string' ? [] : entry.mcpServers?.exclude ?? [],
+  };
+}
+
+async function runPluginMcpSelection(
+  source: string,
+  scope: 'project' | 'user',
+  workspacePath: string,
+  selection: PluginMcpSelection,
+  configurationIndex: number,
+  cache?: TuiCache,
+): Promise<void> {
+  const previous = new Set(selection.excluded);
+  const selected = await multiselect({
+    message: `Toggle MCP servers in ${source} (selected = enabled)`,
+    options: selection.names.map((name) => ({ label: name, value: name })),
+    initialValues: selection.names.filter((name) => !previous.has(name)),
+    required: false,
+  });
+  if (p.isCancel(selected)) return;
+
+  const enabled = new Set(selected);
+  const toEnable = selection.names.filter(
+    (name) => previous.has(name) && enabled.has(name),
+  );
+  const toDisable = selection.names.filter(
+    (name) => !previous.has(name) && !enabled.has(name),
+  );
+  const changed = toEnable.length > 0 || toDisable.length > 0;
+  if (!changed && !selection.retryRequired) {
+    p.note('No changes made.', 'MCP servers');
+    return;
+  }
+
+  // Keep exclusions for servers not currently discoverable in the checkout.
+  const discoverable = new Set(selection.names);
+  const excluded = [
+    ...selection.excluded.filter((name) => !discoverable.has(name)),
+    ...selection.names.filter((name) => !enabled.has(name)),
+  ];
+  const s = p.spinner();
+  s.start('Updating MCP servers...');
+  if (changed) {
+    const result = scope === 'project'
+      ? await setPluginMcpServersExcluded(source, excluded, workspacePath, configurationIndex)
+      : await setUserPluginMcpServersExcluded(source, excluded, configurationIndex);
+    if (!result.success) {
+      s.stop('Update failed');
+      p.note(result.error ?? 'Unknown error', 'Error');
+      return;
+    }
+    selection.excluded = excluded;
+  }
+  s.message('Updating...');
+  selection.retryRequired = true;
+  try {
+    const syncResult = scope === 'project'
+      ? await syncMcpOnly(workspacePath, { offline: true })
+      : await syncUserMcpOnly({ offline: true });
+    if (!syncResult.success) {
+      throw new Error(syncResult.error ?? syncResult.warnings.join('; '));
+    }
+  } catch (error) {
+    s.stop('Update failed');
+    const message = error instanceof Error ? error.message : String(error);
+    p.note(`Selection saved, but MCP update failed: ${message}. Reopen MCP servers and confirm to retry.`, 'Error');
+    return;
+  }
+  selection.retryRequired = false;
+  s.stop('Updated');
+  cache?.invalidate();
+  p.note(
+    changed
+      ? [
+          ...toEnable.map((name) => `✓ Enabled: ${name}`),
+          ...toDisable.map((name) => `✗ Disabled: ${name}`),
+        ].join('\n')
+      : 'Saved selection applied.',
+    'MCP servers updated',
+  );
+}
+
 /**
  * Plugin detail screen.
  * Shows actions for a specific installed plugin: browse skills, remove.
  */
 async function runPluginDetail(
-  pluginKey: string,
+  { source: pluginSource, scope, index }: {
+    source: string;
+    scope: 'project' | 'user';
+    index: number;
+  },
   context: TuiContext,
   cache?: TuiCache,
 ): Promise<void> {
-  const scope = pluginKey.startsWith('project:') ? 'project' : 'user';
-  const pluginSource = pluginKey.replace(/^(project|user):/, '');
+  let mcpSelection: PluginMcpSelection | null | undefined;
 
   while (true) {
     const workspacePath = context.workspacePath ?? process.cwd();
     const currentMode = await getPluginSkillsMode(pluginSource, scope, workspacePath);
+    if (mcpSelection === undefined) {
+      mcpSelection = await getPluginMcpSelection(pluginSource, scope, workspacePath, index);
+    }
     const autoEnableLabel = currentMode === 'allowlist'
       ? 'Auto-enable new skills: OFF'
       : 'Auto-enable new skills: ON';
@@ -695,6 +833,9 @@ async function runPluginDetail(
       message: `Plugin: ${pluginSource} [${scope}]`,
       options: [
         { label: 'Browse skills', value: 'browse' as const },
+        ...(mcpSelection
+          ? [{ label: 'MCP servers', value: 'mcp_servers' as const }]
+          : []),
         { label: autoEnableLabel, value: 'toggle_auto_enable' as const },
         { label: 'Update', value: 'update' as const },
         { label: 'Remove', value: 'remove' as const },
@@ -708,6 +849,18 @@ async function runPluginDetail(
 
     if (action === 'browse') {
       await runBrowsePluginSkills(pluginSource, scope, context, cache);
+      continue;
+    }
+
+    if (action === 'mcp_servers' && mcpSelection) {
+      await runPluginMcpSelection(
+        pluginSource,
+        scope,
+        workspacePath,
+        mcpSelection,
+        index,
+        cache,
+      );
       continue;
     }
 
@@ -768,6 +921,7 @@ async function runPluginDetail(
 
     if (action === 'update') {
       await runUpdatePlugin(pluginSource, scope, context, cache);
+      mcpSelection = undefined;
       continue;
     }
 

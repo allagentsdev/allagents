@@ -37,6 +37,7 @@ import {
   resolveMarketplacePluginDeclaration,
   pruneEnabledSkillsForPlugin,
   resolveGitHubIdentity,
+  setPluginMcpServersExcludedInConfig,
   upsertGitHubPluginSourceAllowlistInConfig,
   writeWorkspaceConfigAtomically,
 } from './workspace-modify.js';
@@ -855,6 +856,36 @@ export async function setUserPluginSkillsMode(
 
     await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
     return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Persist the complete MCP exclusion set for a user plugin in one write. */
+export async function setUserPluginMcpServersExcluded(
+  source: string,
+  excludedNames: readonly string[],
+  configurationIndex?: number,
+): Promise<ModifyResult> {
+  const configPath = getUserWorkspaceConfigPath();
+  if (!existsSync(configPath)) {
+    return { success: false, error: `Plugin '${source}' not found in user workspace config` };
+  }
+
+  try {
+    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    const result = setPluginMcpServersExcludedInConfig(
+      config,
+      source,
+      excludedNames,
+      configurationIndex,
+    );
+    if (!result.success) return result;
+    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    return result;
   } catch (error) {
     return {
       success: false,

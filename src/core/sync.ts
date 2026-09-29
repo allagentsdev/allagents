@@ -32,6 +32,7 @@ import type {
 import type {
   ClientType,
   PluginEntry,
+  PluginMcpServersConfig,
   PluginSkillsConfig,
   SyncMode,
   WorkspaceConfig,
@@ -381,6 +382,8 @@ export interface ValidatedPlugin {
   fileArtifacts?: MarketplaceFileArtifacts;
   /** Glob patterns of files to exclude when syncing (from workspace.yaml) */
   exclude?: string[];
+  /** Plugin MCP servers excluded from file-installed artifacts. */
+  mcpServers?: PluginMcpServersConfig;
   /** Inline skill selection config from plugin entry (v2+) */
   pluginSkillsConfig?: PluginSkillsConfig;
 }
@@ -394,6 +397,8 @@ export interface PluginSyncPlan {
   nativeClients: ClientType[];
   /** Glob patterns of files to exclude when syncing (from workspace.yaml) */
   exclude?: string[];
+  /** Plugin MCP servers excluded from file-installed artifacts. */
+  mcpServers?: PluginMcpServersConfig;
   /** Inline skill selection config from plugin entry (v2+) */
   pluginSkillsConfig?: PluginSkillsConfig;
 }
@@ -1647,6 +1652,7 @@ export function buildPluginSyncPlans(
     const exclude = getPluginExclude(plugin);
     const pluginSkillsConfig =
       typeof plugin === 'string' ? undefined : plugin.skills;
+    const mcpServers = typeof plugin === 'string' ? undefined : plugin.mcpServers;
     return {
       configurationIndex,
       source,
@@ -1654,6 +1660,7 @@ export function buildPluginSyncPlans(
       nativeClients,
       ...(exclude && { exclude }),
       ...(pluginSkillsConfig !== undefined && { pluginSkillsConfig }),
+      ...(mcpServers !== undefined && { mcpServers }),
     };
   });
 
@@ -1680,6 +1687,7 @@ export async function validateAllPlugins(
         clients,
         nativeClients,
         exclude,
+        mcpServers,
         pluginSkillsConfig,
       }) => {
         let validated: ValidatedPlugin;
@@ -1718,6 +1726,7 @@ export async function validateAllPlugins(
           nativeClients,
         };
         if (exclude) result.exclude = exclude;
+        if (mcpServers !== undefined) result.mcpServers = mcpServers;
         if (pluginSkillsConfig !== undefined) {
           result.pluginSkillsConfig = pluginSkillsConfig;
         }

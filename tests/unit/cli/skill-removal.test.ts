@@ -59,6 +59,35 @@ describe('removeInstalledSkill', () => {
     expect(updated.plugins).toEqual([]);
   });
 
+  it('does not remove a native plugin when asked to remove its only skill', async () => {
+    const pluginDir = join(tmpDir, 'native-plugin');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(
+      join(pluginDir, 'SKILL.md'),
+      '---\nname: native-skill\ndescription: Native\n---\n',
+    );
+    const config: WorkspaceConfig = {
+      version: 2,
+      repositories: [],
+      clients: [{ name: 'claude', install: 'native' }],
+      plugins: [{ source: pluginDir }],
+    };
+    const path = join(tmpDir, '.allagents/workspace.yaml');
+    const original = dump(config);
+    await writeFile(path, original);
+
+    const [targetSkill] = await getAllSkillsFromPlugins(tmpDir);
+    expect(targetSkill).toBeDefined();
+    const result = await removeInstalledSkill({
+      targetSkill: targetSkill!,
+      isUser: false,
+      workspacePath: tmpDir,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Native plugins install all skills together');
+    expect(await readFile(path, 'utf8')).toBe(original);
+  });
+
   it('removes only the selected skill when the plugin exposes multiple skills', async () => {
     const pluginDir = join(tmpDir, 'multi-plugin');
     await mkdir(join(pluginDir, 'skills/skill-a'), { recursive: true });

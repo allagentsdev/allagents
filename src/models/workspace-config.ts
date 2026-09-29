@@ -7,6 +7,8 @@ import {
   UserClientEntryListSchema,
   UserClientTypeListSchema,
   UserClientTypeSchema,
+  normalizeClientEntry,
+  type ClientEntry,
   type ClientType,
   type InstallMode,
 } from './client-entry-schema.js';
@@ -255,6 +257,28 @@ export function resolveInstallMode(
   if (pluginMode) return pluginMode;
   return clientEntry.install;
 }
+/** Whether any selected client requests whole-plugin native installation. */
+export function pluginUsesNativeInstall(
+  plugin: PluginEntry,
+  clientEntries: ClientEntry[],
+): boolean {
+  const pluginMode = getPluginInstallMode(plugin);
+  if (pluginMode) return pluginMode === 'native';
+  const selected = getPluginClients(plugin);
+  if (!selected) {
+    return clientEntries.some((entry) =>
+      resolveInstallMode(plugin, normalizeClientEntry(entry)) === 'native',
+    );
+  }
+  return selected.some((client) => {
+    const entry = clientEntries.find(
+      (candidate) =>
+        (typeof candidate === 'string' ? candidate : candidate.name) === client,
+    );
+    return resolveInstallMode(plugin, normalizeClientEntry(entry ?? client)) === 'native';
+  });
+}
+
 
 /**
  * VSCode workspace generation configuration

@@ -104,6 +104,14 @@ clients:
 The colon shorthand and object form are equivalent. A plugin object may set its
 own `install: file` or `install: native` override.
 
+Native installation always installs the whole plugin. A plugin with
+`install: native` (or targeting a client configured for native installation)
+cannot use `skills` or `exclude` filters, even if another selected client uses
+file mode.
+AllAgents rejects those declarations before installation or update; set
+`install: file` on the plugin to use filters. The interactive Plugins and Skills
+menus also omit individual skill controls for native plugins.
+
 Pi native mode supports npm, Git, and local package sources at project or user
 scope. Project installs require trust recorded outside the project-controlled
 Pi agent root. OMP native mode accepts marketplace-backed plugin specs at

@@ -285,7 +285,7 @@ const setupCmd = command({
 });
 
 // =============================================================================
-// workspace sync
+// workspace update
 // =============================================================================
 
 export interface WorkspaceSyncCommandOptions {
@@ -488,7 +488,7 @@ export async function executeWorkspaceSyncCommand(
         if (isJsonMode()) {
           jsonOutput({
             success: true,
-            command: 'workspace sync',
+            command: 'workspace update',
             data: { message: 'No plugins configured', profiles: [] },
           });
         } else {
@@ -565,7 +565,7 @@ export async function executeWorkspaceSyncCommand(
     if (isJsonMode()) {
       jsonOutput({
         success,
-        command: 'workspace sync',
+        command: 'workspace update',
         data: {
           ...(combined ? buildSyncData(combined) : {}),
           profiles: profileResults.map(buildProfileData),
@@ -607,7 +607,7 @@ export async function executeWorkspaceSyncCommand(
       if (isJsonMode()) {
         jsonOutput({
           success: false,
-          command: 'workspace sync',
+          command: 'workspace update',
           error: error.message,
         });
         dependencies.exit(1);
@@ -1057,7 +1057,7 @@ export const workspaceCmd = conciseSubcommands({
   cmds: {
     init: initCmd,
     setup: setupCmd,
-    sync: syncCmd,
+    update: syncCmd,
     status: statusCmd,
     prune: pruneCmd,
     repo: repoCmd,

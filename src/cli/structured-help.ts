@@ -70,7 +70,7 @@ const registeredCommands: RegisteredCommand[] = [
   { command: 'status', meta: statusMeta },
   { command: 'workspace init', meta: initMeta },
   { command: 'workspace setup', meta: setupMeta },
-  { command: 'workspace sync', meta: syncMeta },
+  { command: 'workspace update', meta: syncMeta },
   { command: 'workspace status', meta: statusMeta },
   { command: 'workspace prune', meta: pruneMeta },
   { command: 'workspace repo add', meta: repoAddMeta },

@@ -11,6 +11,7 @@ import { parse } from 'cmd-ts';
 import {
   executeWorkspaceSyncCommand,
   syncCmd,
+  workspaceCmd,
 } from '../../../src/cli/commands/workspace.js';
 import type {
   WorkspaceSyncCommandDependencies,
@@ -293,7 +294,7 @@ describe('workspace update command', () => {
     const envelope = JSON.parse(String(consoleLog.mock.calls[0]?.[0]));
     expect(envelope).toMatchObject({
       success: true,
-      command: 'workspace sync',
+      command: 'workspace update',
       data: {
         copied: 0,
         generated: 0,
@@ -337,6 +338,13 @@ describe('workspace update command', () => {
         profile: ['work', 'review', 'work'],
       },
     });
+  });
+
+  test('accepts the canonical workspace name and the legacy alias', async () => {
+    for (const name of ['update', 'sync']) {
+      const result = await parse(workspaceCmd, [name]);
+      expect(result._tag).toBe('ok');
+    }
   });
 
   test('rejects unsupported scope and client selectors during parsing', async () => {

@@ -87,7 +87,7 @@ export const syncMeta: AgentCommandMeta = {
     'allagents update --offline',
     'allagents update --verbose',
     'allagents update --profile work --profile review',
-    'allagents workspace sync --profile work',
+    'allagents workspace update --profile work',
   ],
   expectedOutput:
     'Attempts user workspace, installed declared profiles, and project workspace in order without stopping later passes after a failure. With --profile, validates and updates only selected profiles that are both installed and declared. Exit 1 after all applicable passes if any pass fails.',

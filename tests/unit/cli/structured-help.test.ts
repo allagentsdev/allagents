@@ -209,7 +209,7 @@ describe('findMetaByCommand', () => {
 
   test('resolves public workspace aliases to their shared metadata', () => {
     expect(findMetaByCommand('workspace init ./project')?.command).toBe('init');
-    expect(findMetaByCommand('workspace sync --profile work')?.command).toBe(
+    expect(findMetaByCommand('workspace update --profile work')?.command).toBe(
       'update',
     );
     expect(findMetaByCommand('workspace status')?.command).toBe('status');

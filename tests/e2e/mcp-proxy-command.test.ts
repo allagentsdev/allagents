@@ -181,7 +181,7 @@ describe('mcp public command help', () => {
     expect(group.commands).toEqual([
       expect.objectContaining({ command: 'workspace init', kind: 'command' }),
       expect.objectContaining({ command: 'workspace setup', kind: 'command' }),
-      expect.objectContaining({ command: 'workspace sync', kind: 'command' }),
+      expect.objectContaining({ command: 'workspace update', kind: 'command' }),
       expect.objectContaining({ command: 'workspace status', kind: 'command' }),
       expect.objectContaining({ command: 'workspace prune', kind: 'command' }),
       expect.objectContaining({

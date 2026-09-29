@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.18.0](https://github.com/allagentsdev/allagents/compare/v1.17.1...v1.18.0) (2026-09-29)
+
+
+### Added
+
+* **mcp:** select plugin servers for file installs ([#533](https://github.com/allagentsdev/allagents/issues/533)) ([e7b27b2](https://github.com/allagentsdev/allagents/commit/e7b27b2397d69822896d78b1f1e8639046c931b8))
+
+
+### Fixed
+
+* **mcp:** offer project destination before workspace setup ([#535](https://github.com/allagentsdev/allagents/issues/535)) ([fd51a9c](https://github.com/allagentsdev/allagents/commit/fd51a9cbdf65758c693dba68c0987cf830cb3a58))
+* **plugin:** reject skill filters for native installs ([#532](https://github.com/allagentsdev/allagents/issues/532)) ([26de7e7](https://github.com/allagentsdev/allagents/commit/26de7e78a5a2fd0049fda8c1a4829e69af5ad192))
+
 ## [1.17.1](https://github.com/allagentsdev/allagents/compare/v1.17.0...v1.17.1) (2026-09-29)
 
 

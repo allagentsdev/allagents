@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/allagentsdev/allagents/compare/v1.18.0...v1.19.0) (2026-09-30)
+
+
+### Added
+
+* **workspace:** discover nested workspace templates ([#536](https://github.com/allagentsdev/allagents/issues/536)) ([c1acd58](https://github.com/allagentsdev/allagents/commit/c1acd584670fab0dff735b9ac8e71a9b981bf306))
+
 ## [1.18.0](https://github.com/allagentsdev/allagents/compare/v1.17.1...v1.18.0) (2026-09-29)
 
 

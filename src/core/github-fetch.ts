@@ -4,11 +4,14 @@ import { parseGitHubUrl } from '../utils/plugin-path.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import {
   cloneToTemp,
+  cloneGitHubWithGhToTemp,
+  listGitHubBranchesWithGh,
   cleanupTempDir,
   gitHubUrl,
   refExists,
   GitCloneError,
 } from './git.js';
+import { findWorkspaceTemplatesInDirectory } from './workspace-templates.js';
 
 /**
  * Result of fetching workspace from GitHub
@@ -23,6 +26,8 @@ export interface FetchWorkspaceResult {
   resolvedSubpath?: string;
   /** Resolved branch name (after branch/subpath resolution) */
   resolvedBranch?: string;
+  /** Workspace roots found below the requested path when it has no workspace.yaml. */
+  availableTemplates?: string[];
 }
 
 /**
@@ -76,8 +81,8 @@ async function resolveBranchAndSubpath(
  *
  * Intelligently resolves branch names with slashes by checking which refs exist.
  *
- * Returns a tempDir if successful — caller must call cleanupTempDir() when done
- * reading additional files from the clone.
+ * Returns a tempDir when a workspace or nested templates are found. The caller
+ * must call cleanupTempDir() when done reading from the clone.
  *
  * @param url - GitHub URL or shorthand
  * @returns Result with workspace.yaml content, tempDir, or error
@@ -89,7 +94,8 @@ export async function fetchWorkspaceFromGitHub(
   if (!parsed) {
     return {
       success: false,
-      error: 'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
+      error:
+        'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
     };
   }
 
@@ -106,13 +112,32 @@ export async function fetchWorkspaceFromGitHub(
   let effectiveSubpath = subpath;
 
   if (branch && subpath) {
-    const resolved = await resolveBranchAndSubpath(
-      repoUrl,
-      `${branch}/${subpath}`,
-    );
-    if (resolved && resolved.branch !== branch) {
-      effectiveBranch = resolved.branch;
-      effectiveSubpath = resolved.subpath;
+    const pathAfterTree = `${branch}/${subpath}`;
+    const resolved = await resolveBranchAndSubpath(repoUrl, pathAfterTree);
+    let authenticated = resolved;
+    if (!authenticated) {
+      try {
+        const branches = await listGitHubBranchesWithGh(
+          owner,
+          repo,
+          pathAfterTree.split('/')[0] ?? '',
+        );
+        const match = branches
+          .filter((candidate) => pathAfterTree.startsWith(`${candidate}/`))
+          .sort((left, right) => right.length - left.length)[0];
+        if (match) {
+          authenticated = {
+            branch: match,
+            subpath: pathAfterTree.slice(match.length + 1),
+          };
+        }
+      } catch {
+        // GitHub CLI may be unavailable; clone will report the access error.
+      }
+    }
+    if (authenticated) {
+      effectiveBranch = authenticated.branch;
+      effectiveSubpath = authenticated.subpath;
     }
   }
 
@@ -125,15 +150,22 @@ export async function fetchWorkspaceFromGitHub(
   }
 
   // Clone the repository to a temp directory
-  let tempDir: string;
+  let tempDir: string | undefined;
   try {
     tempDir = await cloneToTemp(repoUrl, effectiveBranch);
   } catch (error) {
-    if (error instanceof GitCloneError) {
+    if (error instanceof GitCloneError && error.isAuthError) {
+      try {
+        tempDir = await cloneGitHubWithGhToTemp(owner, repo, effectiveBranch);
+      } catch {
+        // Keep the original Git authentication error below.
+      }
+    }
+    if (!tempDir && error instanceof GitCloneError) {
       if (error.isAuthError) {
         return {
           success: false,
-          error: `Authentication failed for ${owner}/${repo}.\n  Check your SSH keys or git credentials.`,
+          error: `Authentication failed for ${owner}/${repo}.\n  Check your Git credentials, SSH keys, or GitHub CLI login.`,
         };
       }
       if (error.isTimeout) {
@@ -143,11 +175,15 @@ export async function fetchWorkspaceFromGitHub(
         };
       }
     }
-    return {
-      success: false,
-      error: `Failed to access repository: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    if (!tempDir) {
+      return {
+        success: false,
+        error: `Failed to access repository: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
+
+  if (!tempDir) throw new Error('GitHub checkout was not created');
 
   // Determine the base path to look for workspace.yaml
   const basePath = effectiveSubpath || '';
@@ -160,10 +196,7 @@ export async function fetchWorkspaceFromGitHub(
         `${basePath}/${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`,
         `${basePath}/${WORKSPACE_CONFIG_FILE}`,
       ]
-    : [
-        `${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`,
-        WORKSPACE_CONFIG_FILE,
-      ];
+    : [`${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`, WORKSPACE_CONFIG_FILE];
 
   for (const filePath of pathsToTry) {
     const content = readFileFromClone(tempDir, filePath);
@@ -175,11 +208,27 @@ export async function fetchWorkspaceFromGitHub(
     }
   }
 
-  // No workspace.yaml found — clean up and return error
-  await cleanupTempDir(tempDir);
+  // No workspace.yaml at the requested path. Report nested templates.
+  let availableTemplates: string[] = [];
+  try {
+    const scanRoot = basePath ? join(tempDir, basePath) : tempDir;
+    availableTemplates = (await findWorkspaceTemplatesInDirectory(scanRoot))
+      .filter(Boolean)
+      .map((path) => (basePath ? `${basePath}/${path}` : path));
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      await cleanupTempDir(tempDir);
+      throw error;
+    }
+  }
+  if (availableTemplates.length === 0) {
+    await cleanupTempDir(tempDir);
+  }
 
   return {
     success: false,
     error: `No workspace.yaml found in: ${owner}/${repo}${effectiveBranch ? `@${effectiveBranch}` : ''}${effectiveSubpath ? `/${effectiveSubpath}` : ''}\n  Expected at: ${pathsToTry.join(' or ')}`,
+    ...(availableTemplates.length > 0 && { availableTemplates, tempDir }),
+    ...(effectiveBranch && { resolvedBranch: effectiveBranch }),
   };
 }

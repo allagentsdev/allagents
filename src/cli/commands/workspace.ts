@@ -58,6 +58,7 @@ import {
 import { buildProfileData, formatProfileResult } from '../format-profile.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
+import { chooseWorkspaceTemplateSource } from '../tui/prompt-workspace-template.js';
 import {
   repoAddMeta,
   repoListMeta,
@@ -120,7 +121,7 @@ const initCmd = command({
     from: option({
       type: optional(string),
       long: 'from',
-      description: 'Copy workspace.yaml from existing template/workspace',
+      description: 'Use a template path or discover workspace templates in a directory or GitHub repo',
     }),
     client: option({
       type: optional(string),
@@ -139,6 +140,8 @@ const initCmd = command({
     try {
       const targetPath = path ?? '.';
       let clients = client ? parseClientEntries(client) : undefined;
+      const templateSelection = from ? await chooseWorkspaceTemplateSource(from) : undefined;
+      if (templateSelection === null) return;
 
       // If no --client flag and no --from, prompt interactively.
       // When --from is used, the remote workspace.yaml defines the clients.
@@ -159,7 +162,8 @@ const initCmd = command({
       }
 
       const result = await initWorkspace(targetPath, {
-        ...(from ? { from } : {}),
+        ...(templateSelection ? { from: templateSelection.source } : {}),
+        ...(templateSelection?.prefetchedGitHub && { prefetchedGitHub: templateSelection.prefetchedGitHub }),
         ...(clients ? { clients } : {}),
         ...(force ? { force } : {}),
       });

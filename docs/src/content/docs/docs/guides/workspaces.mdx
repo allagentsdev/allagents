@@ -41,6 +41,9 @@ allagents workspace init my-workspace --from ./path/to/template
 # Create from remote GitHub template
 allagents workspace init my-workspace --from https://github.com/myorg/templates/tree/main/nodejs
 allagents workspace init my-workspace --from myorg/templates/nodejs  # shorthand
+
+# Browse templates in a repository, then choose from a searchable list
+allagents workspace init my-workspace --from myorg/templates
 ```
 
 ### Remote Templates
@@ -50,6 +53,12 @@ You can initialize a workspace directly from any GitHub repository containing a 
 1. Fetch the `workspace.yaml` from `.allagents/workspace.yaml` or `workspace.yaml` in the target path
 2. Convert relative `workspace.source` paths to GitHub URLs so sync works
 3. Copy any `AGENTS.md` and `CLAUDE.md` files from the template source
+
+If the supplied repository or directory has no workspace configuration at its root,
+AllAgents finds nested `.allagents/workspace.yaml` files. It uses a single match
+automatically or lets you search and select among multiple matches. For scripts or
+JSON output, supply the specific template path; an ambiguous source reports all
+available paths and exits without creating the workspace.
 
 Supported formats:
 - Full URL: `https://github.com/owner/repo/tree/branch/path`

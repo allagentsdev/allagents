@@ -10,7 +10,7 @@ import { getClientTypes, type ClientEntry } from '../models/workspace-config.js'
 import { isGitHubUrl, parseGitHubUrl, getPluginCachePath } from '../utils/plugin-path.js';
 import { validateProjectWorkspaceConfig } from '../utils/workspace-parser.js';
 import { loadYaml } from '../utils/yaml.js';
-import { fetchWorkspaceFromGitHub, readFileFromClone } from './github-fetch.js';
+import { fetchWorkspaceFromGitHub, readFileFromClone, type FetchWorkspaceResult } from './github-fetch.js';
 import { cleanupTempDir } from './git.js';
 import { getMarketplacesDir } from './marketplace.js';
 import { ensureConfigGitignore } from './config-gitignore.js';
@@ -25,6 +25,8 @@ export interface InitOptions {
   clients?: ClientEntry[];
   /** Overwrite existing workspace.yaml if present */
   force?: boolean;
+  /** Checkout already fetched while choosing a GitHub template; init owns its cleanup. */
+  prefetchedGitHub?: FetchWorkspaceResult;
 }
 
 /**
@@ -53,6 +55,9 @@ export async function initWorkspace(
 
   // Check if workspace already exists (has .allagents/workspace.yaml)
   if (existsSync(configPath) && !options.force) {
+    if (options.prefetchedGitHub?.tempDir) {
+      await cleanupTempDir(options.prefetchedGitHub.tempDir).catch(() => {});
+    }
     throw new Error(
       `Workspace already exists: ${absoluteTarget}\n  Found existing ${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`,
     );
@@ -67,7 +72,7 @@ export async function initWorkspace(
     : join(currentFileDir, '..', 'templates', 'default');
 
   // Temp dir from GitHub clone — must be cleaned up at the end
-  let githubTempDir: string | undefined;
+  let githubTempDir: string | undefined = options.prefetchedGitHub?.tempDir;
   // Parsed GitHub URL — shared across source rewriting, template copying, and agent files
   let parsedFromUrl: ReturnType<typeof parseGitHubUrl> | undefined;
   let githubBasePath = ''; // workspace directory path within the repo (e.g., "examples/multi-repo")
@@ -88,7 +93,7 @@ export async function initWorkspace(
     if (options.from) {
       // Check if --from is a GitHub URL
       if (isGitHubUrl(options.from)) {
-        const fetchResult = await fetchWorkspaceFromGitHub(options.from);
+        const fetchResult = options.prefetchedGitHub ?? await fetchWorkspaceFromGitHub(options.from);
         if (!fetchResult.success || !fetchResult.content) {
           if (fetchResult.tempDir) {
             await cleanupTempDir(fetchResult.tempDir);

@@ -3,9 +3,11 @@ import {
   createGit,
   createGitEnv,
 } from './git-client.js';
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 import {
   checkRepositoryHealth as checkRepositoryHealthFact,
   resolveRemoteRevision as resolveRemoteRevisionFact,
@@ -35,6 +37,59 @@ export type {
  */
 export function gitHubUrl(owner: string, repo: string): string {
   return `https://github.com/${owner}/${repo}.git`;
+}
+
+const execFileAsync = promisify(execFile);
+
+/** List authenticated GitHub branch refs matching the first path component. */
+export async function listGitHubBranchesWithGh(
+  owner: string,
+  repo: string,
+  prefix: string,
+): Promise<string[]> {
+  const { stdout } = await execFileAsync(
+    'gh',
+    [
+      'api',
+      '--paginate',
+      `repos/${owner}/${repo}/git/matching-refs/heads/${encodeURIComponent(prefix)}`,
+      '--jq',
+      '.[].ref',
+    ],
+    {
+      env: createGitEnv(),
+      timeout: CLONE_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  return stdout
+    .split('\n')
+    .filter((line) => line.startsWith('refs/heads/'))
+    .map((line) => line.slice('refs/heads/'.length));
+}
+
+/** Clone a GitHub repository using the user's GitHub CLI authentication. */
+export async function cloneGitHubWithGhToTemp(
+  owner: string,
+  repo: string,
+  ref?: string,
+): Promise<string> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'allagents-'));
+  const url = gitHubUrl(owner, repo);
+  try {
+    await execFileAsync(
+      'gh',
+      [
+        'repo', 'clone', `${owner}/${repo}`, tempDir, '--', '--depth', '1',
+        ...(ref ? ['--branch', ref] : []),
+      ],
+      { env: createGitEnv(), timeout: CLONE_TIMEOUT_MS },
+    );
+    return tempDir;
+  } catch (error) {
+    await cleanupTempDir(tempDir).catch(() => {});
+    throw classifyError(error, url, CLONE_TIMEOUT_MS);
+  }
 }
 
 /**

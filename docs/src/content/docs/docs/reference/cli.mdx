@@ -155,7 +155,7 @@ Initialize a new workspace from a template:
 
 | Flag | Description |
 |------|-------------|
-| `--from <source>` | Copy workspace.yaml from local path or GitHub URL |
+| `--from <source>` | Use a template path or discover workspace templates in a local directory or GitHub repository |
 
 **Source formats:**
 - Local path: `./path/to/template` or `/absolute/path`
@@ -163,6 +163,11 @@ Initialize a new workspace from a template:
 - GitHub shorthand: `owner/repo/path` or `owner/repo`
 
 When using a GitHub source, AllAgents fetches `workspace.yaml` from `.allagents/workspace.yaml` or `workspace.yaml` in the target path.
+If neither file exists there, it searches nested directories for `.allagents/workspace.yaml`.
+One match is selected automatically. With multiple matches, an interactive terminal shows a searchable template picker.
+In non-interactive and `--json` runs, AllAgents lists the matching template paths and exits with an error; pass one of those paths to `--from` to select it.
+Directories below a supplied GitHub subpath are searched without including templates elsewhere in the repository.
+For private GitHub repositories, AllAgents tries your Git credentials first and then an authenticated GitHub CLI (`gh`) if Git authentication fails.
 
 ### workspace setup
 

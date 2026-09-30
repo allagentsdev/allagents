@@ -9,6 +9,7 @@ export const initMeta: AgentCommandMeta = {
     'allagents init',
     'allagents init ./my-project',
     'allagents init --from ../template-workspace/.allagents/workspace.yaml',
+    'allagents init --from myorg/templates',
     'allagents init --client claude,copilot,cursor',
   ],
   expectedOutput:
@@ -26,7 +27,7 @@ export const initMeta: AgentCommandMeta = {
     {
       flag: '--from',
       type: 'string',
-      description: 'Copy workspace.yaml from existing template/workspace',
+      description: 'Use a template path or discover workspace templates in a directory or GitHub repo',
     },
     {
       flag: '--client',

@@ -15,3 +15,25 @@ Releases are automated with [Release Please](https://github.com/googleapis/relea
 - For npm recovery, dispatch `Publish` with the release tag (`ref`). It validates that the tag matches `package.json` at that commit, ensures the GitHub release exists, and publishes idempotently.
 - Before dispatch, verify the target commit, version, and tag agree.
 - After dispatch, verify the workflow result, GitHub release, and npm package version before reporting success.
+
+## Trusted publisher configuration
+
+Both publishing jobs use the GitHub Actions `npm` environment and npm OIDC.
+In the npm `allagents` package settings, authorize `allagentsdev/allagents`
+with environment name `npm` and direct `npm publish` allowed for both
+`publish.yml` and `release-please.yml`. Stable publication calls the reusable
+`publish.yml` workflow; preview publication runs in `release-please.yml`.
+See [npm's trusted publishing documentation](https://docs.npmjs.com/trusted-publishers/).
+
+Before merging an environment migration, add matching environment-bound npm
+publishers alongside the existing publishers, if npm permits it. Keep the
+existing publishers until in-flight runs finish and a publication using the
+new environment succeeds, then remove the superseded entries. If duplicate
+workflow entries are unavailable, coordinate the settings update and merge
+while no publishing run is active. Record the npm settings verification in
+the migration PR before merging.
+
+The `npm` environment follows `oh-my-promptfoo` without required reviewers or
+branch restrictions, so automated previews continue to run. Add protections
+only after checking both automatic releases and manual recovery: the workflow
+run ref can differ from the release tag checked out through the `ref` input.

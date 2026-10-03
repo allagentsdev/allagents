@@ -90,6 +90,14 @@ Merging the release pull request finalizes the release. It creates the tag and
 GitHub release and publishes the package to npm. There is no manual next-tag,
 bump, or promote step.
 
+Publishing uses npm OIDC trusted publishers and the GitHub Actions `npm`
+environment. The npm package settings must authorize both `publish.yml` and
+`release-please.yml` for `allagentsdev/allagents`, with environment name `npm`
+and direct `npm publish` allowed. Configure matching npm publishers before
+merging workflow changes that select this environment. See the
+[publishing guide](.agents/publishing.md#trusted-publisher-configuration) for
+migration and recovery details.
+
 - Never bump `package.json`, edit the version manifest, or create a release tag by hand.
 - Never run `npm publish` directly.
 - Recovery: dispatch the `Publish` workflow with the release tag.

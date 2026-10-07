@@ -1,4 +1,4 @@
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 
 const DEFAULT_CLONE_TIMEOUT_MS = 300_000;
 export const CLONE_TIMEOUT_MS = (() => {
@@ -17,8 +17,11 @@ export function createGitEnv(): NodeJS.ProcessEnv {
 }
 
 export function createGit(baseDir?: string, timeoutMs = CLONE_TIMEOUT_MS) {
+  const env = createGitEnv();
+
   return simpleGit(baseDir, {
     timeout: { block: timeoutMs },
+    allowEnvironment: Object.keys(env),
     config: [
       'filter.lfs.required=false',
       'filter.lfs.smudge=',
@@ -40,5 +43,5 @@ export function createGit(baseDir?: string, timeoutMs = CLONE_TIMEOUT_MS) {
       allowUnsafeSshCommand: true,
       allowUnsafeTemplateDir: true,
     },
-  }).env(createGitEnv());
+  }).env(env);
 }

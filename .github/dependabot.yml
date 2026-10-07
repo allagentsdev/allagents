@@ -18,7 +18,9 @@ updates:
           - patch
     open-pull-requests-limit: 5
     commit-message:
-      prefix: chore
+      # Root dependency changes alter the distributed CLI package, so they
+      # trigger a patch release through Release Please.
+      prefix: fix
       include: scope
     ignore:
       # @types/node must stay on the major declared by `engines.node` (>=22).

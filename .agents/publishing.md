@@ -8,6 +8,7 @@ Releases are automated with [Release Please](https://github.com/googleapis/relea
 - Merging that pull request is the finalize step. The `Release Please` workflow then publishes the new tag to npm through the `Publish` workflow.
 - There is no manual next-tag, bump, or promote step. Never bump `package.json`, edit the version manifest, or create a release tag by hand.
 - Never run `npm publish` directly. Keep `prepublishOnly` intact; it prevents untested direct publication outside the workflow.
+- Dependabot updates for the root Bun package use `fix(deps)` so changes to shipped or development dependencies trigger a patch release. Docs and GitHub Actions dependency updates remain `chore` and do not trigger CLI releases.
 - Write conventional commit subjects: the release pull request's changelog section is generated from them, and hidden types (`chore`, `docs`, `refactor`, `test`, `ci`, `build`, `style`) do not appear.
 - The npm `latest` dist-tag is the latest stable release and only moves when a release pull request is merged.
 - The npm `next` dist-tag tracks `main`: every push that has an open release pull request publishes the pending version as `<pending>-next.<run>` to `next`, and tags that commit as `v<pending>-next.<run>` with a GitHub prerelease. Nothing to preview means `main` already matches the last release.

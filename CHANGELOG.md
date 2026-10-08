@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.19.1](https://github.com/allagentsdev/allagents/compare/v1.19.0...v1.19.1) (2026-10-08)
+
+
+### Fixed
+
+* **deps-dev:** bump @biomejs/biome ([#546](https://github.com/allagentsdev/allagents/issues/546)) ([4536ce3](https://github.com/allagentsdev/allagents/commit/4536ce340435c8f4ce395cad383047a5fbd48083))
+* **deps:** release root dependency updates as patches ([#542](https://github.com/allagentsdev/allagents/issues/542)) ([66ad792](https://github.com/allagentsdev/allagents/commit/66ad792906787abe101ad22f54e2df47e4d9e11d))
+
 ## [1.19.0](https://github.com/allagentsdev/allagents/compare/v1.18.0...v1.19.0) (2026-09-30)
 
 

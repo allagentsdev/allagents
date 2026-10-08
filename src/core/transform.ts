@@ -10,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 import matter from 'gray-matter';
-import micromatch from 'micromatch';
+import picomatch from 'picomatch';
 import {
   type SkillsIndexRef,
   type WorkspaceRepository,
@@ -127,7 +127,7 @@ export function isExcluded(
 ): boolean {
   if (!exclude || exclude.length === 0) return false;
   const relativePath = relative(pluginPath, filePath).replaceAll('\\', '/');
-  return micromatch.isMatch(relativePath, exclude);
+  return exclude.some((pattern) => picomatch(pattern)(relativePath));
 }
 
 /**

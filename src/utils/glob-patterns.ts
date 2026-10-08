@@ -1,9 +1,9 @@
-import fg from 'fast-glob';
+import { glob, isDynamicPattern } from 'tinyglobby';
 import { join } from 'node:path';
 
 export function isGlobPattern(pattern: string): boolean {
   const p = pattern.startsWith('!') ? pattern.slice(1) : pattern;
-  return fg.isDynamicPattern(p);
+  return isDynamicPattern(p);
 }
 
 export function isNegationPattern(pattern: string): boolean {
@@ -25,14 +25,14 @@ export async function resolveGlobPatterns(
     if (isNegationPattern(pattern)) {
       const positivePattern = pattern.slice(1);
       if (isGlobPattern(positivePattern)) {
-        const matches = await fg(positivePattern, { cwd: sourceRoot, onlyFiles: true, dot: true });
+        const matches = await glob(positivePattern, { cwd: sourceRoot, onlyFiles: true, dot: true });
         for (const match of matches) includedFiles.delete(match);
       } else {
         includedFiles.delete(positivePattern);
       }
     } else {
       if (isGlobPattern(pattern)) {
-        const matches = await fg(pattern, { cwd: sourceRoot, onlyFiles: true, dot: true });
+        const matches = await glob(pattern, { cwd: sourceRoot, onlyFiles: true, dot: true });
         for (const match of matches) {
           includedFiles.set(match, { sourcePath: join(sourceRoot, match), relativePath: match });
         }

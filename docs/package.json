@@ -9,6 +9,9 @@
     "preview": "astro preview",
     "astro": "astro"
   },
+  "overrides": {
+    "postcss-nested": "^8.0.1"
+  },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.4",
     "@astrojs/starlight": "^0.42.4",

@@ -131,6 +131,7 @@ async function authorizeProfile(server, profile) {
   });
   assert.equal(tokenResponse.status, 200);
   const tokens = await tokenResponse.json();
+  tokens.issuer = server.issuer;
 
   const directory = cacheDirectory(server.mcpUrl, profile);
   await mkdir(directory, { recursive: true, mode: 0o700 });

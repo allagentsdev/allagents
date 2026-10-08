@@ -1,6 +1,6 @@
 import { relative, resolve } from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import micromatch from 'micromatch';
+import picomatch from 'picomatch';
 import { pathIsWithin } from '../client-context.js';
 import {
   PiNativeClient,
@@ -52,8 +52,8 @@ function patternMatches(path: string, pattern: string): boolean {
   const normalized = normalizedPattern(pattern);
   const basename = normalizedPath.split('/').at(-1) ?? normalizedPath;
   return (
-    micromatch.isMatch(normalizedPath, [normalized]) ||
-    micromatch.isMatch(basename, [normalized])
+    picomatch(normalized)(normalizedPath) ||
+    picomatch(normalized)(basename)
   );
 }
 

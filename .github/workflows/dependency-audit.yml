@@ -39,5 +39,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      - run: bun audit --audit-level=moderate
+      # gray-matter still requires js-yaml 3, which pulls vulnerable
+      # sprintf-js; no fixed sprintf-js version is published yet.
+      - run: bun audit --audit-level=moderate --ignore GHSA-hp3w-g68c-fv3c
         working-directory: ${{ matrix.directory }}

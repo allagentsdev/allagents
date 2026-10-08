@@ -1,0 +1,18 @@
+version: 2
+
+# Opt-in Pi-native engineering stack. Pi owns package installation and loading;
+# AllAgents shares the recipe and tracks its project-scoped native resources.
+# Save trust for the target project in Pi before initializing this workspace.
+# See ../README.md for prerequisites, credentials, and verification.
+repositories: []
+
+plugins:
+  # Reviewed pins keep fresh installs reproducible. Update these deliberately;
+  # targeted package updates reconcile the pins rather than selecting latest.
+  - npm:pi-web-access@0.37.0
+  - npm:pi-compound-engineering@3.19.2
+  - npm:pi-subagents@0.76.1
+  - npm:pi-ask-user@0.16.0
+
+clients:
+  - pi:native

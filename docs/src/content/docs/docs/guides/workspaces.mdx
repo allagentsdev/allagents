@@ -46,6 +46,13 @@ allagents workspace init my-workspace --from myorg/templates/nodejs  # shorthand
 allagents workspace init my-workspace --from myorg/templates
 ```
 
+### Example Templates
+
+Choose a template that matches the installation boundary:
+
+- [Engineering](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/engineering): portable engineering skills for the `universal` client.
+- [Pi Engineering](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/pi-engineering): an opt-in Pi-native stack with web access, Compound Engineering, subagents, and interactive questions. Packages use reviewed version pins and Pi's own installer rather than file-copy sync. Save project trust in Pi before initialization; see the template README for prerequisites and user-owned credential configuration.
+
 ### Remote Templates
 
 You can initialize a workspace directly from any GitHub repository containing a `workspace.yaml` file. AllAgents will:

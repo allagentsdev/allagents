@@ -12,6 +12,13 @@ MCP servers from plugins are synchronized into VS Code's `mcp.json`.
 
 `trackedServers` means “servers AllAgents owns and is responsible for updating or removing.”
 
+## Pi native compatibility
+
+Use a minimum Pi version requirement rather than a moving upper bound. Keep
+package inspection, project trust, and scope isolation fail-closed before native
+mutation. Verify adapter changes through the real Pi lifecycle in an isolated
+HOME and project; a passing version check alone is not compatibility evidence.
+
 ## Synchronization output
 
 Synchronization results are surfaced by multiple entry points:

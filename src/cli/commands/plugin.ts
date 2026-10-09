@@ -61,6 +61,7 @@ import {
 import { parseMarketplaceManifest } from '../../utils/marketplace-manifest-parser.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
 import { terminalSafe } from '../terminal-output.js';
+import { settleNativePluginUpdate } from '../native-plugin-update.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
 import {
   marketplaceListMeta,
@@ -1920,42 +1921,10 @@ const pluginUpdateCmd = command({
       for (let index = 0; index < toUpdate.length; index++) {
         const entry = toUpdate[index];
         if (!entry || !nativeOnly.has(declarationKey(entry))) continue;
-        const effects = (nativeEffects[entry.scope] ?? []).filter((effect) =>
-          nativeIdentityMatches(
-            entry.spec,
-            effect.requestedIdentity,
-            effect.resolvedIdentity,
-          ));
-        const failure = effects.find(
-          (effect) => effect.action === 'failed' || effect.action === 'unknown',
+        const settledResult = settleNativePluginUpdate(
+          entry.spec,
+          nativeEffects[entry.scope] ?? [],
         );
-        const settledResult: InstalledPluginUpdateResult = failure
-          ? {
-              plugin: entry.spec,
-              success: false,
-              action: 'failed',
-              error:
-                failure.error ??
-                `Native ${failure.phase} did not establish a known result`,
-            }
-          : effects.some((effect) => effect.changed)
-            ? {
-                plugin: entry.spec,
-                success: true,
-                action: 'updated',
-              }
-            : effects.length > 0
-              ? {
-                  plugin: entry.spec,
-                  success: true,
-                  action: 'skipped',
-                }
-              : {
-                  plugin: entry.spec,
-                  success: false,
-                  action: 'failed',
-                  error: 'Native update produced no matching lifecycle effect',
-                };
         results[index] = settledResult;
         if (progressiveOutput) renderUpdateResult(settledResult);
       }

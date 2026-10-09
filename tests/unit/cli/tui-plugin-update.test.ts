@@ -26,6 +26,8 @@ const { runBrowseMarketplaces, runPlugins, runUpdateAllPlugins } = await import(
   '../../../src/cli/tui/actions/plugins.js'
 );
 
+const { runStatus } = await import('../../../src/cli/tui/actions/status.js');
+
 const SOURCE =
   'https://github.com/mattpocock/skills/tree/main/skills/engineering/setup-matt-pocock-skills';
 const SECOND_SOURCE =
@@ -409,7 +411,7 @@ describe('interactive plugin updates', () => {
 
 
   test(
-    'ends the spinner before the Plugins menu renders an unexpected error',
+    'ends the spinner before Workspace Status renders an unexpected bulk-update error',
     async () => {
       const fixture = await createUpdateFixture({ includeGeneric: false });
       const events: string[] = [];
@@ -426,17 +428,17 @@ describe('interactive plugin updates', () => {
           join(userConfigDirectory, 'workspace.yaml'),
           'plugins: [',
         );
-        return '__update_all__';
+        return 'update_all';
       });
 
       try {
-        await runPlugins(fixture.context);
+        await runStatus(fixture.context);
 
         expect(spinnerErrorMock).toHaveBeenCalledWith('Update failed');
         expect(spinnerStopMock).not.toHaveBeenCalled();
-        expect(noteMock).toHaveBeenCalledTimes(1);
-        expect(noteMock.mock.calls[0]?.[1]).toBe('Error');
-        expect(events).toEqual(['spinner:Update failed', 'note:Error']);
+        expect(noteMock).toHaveBeenCalledTimes(2);
+        expect(noteMock.mock.calls[1]?.[1]).toBe('Error');
+        expect(events).toEqual(['note:Status', 'spinner:Update failed', 'note:Error']);
       } finally {
         spinnerErrorMock.mockImplementation(() => {});
         noteMock.mockImplementation(() => {});

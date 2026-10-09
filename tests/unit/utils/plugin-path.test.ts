@@ -416,6 +416,17 @@ describe('formatPluginSource', () => {
 });
 
 describe('getPluginDisplayName', () => {
+  it('uses npm package names without losing scoped identities', () => {
+    expect(getPluginDisplayName('npm:pi-compound-engineering@3.19.2')).toBe('pi-compound-engineering');
+    expect(getPluginDisplayName('npm:pi-tools')).toBe('pi-tools');
+    expect(getPluginDisplayName('npm:@acme/pi-tools@1.2.3')).toBe('@acme/pi-tools');
+    expect(getPluginDisplayName('npm:@acme/pi-tools')).toBe('@acme/pi-tools');
+  });
+
+  it('keeps explicit Git package transport and ref visible', () => {
+    expect(getPluginDisplayName('git:github.com/acme/pi-tools@v1')).toBe('git:github.com/acme/pi-tools@v1');
+  });
+
   it('keeps marketplace specs unchanged', () => {
     expect(getPluginDisplayName('superpowers@official')).toBe(
       'superpowers@official',

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, getHomeDir } from '../constants.js';
 import {
   getPluginSource,
+  getEffectivePluginSource,
   getClientTypes,
   type ClientEntry,
   type ClientType,
@@ -13,6 +14,7 @@ import {
   parseGitHubUrl,
   getPluginCachePath,
   type ParsedPluginSource,
+  isNativePackageSource,
 } from '../utils/plugin-path.js';
 import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { isPluginSpec, resolvePluginSpec } from './marketplace.js';
@@ -43,7 +45,7 @@ import { resolveClientContexts } from './client-context.js';
  */
 export interface PluginStatus {
   source: string;
-  type: 'local' | 'github' | 'marketplace';
+  type: 'local' | 'github' | 'marketplace' | 'package';
   /**
    * 'skill' when the resolved path looks like a single-skill source (root
    * SKILL.md, no skills/ subdir — matches the auto-wrap layout from #232/#249).
@@ -319,6 +321,24 @@ async function getNativeStatusesForScope(
   return { statuses, errors: [...new Set(errors)] };
 }
 
+/** Package availability comes from native inspection, not a fabricated local path. */
+function withNativePackageAvailability(
+  plugins: PluginStatus[],
+  resources: NativePluginStatus[],
+): PluginStatus[] {
+  return plugins.map((plugin) => plugin.type === 'package'
+    ? {
+        ...plugin,
+        available: resources.some((resource) =>
+          resource.declared &&
+          resource.requestedIdentity === plugin.source.trim() &&
+          resource.action === 'installed',
+        ),
+      }
+    : plugin,
+  );
+}
+
 /**
  * Get status of workspace and its plugins
  * @param workspacePath - Path to workspace directory (default: cwd)
@@ -343,8 +363,8 @@ export async function getWorkspaceStatus(
       success: native.errors.length === 0,
       ...(native.errors.length > 0 && { error: native.errors.join('; ') }),
       plugins: [],
-      userPlugins,
-      clients: [],
+      userPlugins: withNativePackageAvailability(userPlugins, native.statuses),
+      clients: getClientTypes(userConfig?.clients ?? []),
       nativeResources: native.statuses,
     };
   }
@@ -362,9 +382,9 @@ export async function getWorkspaceStatus(
         );
         plugins.push(status);
       } else {
-        const parsed = parsePluginSource(pluginSource, workspacePath);
+        const parsed = parsePluginSource(getEffectivePluginSource(pluginEntry), workspacePath);
         const status = getPluginStatus(parsed);
-        plugins.push(status);
+        plugins.push({ ...status, source: pluginSource });
       }
     }
 
@@ -387,8 +407,8 @@ export async function getWorkspaceStatus(
       ...(nativeErrors.length > 0 && {
         error: [...new Set(nativeErrors)].join('; '),
       }),
-      plugins,
-      userPlugins,
+      plugins: withNativePackageAvailability(plugins, projectNative.statuses),
+      userPlugins: withNativePackageAvailability(userPlugins, userNative.statuses),
       clients: getClientTypes(config.clients),
       nativeResources: [
         ...userNative.statuses,
@@ -410,6 +430,15 @@ export async function getWorkspaceStatus(
  * Get status of a single plugin
  */
 function getPluginStatus(parsed: ParsedPluginSource): PluginStatus {
+  if (isNativePackageSource(parsed.original)) {
+    return {
+      source: parsed.original,
+      type: 'package',
+      kind: 'plugin',
+      available: false,
+      path: '',
+    };
+  }
   if (parsed.type === 'github') {
     // Check if cached
     const cachePath =
@@ -465,8 +494,8 @@ async function getUserPluginStatuses(): Promise<PluginStatus[]> {
     if (isPluginSpec(pluginSource)) {
       statuses.push(await getMarketplacePluginStatus(pluginSource));
     } else {
-      const parsed = parsePluginSource(pluginSource, getHomeDir());
-      statuses.push(getPluginStatus(parsed));
+      const parsed = parsePluginSource(getEffectivePluginSource(pluginEntry), getHomeDir());
+      statuses.push({ ...getPluginStatus(parsed), source: pluginSource });
     }
   }
   return statuses;

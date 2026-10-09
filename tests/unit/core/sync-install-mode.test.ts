@@ -189,6 +189,13 @@ describe('native lifecycle identity', () => {
     ).toBe(false);
   });
 
+  it('matches unversioned npm selectors without conflating explicit pins or scopes', () => {
+    expect(nativeIdentityMatches('npm:pi-tools', 'npm:pi-tools@1.0.0', 'npm:pi-tools@1.0.0')).toBe(true);
+    expect(nativeIdentityMatches('npm:@acme/pi-tools', 'npm:@acme/pi-tools@1.0.0', 'npm:@acme/pi-tools@1.0.0')).toBe(true);
+    expect(nativeIdentityMatches('npm:pi-tools@2.0.0', 'npm:pi-tools@1.0.0', 'npm:pi-tools@1.0.0')).toBe(false);
+    expect(nativeIdentityMatches('npm:@other/pi-tools', 'npm:@acme/pi-tools@1.0.0', 'npm:@acme/pi-tools@1.0.0')).toBe(false);
+  });
+
   it('includes every authoritative OMP root in durable context identity', () => {
     const base = {
       client: 'omp' as const,

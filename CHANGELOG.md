@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.20.0](https://github.com/allagentsdev/allagents/compare/v1.19.1...v1.20.0) (2026-10-10)
+
+
+### Added
+
+* **plugin:** add finance financial-modeling skill ([#550](https://github.com/allagentsdev/allagents/issues/550)) ([0326dc1](https://github.com/allagentsdev/allagents/commit/0326dc1122927e81b749701fed2671474badce9c))
+* **workspace:** add an opt-in pi engineering template ([9403b02](https://github.com/allagentsdev/allagents/commit/9403b02f04048318cdc6417def3ec5092c8cac10))
+
+
+### Fixed
+
+* **plugin:** distinguish and target native package installations ([d83a352](https://github.com/allagentsdev/allagents/commit/d83a35235721c3d5c6fabec054bb465f3aa3ac79))
+* **sync:** accept pi releases above the minimum version ([d00f234](https://github.com/allagentsdev/allagents/commit/d00f234b212d1bce7d0845d036f1942db1823784))
+
 ## [1.19.1](https://github.com/allagentsdev/allagents/compare/v1.19.0...v1.19.1) (2026-10-08)
 
 

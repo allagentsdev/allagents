@@ -356,6 +356,8 @@ export interface SyncOptions {
   nativeSelection?: {
     mode: 'update' | 'remove';
     targets: readonly string[];
+    /** Restrict a resource action to its native destinations; omitted for bulk updates. */
+    clients?: readonly ClientType[];
   };
 }
 
@@ -540,9 +542,13 @@ export function nativeIdentityMatches(
       : spec.lastIndexOf('@');
     return versionSeparator > 0 ? spec.slice(0, versionSeparator) : spec;
   };
+  const targetPackage = packageName(target);
+  const name = targetPackage !== null && target === `npm:${targetPackage}`
+    ? targetPackage
+    : target;
   return (
-    packageName(requestedIdentity) === target ||
-    packageName(resolvedIdentity) === target
+    packageName(requestedIdentity) === name ||
+    packageName(resolvedIdentity) === name
   );
 }
 
@@ -550,13 +556,35 @@ function nativeSelectionMatches(
   selection: SyncOptions['nativeSelection'],
   requestedIdentity: string,
   resolvedIdentity: string,
+  client?: string,
 ): boolean {
+  if (selection?.clients && client !== undefined && !selection.clients.some((selected) => selected === client)) {
+    return false;
+  }
   return (
     !selection ||
     selection.targets.some((target) =>
       nativeIdentityMatches(target, requestedIdentity, resolvedIdentity),
     )
   );
+}
+
+function selectedNativeDeclarations(
+  plugins: PluginEntry[],
+  clientEntries: ClientEntry[],
+  selection: NonNullable<SyncOptions['nativeSelection']>,
+): PluginEntry[] {
+  const destinations = selection.clients;
+  return plugins.flatMap((plugin) => {
+    const source = getEffectivePluginSource(plugin);
+    if (!nativeSelectionMatches(selection, source, source)) return [];
+    if (!destinations) return [plugin];
+    const clients = (getPluginClients(plugin) ?? getClientTypes(clientEntries))
+      .filter((client) => destinations.includes(client));
+    return clients.length > 0
+      ? [{ ...(typeof plugin === 'string' ? { source: plugin } : plugin), clients }]
+      : [];
+  });
 }
 
 async function preflightNativePlans(
@@ -577,6 +605,7 @@ async function preflightNativePlans(
       continue;
     }
     for (const client of plan.nativeClients) {
+      if (!nativeSelectionMatches(selection, plan.source, plan.source, client)) continue;
       const adapter = getNativeClient(client);
       const context = contexts.get(client);
       if (!adapter || !context) {
@@ -648,6 +677,7 @@ function nativePreflightFailureResult(
       continue;
     }
     for (const client of plan.nativeClients) {
+      if (!nativeSelectionMatches(selection, plan.source, plan.source, client)) continue;
       const resolvedContext = contexts.get(client);
       if (!resolvedContext) continue;
       const context = nativeOperationContext(client, scope, resolvedContext);
@@ -2172,6 +2202,7 @@ async function syncNativePlugins(
           selection,
           resource.requestedIdentity,
           resource.resolvedIdentity,
+          client,
         ),
       );
       if (selected.length > 0) desiredByClient.set(client, selected);
@@ -2196,6 +2227,7 @@ async function syncNativePlugins(
             selection,
             resource.requestedIdentity,
             resource.resolvedIdentity,
+            client,
           ),
         )
       ) {
@@ -2212,6 +2244,7 @@ async function syncNativePlugins(
           selection,
           stateResource.requestedIdentity,
           stateResource.resolvedIdentity,
+          stateResource.client,
         )
       ) {
         continue;
@@ -2293,6 +2326,7 @@ async function syncNativePlugins(
             selection,
             resource.requestedIdentity,
             resource.resolvedIdentity,
+            client,
           )
         : true,
     );
@@ -3003,10 +3037,7 @@ export async function syncWorkspace(
   } = buildPluginSyncPlans(config.plugins, config.clients, 'project');
   const planErrors = nativeSelection
     ? buildPluginSyncPlans(
-        config.plugins.filter((plugin) => {
-          const source = getEffectivePluginSource(plugin);
-          return nativeSelectionMatches(nativeSelection, source, source);
-        }),
+        selectedNativeDeclarations(config.plugins, config.clients, nativeSelection),
         config.clients,
         'project',
       ).errors
@@ -3115,12 +3146,12 @@ export async function syncWorkspace(
       (candidate) => candidate.configurationIndex === plugin.configurationIndex,
     );
     return (
-      (plan?.nativeClients.length ?? 0) > 0 &&
-      nativeSelectionMatches(
+      (plan?.nativeClients ?? []).some((client) => nativeSelectionMatches(
         nativeSelection,
         plan?.source ?? plugin.plugin,
         plan?.source ?? plugin.plugin,
-      )
+        client,
+      ))
     );
   });
   const validationWarnings = [
@@ -3683,10 +3714,7 @@ export async function syncUserWorkspace(
   } = buildPluginSyncPlans(config.plugins, config.clients, 'user');
   const planErrors = nativeSelection
     ? buildPluginSyncPlans(
-        config.plugins.filter((plugin) => {
-          const source = getEffectivePluginSource(plugin);
-          return nativeSelectionMatches(nativeSelection, source, source);
-        }),
+        selectedNativeDeclarations(config.plugins, config.clients, nativeSelection),
         config.clients,
         'user',
       ).errors
@@ -3755,12 +3783,12 @@ export async function syncUserWorkspace(
       (candidate) => candidate.configurationIndex === plugin.configurationIndex,
     );
     return (
-      (plan?.nativeClients.length ?? 0) > 0 &&
-      nativeSelectionMatches(
+      (plan?.nativeClients ?? []).some((client) => nativeSelectionMatches(
         nativeSelection,
         plan?.source ?? plugin.plugin,
         plan?.source ?? plugin.plugin,
-      )
+        client,
+      ))
     );
   });
   const warnings = [

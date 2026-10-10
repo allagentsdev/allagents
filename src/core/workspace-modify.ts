@@ -516,6 +516,7 @@ export async function hasPlugin(
 export async function removePlugin(
   plugin: string,
   workspacePath: string = process.cwd(),
+  configurationIndex?: number,
 ): Promise<ModifyResult> {
   const configPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
 
@@ -531,8 +532,14 @@ export async function removePlugin(
     // Read current config
     const config = await parseWorkspaceConfigForEdit(configPath);
 
-    // Find plugin - exact match first
-    let index = config.plugins.findIndex(
+    if (configurationIndex !== undefined) {
+      const selected = config.plugins[configurationIndex];
+      if (!selected || getPluginSource(selected) !== plugin) {
+        return { success: false, error: 'Selected plugin declaration changed. Reopen Plugins before removing.' };
+      }
+    }
+    // Indexed TUI selections never fall back to a different declaration.
+    let index = configurationIndex ?? config.plugins.findIndex(
       (entry) => getPluginSource(entry) === plugin,
     );
 
@@ -570,8 +577,10 @@ export async function removePlugin(
     // Remove plugin and clean up its disabled skills
     const removedEntry = getPluginSource(config.plugins[index] as PluginEntry);
     config.plugins.splice(index, 1);
-    pruneDisabledSkillsForPlugin(config, removedEntry);
-    pruneEnabledSkillsForPlugin(config, removedEntry);
+    if (!config.plugins.some((entry) => getPluginSource(entry) === removedEntry)) {
+      pruneDisabledSkillsForPlugin(config, removedEntry);
+      pruneEnabledSkillsForPlugin(config, removedEntry);
+    }
 
     // Write back
     const newContent = dump(config, { lineWidth: -1 });

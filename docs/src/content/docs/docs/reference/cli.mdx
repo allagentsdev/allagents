@@ -263,7 +263,9 @@ allagents plugin list
 
 Human-readable output keeps `plugin@marketplace` as the heading for marketplace entries and uses a friendly final-segment name for direct GitHub and local entries. Every entry retains `Type` and `Scope`; `Clients` appears when at least one configured file target or tracked native installation is present. Direct entries also show a compact effective `Source`, including a configured Git ref; marketplace entries omit that redundant line. Native clients are labeled explicitly, such as `native claude`.
 
-With `--json`, each entry includes the friendly `name`, raw configured `spec`, `marketplace`, `scope`, and `kind`, plus `clients` and `nativeClients` when present. Internal effective sources, refs, versions, and status are not exposed:
+Native npm packages use the package name as their friendly heading, preserving npm scopes such as `@acme/pi-tools`. Their pinned source remains visible; an npm version is **not** a marketplace name. If you install `pi-compound-engineering` for Pi and the upstream Compound Engineering plugin for Codex, they remain separate entries with independent destinations and lifecycles. The TUI's Plugins list and detail screen show the configured client and install method (`native pi` versus `file codex`) alongside scope.
+
+With `--json`, each entry includes the friendly `name`, raw configured `spec`, `marketplace`, `scope`, and `kind`, plus `clients` and `nativeClients` when present. Native npm/Git package sources have an empty `marketplace`; their versions and refs remain in `spec`. No separate ref/version or internal effective-source fields are added:
 
 ```json
 {
@@ -358,7 +360,9 @@ human results remain batched until the update finishes.
 Successful client synchronization is folded into the source result; warnings
 and failures still include their diagnostic detail.
 
-The interactive TUI's **Plugins → Update all** action uses a different display:
+The TUI's individual **Update** action updates the selected native package through its client's lifecycle rather than treating it as a Git-cache refresh. Updating the Codex file plugin does not upgrade a coexisting Pi package. Native update failures are shown as failures, not “Already up to date”.
+
+The interactive TUI's **Workspace → Status → Update all** action uses a different display:
 the current plugin or standalone skill source replaces the message on its
 existing spinner. After the spinner ends, the existing **Update Results** note
 shows the final counts.

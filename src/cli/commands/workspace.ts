@@ -674,7 +674,7 @@ function formatTimingMs(ms: number): string {
 
 function formatPluginStatusLine(plugin: {
   source: string;
-  type: 'local' | 'github' | 'marketplace';
+  type: 'local' | 'github' | 'marketplace' | 'package';
   kind: 'skill' | 'plugin';
   available: boolean;
 }): string {
@@ -685,7 +685,7 @@ function formatPluginStatusLine(plugin: {
   } else if (plugin.type === 'github') {
     labels.push(plugin.available ? 'cached' : 'not cached');
   } else {
-    labels.push('local');
+    labels.push(plugin.type);
   }
   return `${status} ${formatPluginSource(plugin.source)} (${labels.join(', ')})`;
 }

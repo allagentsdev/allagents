@@ -183,6 +183,41 @@ profiles:
     expect(payload.data.total).toBe(6);
   });
 
+  test('keeps native npm pins separate from the upstream Codex plugin', () => {
+    writeFileSync(projectConfigPath, 'version: 2\nrepositories: []\nplugins: []\nclients: [codex]\n');
+    writeFileSync(userConfigPath, `version: 2
+plugins:
+  - source: npm:pi-compound-engineering@3.19.2
+    clients: [pi]
+  - source: npm:@acme/pi-tools@1.2.3
+    clients: [pi]
+  - source: https://github.com/EveryInc/compound-engineering-plugin
+    clients: [codex]
+clients: [pi:native, codex]
+`);
+    writeFileSync(join(homeDir, '.allagents', 'sync-state.json'), JSON.stringify({
+      version: 1, lastSync: '2026-09-11T00:00:00.000Z', files: {},
+      nativePlugins: { pi: ['npm:pi-compound-engineering@3.19.2', 'npm:@acme/pi-tools@1.2.3'] },
+    }));
+    const result = runCli(workspaceDir, homeDir, true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.data.total).toBe(3);
+    expect(payload.data.plugins).toEqual([
+      { name: 'pi-compound-engineering', spec: 'npm:pi-compound-engineering@3.19.2', marketplace: '', scope: 'user', kind: 'plugin', nativeClients: ['pi'] },
+      { name: '@acme/pi-tools', spec: 'npm:@acme/pi-tools@1.2.3', marketplace: '', scope: 'user', kind: 'plugin', nativeClients: ['pi'] },
+      { name: 'compound-engineering-plugin', spec: 'https://github.com/EveryInc/compound-engineering-plugin', marketplace: '', scope: 'user', kind: 'plugin', clients: ['codex'] },
+    ]);
+    const human = runCli(workspaceDir, homeDir);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain('❯ pi-compound-engineering');
+    expect(human.stdout).toContain('Clients: native pi');
+    expect(human.stdout).toContain('❯ compound-engineering-plugin');
+    expect(human.stdout).toContain('Clients: codex');
+    expect(human.stdout).toContain('Source: npm:@acme/pi-tools@1.2.3');
+  });
+
   test('merges canonical native state with parsed native client config', () => {
     const human = runCli(workspaceDir, homeDir);
     expect(human.exitCode).toBe(0);

@@ -253,15 +253,21 @@ export async function hasUserPlugin(plugin: string): Promise<boolean> {
 /**
  * Remove a plugin from the user-level workspace config.
  */
-export async function removeUserPlugin(plugin: string): Promise<ModifyResult> {
+export async function removeUserPlugin(plugin: string, configurationIndex?: number): Promise<ModifyResult> {
   await ensureUserWorkspace();
   const configPath = getUserWorkspaceConfigPath();
 
   try {
     const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    // Exact match first
-    let index = config.plugins.findIndex(
+    if (configurationIndex !== undefined) {
+      const selected = config.plugins[configurationIndex];
+      if (!selected || getPluginSource(selected) !== plugin) {
+        return { success: false, error: 'Selected plugin declaration changed. Reopen Plugins before removing.' };
+      }
+    }
+    // Indexed TUI selections never fall back to a different declaration.
+    let index = configurationIndex ?? config.plugins.findIndex(
       (entry) => getPluginSource(entry) === plugin,
     );
 
@@ -298,8 +304,10 @@ export async function removeUserPlugin(plugin: string): Promise<ModifyResult> {
 
     const removedEntry = getPluginSource(config.plugins[index] as PluginEntry);
     config.plugins.splice(index, 1);
-    pruneDisabledSkillsForPlugin(config, removedEntry);
-    pruneEnabledSkillsForPlugin(config, removedEntry);
+    if (!config.plugins.some((entry) => getPluginSource(entry) === removedEntry)) {
+      pruneDisabledSkillsForPlugin(config, removedEntry);
+      pruneEnabledSkillsForPlugin(config, removedEntry);
+    }
     await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
     return { success: true };
   } catch (error) {

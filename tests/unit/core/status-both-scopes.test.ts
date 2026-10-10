@@ -100,7 +100,7 @@ describe('workspace status - both scopes', () => {
     const result = await getWorkspaceStatus(testDir);
     expect(result.success).toBe(true);
     expect(result.plugins).toEqual([]);
-    expect(result.clients).toEqual([]);
+    expect(result.clients).toEqual(['claude']);
     expect(result.userPlugins!.length).toBe(1);
 
     await rm(homeDir, { recursive: true, force: true });
@@ -126,6 +126,29 @@ describe('workspace status - both scopes', () => {
     expect(result.userPlugins![0].source).toBe(userPlugin);
   });
 
+  it('distinguishes a native npm package from the upstream file plugin', async () => {
+    await writeUserConfig({
+      repositories: [],
+      clients: ['pi:native', 'codex'],
+      plugins: [
+        { source: 'npm:pi-compound-engineering@3.19.2', clients: ['pi'] },
+        { source: 'https://github.com/EveryInc/compound-engineering-plugin', clients: ['codex'] },
+      ],
+    });
+    const result = await getWorkspaceStatus(testDir);
+    expect(result.success).toBe(true);
+    expect(result.plugins).toEqual([]);
+    expect(result.userPlugins).toHaveLength(2);
+    expect(result.clients).toEqual(['pi', 'codex']);
+    expect(result.userPlugins?.[0]).toEqual({
+      source: 'npm:pi-compound-engineering@3.19.2', type: 'package',
+      kind: 'plugin', available: false, path: '',
+    });
+    expect(result.userPlugins?.[1]?.type).toBe('github');
+    // Declarations alone must not claim a native package is installed.
+    expect(result.nativeResources).toEqual([]);
+  });
+
   it('should show empty userPlugins when no user config exists', async () => {
     // Use a separate HOME dir so there's no user config
     const separateHome = await mkdtemp(join(tmpdir(), 'allagents-status-home-'));
@@ -144,6 +167,27 @@ describe('workspace status - both scopes', () => {
     expect(result.userPlugins).toEqual([]);
 
     await rm(separateHome, { recursive: true, force: true });
+  });
+
+  it('uses a configured Git ref for availability while preserving the raw source', async () => {
+    const source = 'https://github.com/EveryInc/compound-engineering-plugin';
+    const ref = 'compound-engineering-v3.23.3';
+    const cache = join(testDir, '.allagents', 'plugins', 'marketplaces', `EveryInc-compound-engineering-plugin@${ref}`);
+    await mkdir(cache, { recursive: true });
+    await writeUserConfig({
+      repositories: [], clients: ['codex'], plugins: [{ source, ref }],
+    });
+    const user = await getWorkspaceStatus(testDir);
+    expect(user.userPlugins?.[0]).toMatchObject({ source, available: true, path: cache });
+
+    const project = join(testDir, 'project');
+    await mkdir(join(project, CONFIG_DIR), { recursive: true });
+    await writeFile(join(project, CONFIG_DIR, WORKSPACE_CONFIG_FILE), dump({
+      repositories: [], clients: ['codex'], plugins: [{ source, ref }],
+    }));
+    const both = await getWorkspaceStatus(project);
+    expect(both.plugins[0]).toMatchObject({ source, available: true, path: cache });
+    expect(both.userPlugins?.[0]).toMatchObject({ source, available: true, path: cache });
   });
 
   it('should mark GitHub plugin as cached when cache is branch-qualified', async () => {

@@ -27,6 +27,7 @@ import {
   isFilesystemRoot,
   parseGitHubUrl,
   parseMarketplaceLocation,
+  isNativePackageSource,
 } from '../utils/plugin-path.js';
 import {
   checkRepositoryHealth,
@@ -1813,6 +1814,7 @@ export function parsePluginSpec(spec: string): {
   repo?: string;
   subpath?: string;
 } | null {
+  if (!isPluginSpec(spec)) return null;
   const atIndex = spec.lastIndexOf('@');
   if (atIndex === -1 || atIndex === 0 || atIndex === spec.length - 1) {
     return null;
@@ -2471,6 +2473,7 @@ async function autoRegisterMarketplace(
  * without slashes.
  */
 export function isPluginSpec(spec: string): boolean {
+  if (isNativePackageSource(spec)) return false;
   const atIndex = spec.lastIndexOf('@');
   if (atIndex === -1 || atIndex === 0 || atIndex === spec.length - 1) {
     return false;

@@ -43,7 +43,9 @@ import {
   type MarketplaceEntry,
   type MarketplacePluginsResult,
 } from '../../../core/marketplace.js';
-import { resetFetchCache, updatePlugin } from '../../../core/plugin.js';
+import { resetFetchCache, updatePlugin, type InstalledPluginUpdateResult } from '../../../core/plugin.js';
+import { toNativeEffectData } from '../../../core/native/types.js';
+import { settleNativePluginUpdate } from '../../native-plugin-update.js';
 import { UpdateContext } from '../../../core/update-context.js';
 import { terminalSafe } from '../../terminal-output.js';
 import { formatVerboseSyncLines } from '../../format-sync.js';
@@ -55,7 +57,7 @@ import {
   WORKSPACE_CONFIG_FILE,
   getHomeDir,
 } from '../../../constants.js';
-import { getPluginSource } from '../../../models/workspace-config.js';
+import { getPluginSource, type ClientEntry, type PluginEntry } from '../../../models/workspace-config.js';
 import { mcpClientIdsForScope } from '../../../models/client-mapping.js';
 import { readPluginMcpConfig } from '../../../core/vscode-mcp.js';
 import type { TuiContext } from '../context.js';
@@ -282,44 +284,58 @@ export async function installSelectedPlugin(
 async function runUpdatePlugin(
   pluginSource: string,
   scope: 'project' | 'user',
+  index: number,
   context: TuiContext,
   cache?: TuiCache,
 ): Promise<void> {
   const updateContext = new UpdateContext();
+  const s = p.spinner();
+  s.start('Updating plugin...');
   try {
-    const s = p.spinner();
-    s.start('Updating plugin...');
-
-    const workspacePath =
-      scope === 'project' ? context.workspacePath ?? undefined : undefined;
-    const result = await updatePlugin(
-      pluginSource,
-      createUpdateDeps(updateContext, workspacePath, cache),
-      updateContext,
-    );
-
-    // Preserve the action-driven sync contract, including no-op updates and
-    // later-invocation retries after a sync failure.
-    if (!result.success || result.action === 'failed') {
-      s.stop('Update failed');
-      p.note(result.error ?? 'Unknown error', 'Error');
-      return;
+    const workspacePath = context.workspacePath ?? process.cwd();
+    const config = await getPluginConfiguration(scope, workspacePath);
+    const entry = config?.plugins[index];
+    if (!config || !entry || getPluginSource(entry) !== pluginSource) {
+      throw new Error('Selected plugin declaration changed. Reopen Plugins before updating.');
     }
+    const plan = buildPluginSyncPlans([entry], config.clients, scope).plans[0];
+    const native = !!plan?.nativeClients.length;
+    const nativeOnly = native && plan.clients.length === 0;
+    const errors = await preflightNativePluginDeclaration(entry, config.clients, scope, workspacePath);
+    if (errors.length > 0) throw new Error(errors.join('; '));
 
-    if (scope === 'project' && context.workspacePath) {
-      await syncWorkspace(context.workspacePath);
-    } else {
-      await syncUserWorkspace();
-    }
+    let result: InstalledPluginUpdateResult = nativeOnly
+      ? { plugin: pluginSource, success: true, action: 'skipped' }
+      : await updatePlugin(
+          plan?.source ?? pluginSource,
+          createUpdateDeps(updateContext, scope === 'project' ? workspacePath : undefined, cache),
+          updateContext,
+        );
+    if (!result.success || result.action === 'failed') throw new Error(result.error ?? 'Update failed');
+
+    const options = {
+      offline: true,
+      skipAgentFiles: true,
+      nativeSelection: { mode: 'update' as const, targets: native ? [plan.source] : [], clients: plan?.nativeClients ?? [] },
+    };
+    const synced = scope === 'project'
+      ? await syncWorkspace(workspacePath, options)
+      : await syncUserWorkspace(options);
     cache?.invalidate();
+    if (native) {
+      const settled = settleNativePluginUpdate(plan.source, (synced.nativeResult?.effects ?? []).map(toNativeEffectData), plan.nativeClients);
+      if (!settled.success) throw new Error(settled.error ?? 'Native update failed');
+      if (nativeOnly || settled.action === 'updated') result = settled;
+    }
+    if (!synced.success) throw new Error(synced.error ?? ((synced.warnings ?? []).join('; ') || 'Update failed'));
     s.stop(result.action === 'updated' ? 'Updated' : 'Already up to date');
-
     p.note(
-      result.action === 'updated'
-        ? `\u2713 ${pluginSource} (${result.action})`
-        : `- ${pluginSource} (${result.action})`,
+      result.action === 'updated' ? `\u2713 ${pluginSource} (${result.action})` : `- ${pluginSource} (${result.action})`,
       'Update',
     );
+  } catch (error) {
+    s.stop('Update failed');
+    p.note(error instanceof Error ? error.message : String(error), 'Error');
   } finally {
     updateContext.dispose();
   }
@@ -360,12 +376,12 @@ async function runUpdateAllPluginsWithContext(
   skillPrecheckDependencies: SkillUpdateNodePrecheckDependencies = {},
 ): Promise<void> {
   // Collect all installed plugins
-  const pluginsToUpdate: Array<{ spec: string; scope: 'project' | 'user' }> = [];
+  const pluginsToUpdate: Array<{ spec: string; effectiveSpec: string; scope: 'project' | 'user' }> = [];
 
   if (context.workspacePath) {
     const projectPlugins = await getInstalledProjectPlugins(context.workspacePath);
     for (const plugin of projectPlugins) {
-      pluginsToUpdate.push({ spec: plugin.spec, scope: 'project' });
+      pluginsToUpdate.push({ spec: plugin.spec, effectiveSpec: plugin.effectiveSpec, scope: 'project' });
     }
   }
 
@@ -374,7 +390,7 @@ async function runUpdateAllPluginsWithContext(
     if (!pluginsToUpdate.some((existing) =>
       existing.spec === plugin.spec && existing.scope === 'user'
     )) {
-      pluginsToUpdate.push({ spec: plugin.spec, scope: 'user' });
+      pluginsToUpdate.push({ spec: plugin.spec, effectiveSpec: plugin.effectiveSpec, scope: 'user' });
     }
   }
 
@@ -392,7 +408,27 @@ async function runUpdateAllPluginsWithContext(
   );
   const userDeps = createUpdateDeps(updateContext, undefined, cache);
 
-  const results: Array<{ plugin: string; action: string; error?: string }> = [];
+  const results: Array<{ plugin: string; scope?: 'project' | 'user'; action: string; error?: string }> = [];
+  const nativeTargets = { project: [] as string[], user: [] as string[] };
+  const nativeOnly = new Set<string>();
+  const nativeSources = new Map<string, string>();
+  for (const { spec, scope } of pluginsToUpdate) {
+    const config = await getPluginConfiguration(scope, context.workspacePath ?? process.cwd());
+    if (!config) throw new Error('Workspace configuration changed. Reopen Workspace before updating.');
+    const entries = config.plugins.filter((entry) => getPluginSource(entry) === spec);
+    const plans = buildPluginSyncPlans(entries, config.clients, scope).plans;
+    for (const entry of entries) {
+      const errors = await preflightNativePluginDeclaration(entry, config.clients, scope, context.workspacePath ?? process.cwd());
+      if (errors.length > 0) throw new Error(errors.join('; '));
+    }
+    const nativePlans = plans.filter((plan) => plan.nativeClients.length > 0);
+    nativeTargets[scope].push(...nativePlans.map((plan) => plan.source));
+    const firstNative = nativePlans[0];
+    if (firstNative) {
+      nativeSources.set(`${scope}:${spec}`, firstNative.source);
+      if (plans.every((plan) => plan.clients.length === 0)) nativeOnly.add(`${scope}:${spec}`);
+    }
+  }
   let needsProjectSync = false;
   let needsUserSync = false;
   const scopes = [
@@ -467,19 +503,22 @@ async function runUpdateAllPluginsWithContext(
   resetFetchCache();
   // Refresh generic sources before standalone execution performs its offline
   // scope sync, otherwise that sync's fetch-cache entries can mask updates.
-  for (const { spec, scope } of pluginsToUpdate) {
+  for (const { spec, effectiveSpec, scope } of pluginsToUpdate) {
     if (handledPlugins.has(`${scope}:${spec}`)) continue;
     s.message(`Updating ${terminalSafe(formatPluginSource(spec))}...`);
-    const result = await updatePlugin(
-      spec,
-      scope === 'project' ? projectDeps : userDeps,
-      updateContext,
-    );
-    const entry: { plugin: string; action: string; error?: string } = {
+    const result = nativeOnly.has(`${scope}:${spec}`)
+      ? { action: 'skipped' }
+      : await updatePlugin(
+          effectiveSpec,
+          scope === 'project' ? projectDeps : userDeps,
+          updateContext,
+        );
+    const entry: { plugin: string; scope: 'project' | 'user'; action: string; error?: string } = {
       plugin: spec,
+      scope,
       action: result.action,
     };
-    if (result.error) entry.error = result.error;
+    if ('error' in result && result.error) entry.error = result.error;
     results.push(entry);
     if (result.action === 'updated' || result.action === 'skipped') {
       // A current checkout still re-materializes client artifacts and retries
@@ -547,23 +586,49 @@ async function runUpdateAllPluginsWithContext(
 
   // Generic sources have already refreshed above. Materialize from those cache
   // revisions without letting a retained or failed standalone unit advance.
+  const nativeSyncResults = new Map<'project' | 'user', SyncResult>();
   if (
     (needsProjectSync && !standaloneSyncedScopes.has('project')) ||
-    (needsUserSync && !standaloneSyncedScopes.has('user'))
+    (needsUserSync && !standaloneSyncedScopes.has('user')) ||
+    nativeTargets.project.length > 0 || nativeTargets.user.length > 0
   ) {
     if (
-      needsProjectSync &&
-      !standaloneSyncedScopes.has('project') &&
+      ((needsProjectSync && !standaloneSyncedScopes.has('project')) || nativeTargets.project.length > 0) &&
       context.workspacePath
     ) {
-      await syncWorkspace(context.workspacePath, { offline: true });
+      nativeSyncResults.set('project', await syncWorkspace(context.workspacePath, {
+        offline: true, skipAgentFiles: true,
+        nativeSelection: { mode: 'update', targets: nativeTargets.project },
+      }));
     }
-    if (needsUserSync && !standaloneSyncedScopes.has('user')) {
-      await syncUserWorkspace({ offline: true });
+    if ((needsUserSync && !standaloneSyncedScopes.has('user')) || nativeTargets.user.length > 0) {
+      nativeSyncResults.set('user', await syncUserWorkspace({
+        offline: true, skipAgentFiles: true,
+        nativeSelection: { mode: 'update', targets: nativeTargets.user },
+      }));
     }
     cache?.invalidate();
   }
 
+  for (const { spec, scope } of pluginsToUpdate) {
+    const source = nativeSources.get(`${scope}:${spec}`);
+    if (!source) continue;
+    const synced = nativeSyncResults.get(scope);
+    const settled = settleNativePluginUpdate(source, (synced?.nativeResult?.effects ?? []).map(toNativeEffectData));
+    const result = results.find((entry) => entry.plugin === spec && entry.scope === scope);
+    if (result) {
+      if (result.action !== 'failed' && (nativeOnly.has(`${scope}:${spec}`) || !settled.success || settled.action === 'updated')) {
+        result.action = settled.action;
+      }
+      if (settled.error) result.error = [result.error, settled.error].filter(Boolean).join('; ');
+    }
+  }
+  for (const [scope, synced] of nativeSyncResults) {
+    const error = synced.error ?? ((synced.warnings ?? []).join('; ') || 'Synchronization failed');
+    if (!synced.success && !results.some((entry) => entry.scope === scope && entry.action === 'failed' && entry.error === error)) {
+      results.push({ plugin: `${scope} synchronization`, scope, action: 'failed', error });
+    }
+  }
   s.stop('Update complete');
 
   // Show results
@@ -581,6 +646,25 @@ async function runUpdateAllPluginsWithContext(
   p.note(lines.join('\n'), 'Update Results');
 }
 
+async function getPluginConfiguration(scope: 'project' | 'user', workspacePath: string) {
+  if (scope === 'user') return getUserWorkspaceConfig();
+  const path = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
+  return existsSync(path) ? parseWorkspaceConfig(path) : null;
+}
+
+function describePluginInstall(
+  entry: PluginEntry,
+  clients: ClientEntry[],
+  scope: 'project' | 'user',
+): string {
+  const plan = buildPluginSyncPlans([entry], clients, scope).plans[0];
+  if (!plan) return '';
+  return [
+    ...plan.nativeClients.map((client) => `native ${client}`),
+    ...plan.clients.map((client) => `file ${client}`),
+  ].join(', ');
+}
+
 /**
  * Plugins sub-menu.
  * Lists installed plugins (click to remove) and offers adding new ones.
@@ -589,7 +673,7 @@ async function runUpdateAllPluginsWithContext(
 export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise<void> {
   try {
     while (true) {
-      // Build options: + Add plugin, Update all, then list installed plugins
+      // Select a resource here; bulk updates live under Workspace -> Status.
       const options: Array<{ label: string; value: string; hint?: string }> = [
         { label: '+ Add plugin', value: '__add__' },
       ];
@@ -605,17 +689,11 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
         cache?.setStatus(status);
       }
 
-      const hasPlugins =
-        status.success &&
-        ((status.plugins?.length ?? 0) > 0 || (status.userPlugins?.length ?? 0) > 0);
-
-      if (hasPlugins) {
-        options.push({ label: 'Update all', value: '__update_all__' });
-      }
-
       if (status.success) {
         for (const scope of ['project', 'user'] as const) {
           const plugins = scope === 'project' ? status.plugins : (status.userPlugins ?? []);
+          if (plugins.length === 0) continue;
+          const config = await getPluginConfiguration(scope, context.workspacePath ?? process.cwd());
           const counts = new Map<string, number>();
           for (const plugin of plugins) {
             counts.set(plugin.source, (counts.get(plugin.source) ?? 0) + 1);
@@ -624,10 +702,14 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
             const count = counts.get(plugin.source) ?? 1;
             const key = `${scope}:${plugin.source}${count > 1 ? `\0${index}` : ''}`;
             pluginTargets.set(key, { source: plugin.source, scope, index });
+            const entry = config?.plugins[index];
+            const install = config && entry && getPluginSource(entry) === plugin.source
+              ? describePluginInstall(entry, config.clients, scope)
+              : '';
             options.push({
               label: plugin.source,
               value: key,
-              hint: `${plugin.kind} · ${plugin.type} · ${scope}${count > 1 ? ` · entry ${index + 1}` : ''}`,
+              hint: `${plugin.kind} · ${plugin.type}${install ? ` · ${install}` : ''} · ${scope}${count > 1 ? ` · entry ${index + 1}` : ''}`,
             });
           }
         }
@@ -646,11 +728,6 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
 
       if (selected === '__add__') {
         await runInstallPlugin(context, cache);
-        continue;
-      }
-
-      if (selected === '__update_all__') {
-        await runUpdateAllPlugins(context, cache);
         continue;
       }
 
@@ -831,12 +908,17 @@ async function runPluginDetail(
     if (mcpSelection === undefined) {
       mcpSelection = await getPluginMcpSelection(pluginSource, scope, workspacePath, index);
     }
+    const config = await getPluginConfiguration(scope, workspacePath);
+    const entry = config?.plugins[index];
+    const install = config && entry && getPluginSource(entry) === pluginSource
+      ? describePluginInstall(entry, config.clients, scope)
+      : '';
     const autoEnableLabel = currentMode === 'allowlist'
       ? 'Auto-enable new skills: OFF'
       : 'Auto-enable new skills: ON';
 
     const action = await select({
-      message: `Plugin: ${pluginSource} [${scope}]${native ? ' · native' : ''}`,
+      message: `Plugin: ${pluginSource} [${scope}]${install ? ` · ${install}` : native ? ' · native' : ''}`,
       options: [
         ...(!native
           ? [{ label: 'Browse skills', value: 'browse' as const }]
@@ -930,7 +1012,7 @@ async function runPluginDetail(
     }
 
     if (action === 'update') {
-      await runUpdatePlugin(pluginSource, scope, context, cache);
+      await runUpdatePlugin(pluginSource, scope, index, context, cache);
       mcpSelection = undefined;
       continue;
     }
@@ -947,30 +1029,27 @@ async function runPluginDetail(
       const s = p.spinner();
       s.start('Removing plugin...');
 
-      if (scope === 'project' && context.workspacePath) {
-        const result = await removePlugin(pluginSource, context.workspacePath);
-        if (!result.success) {
-          s.stop('Removal failed');
-          p.note(result.error ?? 'Unknown error', 'Error');
-          continue;
-        }
-        s.message('Updating...');
-        await syncWorkspace(context.workspacePath);
-        s.stop('Removed');
-      } else {
-        const result = await removeUserPlugin(pluginSource);
-        if (!result.success) {
-          s.stop('Removal failed');
-          p.note(result.error ?? 'Unknown error', 'Error');
-          continue;
-        }
-        s.message('Updating...');
-        await syncUserWorkspace();
-        s.stop('Removed');
+      const result = scope === 'project'
+        ? await removePlugin(pluginSource, workspacePath, index)
+        : await removeUserPlugin(pluginSource, index);
+      if (!result.success) {
+        s.stop('Removal failed');
+        p.note(result.error ?? 'Unknown error', 'Error');
+        continue;
       }
-
+      s.message('Updating...');
+      try {
+        const synced = scope === 'project'
+          ? await syncWorkspace(workspacePath)
+          : await syncUserWorkspace();
+        if (!synced.success) throw new Error(synced.error ?? ((synced.warnings ?? []).join('; ') || 'Cleanup failed'));
+        s.stop('Removed');
+        p.note(`Removed: ${pluginSource} [${scope}]`, 'Success');
+      } catch (error) {
+        s.stop('Cleanup failed');
+        p.note(`Declaration removed, but cleanup failed for ${pluginSource} [${scope}]: ${error instanceof Error ? error.message : String(error)}. Run allagents update to retry cleanup.`, 'Error');
+      }
       cache?.invalidate();
-      p.note(`Removed: ${pluginSource} [${scope}]`, 'Success');
       return;
     }
   }

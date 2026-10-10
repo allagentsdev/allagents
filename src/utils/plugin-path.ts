@@ -355,6 +355,11 @@ export function formatPluginSource(source: string): string {
   return subpath ? `${base}/${subpath}` : base;
 }
 
+/** Explicit package transports are not plugin@marketplace declarations. */
+export function isNativePackageSource(source: string): boolean {
+  return /^(?:npm:|git:|git@[^:]+:|ssh:\/\/)/.test(source.trim());
+}
+
 /**
  * Derive a friendly plugin name from its source without filesystem or network
  * access. Marketplace specs remain intact for their caller to parse.
@@ -362,6 +367,12 @@ export function formatPluginSource(source: string): string {
 export function getPluginDisplayName(source: string): string {
   const trimmed = source.trim();
   if (!trimmed) return source;
+  if (trimmed.startsWith('npm:')) {
+    const spec = trimmed.slice(4);
+    const versionSeparator = spec.lastIndexOf('@');
+    return versionSeparator > 0 ? spec.slice(0, versionSeparator) : spec;
+  }
+  if (isNativePackageSource(trimmed)) return trimmed;
   const atIndex = trimmed.lastIndexOf('@');
   if (atIndex > 0 && !trimmed.slice(0, atIndex).includes('/')) return trimmed;
 

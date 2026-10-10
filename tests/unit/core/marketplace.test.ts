@@ -62,6 +62,22 @@ describe('parsePluginSpec', () => {
     expect(parsePluginSpec('')).toBeNull();
   });
 
+  it('does not interpret package versions or Git transports as marketplaces', () => {
+    for (const source of [
+      'npm:pi-compound-engineering@3.19.2',
+      'npm:@acme/pi-tools@1.2.3',
+      'npm:@acme/pi-tools',
+      'git:github.com/acme/pi-tools@v1',
+      'git:git@github.com:acme/pi-tools',
+      'git@github.com:acme/pi-tools',
+      'ssh://git@github.com/acme/pi-tools@v1',
+      'acme/pi-tools@v1',
+    ]) {
+      expect(isPluginSpec(source)).toBe(false);
+      expect(parsePluginSpec(source)).toBeNull();
+    }
+  });
+
   it('should not confuse URL with owner/repo', () => {
     // URLs with :// should not be treated as owner/repo
     const result = parsePluginSpec('plugin@https://github.com/owner/repo');

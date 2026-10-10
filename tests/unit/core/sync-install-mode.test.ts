@@ -10,6 +10,8 @@ import {
   syncWorkspace,
 } from '../../../src/core/sync.js';
 import { UserWorkspaceConfigSchema } from '../../../src/models/workspace-config.js';
+import { parseWorkspaceConfig } from '../../../src/utils/workspace-parser.js';
+import { normalizePiPackageSource } from '../../../src/core/native/pi.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 
 async function createPlugin(baseDir: string, name: string, skillName: string): Promise<string> {
@@ -131,6 +133,36 @@ describe('syncWorkspace — install mode', () => {
     expect(result.errors).toContain(
       "skill/exclude filters are not supported for native plugins ('demo@tools'). Change to install: file to use filters.",
     );
+  });
+
+  it('plans the Pi engineering template as pinned native packages without portable file copies', async () => {
+    const config = await parseWorkspaceConfig(
+      join(import.meta.dir, '../../../examples/workspaces/pi-engineering/.allagents/workspace.yaml'),
+    );
+    const result = buildPluginSyncPlans(config.plugins, config.clients, 'project');
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.plans).toHaveLength(4);
+    const packageIdentities = result.plans.map((plan) => {
+      expect(plan.clients).toEqual([]);
+      expect(plan.nativeClients).toEqual(['pi']);
+      const normalized = normalizePiPackageSource(plan.source, {
+        client: 'pi',
+        scope: 'project',
+        nativeScope: 'project',
+        root: testDir,
+      });
+      expect(normalized?.kind).toBe('npm');
+      expect(normalized?.resolvedIdentity).toMatch(/@\d+\.\d+\.\d+$/);
+      return normalized?.packageIdentity;
+    });
+    expect(packageIdentities).toEqual([
+      'npm:pi-web-access',
+      'npm:pi-compound-engineering',
+      'npm:pi-subagents',
+      'npm:pi-ask-user',
+    ]);
   });
 
   it('plans Codex native installation through the ordinary user sync path', () => {

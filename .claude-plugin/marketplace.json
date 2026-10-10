@@ -26,6 +26,12 @@
       "name": "tradingview",
       "description": "Official TradingView market data and analytics",
       "source": "./plugins/tradingview"
+    },
+    {
+      "name": "finance",
+      "description": "Transparent spreadsheet financial modeling with reusable calculation blocks and validated outputs",
+      "source": "./plugins/finance",
+      "category": "finance"
     }
   ]
 }

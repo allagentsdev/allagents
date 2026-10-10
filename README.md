@@ -31,6 +31,15 @@ the CLI using its current machine-readable command contracts:
 npx allagents plugin install allagents@allagentsdev/allagents --scope user
 ```
 
+The Finance plugin provides a `financial-modeling` skill for forecasts, budgets,
+valuations and workpapers. It uses calculation blocks with local ingredients,
+consistent timelines and traceable outputs, with guidance for preserving missing
+inputs and validating the delivered workbook.
+
+```bash
+npx allagents plugin install finance@allagentsdev/allagents --scope user
+```
+
 ## How It Works
 
 1. **Configure** your workspace with repos, plugins, and target clients in `workspace.yaml`

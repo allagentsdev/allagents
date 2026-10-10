@@ -1,0 +1,10 @@
+{
+  "name": "finance",
+  "description": "Reusable finance skills, starting with transparent spreadsheet financial modeling.",
+  "author": {
+    "name": "AllAgents"
+  },
+  "version": "1.0.0",
+  "category": "finance",
+  "homepage": "https://github.com/allagentsdev/allagents/tree/main/plugins/finance"
+}

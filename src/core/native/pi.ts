@@ -25,7 +25,6 @@ import {
 import { pathIsWithin } from '../client-context.js';
 
 const PI_MINIMUM_VERSION = [0, 85, 1] as const;
-const PI_MAXIMUM_VERSION = [0, 86, 0] as const;
 const PACKAGE_FILTER_KEYS = [
   'extensions',
   'skills',
@@ -830,8 +829,7 @@ export class PiNativeClient implements NativeClient {
     const version = versionTuple(result.output);
     return Boolean(
       version &&
-      compareNativeVersions(version, PI_MINIMUM_VERSION) >= 0 &&
-      compareNativeVersions(version, PI_MAXIMUM_VERSION) < 0,
+      compareNativeVersions(version, PI_MINIMUM_VERSION) >= 0,
     );
   }
 

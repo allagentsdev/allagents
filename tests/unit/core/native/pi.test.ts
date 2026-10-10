@@ -307,18 +307,32 @@ describe('native/pi project trust', () => {
 });
 
 describe('native/pi command effects', () => {
-  test('checks the compatible Pi version range', async () => {
+  test.each([
+    ['0.84.9', false],
+    ['0.85.0', false],
+    ['0.85.1', true],
+    ['0.85.2', true],
+    ['0.86.0', true],
+    ['1.1.0', true],
+    ['2.0.0', true],
+    ['', false],
+    ['not-a-version', false],
+  ])('checks the minimum Pi version for %s', async (output, available) => {
     const paths = fixture();
-    const operationContext = context('user', paths);
-    const supported = new PiNativeClient({
-      execute: async () => ({ success: true, output: '0.85.1' }),
-    });
-    const unsupported = new PiNativeClient({
-      execute: async () => ({ success: true, output: '0.86.0' }),
+    const client = new PiNativeClient({
+      execute: async () => ({ success: true, output }),
     });
 
-    expect(await supported.isAvailable(operationContext)).toBe(true);
-    expect(await unsupported.isAvailable(operationContext)).toBe(false);
+    expect(await client.isAvailable(context('user', paths))).toBe(available);
+  });
+
+  test('rejects a failed version command even when its output names a supported version', async () => {
+    const paths = fixture();
+    const client = new PiNativeClient({
+      execute: async () => ({ success: false, output: '1.1.0', exitCode: 1 }),
+    });
+
+    expect(await client.isAvailable(context('user', paths))).toBe(false);
   });
 
   test('uses exact user and trusted-project install/remove argv, cwd, and env', async () => {

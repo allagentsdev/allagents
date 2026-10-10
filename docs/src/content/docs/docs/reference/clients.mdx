@@ -196,8 +196,12 @@ File sync writes project skills to `.pi/skills/` and user skills to
 `~/.pi/agent/skills/`. Set `PI_CODING_AGENT_DIR` to relocate Pi's user agent
 root.
 
-Native install mode delegates plugin lifecycle to Pi's package manager. Pi
-0.85.1 through 0.85.x is supported. Package sources may be npm specs such as
+Native install mode delegates plugin lifecycle to Pi's package manager and
+requires Pi 0.85.1 or newer, with no upper version bound. Package lifecycle
+operations have also been verified with Pi 1.1.0. Newer versions still must pass
+package-state inspection, project-trust, and scope-isolation checks before
+mutation; meeting the minimum version does not bypass those safeguards.
+Package sources may be npm specs such as
 `npm:pi-extension`, Git repositories, or local paths. Project-native operations
 fail before mutation unless Pi's trusted settings outside the project boundary
 authorize that project. Ordinary workspace update only inspects

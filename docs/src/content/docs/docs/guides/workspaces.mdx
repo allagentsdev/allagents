@@ -242,15 +242,28 @@ This means your personal commands, skills, or customizations in `.claude/command
 
 AllAgents tracks synced files in `.allagents/sync-state.json`. This file is automatically created and updated on each sync.
 
-### Syncing a Single Client
+### Reconciliation Scope
 
-To sync only a specific client instead of all configured clients:
+To apply only the current project's declarations:
 
 ```bash
-allagents update --client opencode
+allagents update --scope project
 ```
 
-This is useful when you want to update files for one client without touching others. Files and sync state for non-targeted clients are preserved.
+This updates the project's plugins, filters, client artifacts, and managed
+repositories while leaving user-wide plugins, settings, and installed global
+profiles alone. It requires `.allagents/workspace.yaml` in the current directory
+and does not create a user workspace.
+
+Use `--scope user` to reconcile user-wide plugins and installed profiles without
+updating the current project. The default `--scope all` retains the existing
+behavior of reconciling all configured targets. To select individual installed
+profiles, use repeatable `--profile <name>` instead; it cannot be combined with
+an explicit `--scope`.
+
+These options also work with `allagents workspace update` and the legacy
+`allagents workspace sync` alias. Scope limits target changes; shared source
+caches may still be read or refreshed. Add `--offline` to use cached remote sources.
 
 ### Dry Run
 

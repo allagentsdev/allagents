@@ -94,7 +94,11 @@ describe('agent command metadata', () => {
   test('update has expected options', () => {
     const syncCmd = allCommands.find((c) => c.command === 'update')!;
     expect(syncCmd.options).toBeInstanceOf(Array);
-    expect(syncCmd.options!.length).toBe(4);
+    expect(syncCmd.options!.length).toBe(5);
+
+    const scope = syncCmd.options!.find((o) => o.flag === '--scope');
+    expect(scope).toBeDefined();
+    expect(scope!.type).toBe('string');
 
     const dryRun = syncCmd.options!.find((o) => o.flag === '--dry-run');
     expect(dryRun).toBeDefined();

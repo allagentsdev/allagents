@@ -31,7 +31,7 @@ Field selection with `--json=<fields>` is not supported for help output.
 ## Top-Level Commands
 
 ```bash
-allagents update [--offline] [--dry-run] [--force] [--verbose] [--no-managed] [--profile <name>...]
+allagents update [--offline] [--dry-run] [--force] [--verbose] [--no-managed] [--scope project|user|all | --profile <name>...]
 allagents status
 ```
 
@@ -46,11 +46,22 @@ Updates plugins in the workspace using non-destructive sync. By default, remote 
 | `-f, --force` | Overwrite existing MCP server entries that differ from plugin config |
 | `-v, --verbose` | Show informational sync messages |
 | `--no-managed` | Skip managed repository clone/pull operations |
+| `--scope project\|user\|all` | Select reconciliation targets; defaults to `all`; cannot combine with `--profile` |
 | `--profile <name>` | Reconcile only this installed global profile; repeatable |
 
-Ordinary user, installed profile, and current project reconciliation are selected automatically; `allagents update` does not take a scope flag.
+`--scope project` reconciles only the current project's declarations, including
+plugin additions, removals, skill/client filters, client artifacts, and managed
+repositories. It does not update user-wide plugins, installed global profiles,
+user settings, or user artifacts, and does not create a user workspace. The
+current directory must contain `.allagents/workspace.yaml`; otherwise the command
+fails without initializing a user workspace.
 
-Without `--profile`, update independently attempts the user workspace, every
+`--scope user` reconciles the user workspace and its installed global profiles,
+leaving the current project alone. If no user workspace exists, it creates the
+user configuration and prints installation guidance, as ordinary update does
+when no configuration exists.
+
+With `--scope all` or neither selector, update independently attempts the user workspace, every
 installed profile that still has a declaration, and the current project
 workspace, in that order. A failure in one pass does not skip later passes, but
 the command exits nonzero after all applicable work completes.
@@ -58,6 +69,11 @@ the command exits nonzero after all applicable work completes.
 Using one or more `--profile` filters validates the entire selected set before
 mutation, updates only those installed and still-declared profiles, and skips
 ordinary user and project sync.
+Any explicit `--scope`, including `all`, is incompatible with `--profile`.
+
+Scope selects reconciliation targets, not source-cache isolation. Project-only
+updates may still read or refresh shared plugin and marketplace caches. Use
+`--offline` to retain the existing cached-source behavior.
 
 Repositories declared with [`managed`](/docs/reference/configuration/#managed-repositories)
 are cloned or pulled before plugin sync. Pass `--no-managed` to skip that step

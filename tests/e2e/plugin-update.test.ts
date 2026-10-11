@@ -565,6 +565,61 @@ describe('plugin update e2e', () => {
     );
   }, 15_000);
 
+  for (const scope of ['project', 'user'] as const) {
+    test(`refreshes remote file-mode artifacts in ${scope} scope without changing the other scope`, () => {
+      const remote = createRemoteMarketplace(rootDir);
+      const options = { gitConfig: remote.gitConfig, gitWrapperDir: remote.gitWrapperDir };
+      const scopes = ['project', 'user'] as const;
+      const skillPaths = {
+        project: [
+          join(workspaceDir, '.codex', 'skills', 'demo', 'SKILL.md'),
+          join(workspaceDir, '.pi', 'skills', 'demo', 'SKILL.md'),
+        ],
+        user: [
+          join(homeDir, '.codex', 'skills', 'demo', 'SKILL.md'),
+          join(homeDir, '.pi', 'agent', 'skills', 'demo', 'SKILL.md'),
+        ],
+      };
+      const cachePaths = {} as Record<'project' | 'user', string>;
+      for (const installScope of scopes) {
+        const add = runCli(workspaceDir, homeDir, [
+          'plugin', 'marketplace', 'add', remote.source, '--scope', installScope,
+        ], options);
+        expect(add.exitCode).toBe(0);
+        cachePaths[installScope] = JSON.parse(add.stdout).data.marketplace.path;
+        const install = runCli(workspaceDir, homeDir, [
+          'plugin', 'install', 'demo@remote-marketplace', '--scope', installScope,
+          '--client', 'codex,pi', '--yes',
+        ], options);
+        expect(install.exitCode).toBe(0);
+        for (const path of skillPaths[installScope]) {
+          expect(lstatSync(path).isFile()).toBe(true);
+          expect(readFileSync(path, 'utf8')).toContain('# Remote demo\n');
+        }
+      }
+      expect(cachePaths.project).not.toBe(cachePaths.user);
+      const otherScope = scope === 'project' ? 'user' : 'project';
+      const oldSha = runGit(cachePaths[otherScope], ['rev-parse', 'HEAD']);
+      const newSha = advanceRemoteMarketplace(remote.worktree, 'v2');
+      const update = runCli(workspaceDir, homeDir, [
+        'plugin', 'update', '--scope', scope,
+      ], options);
+      expect(update.exitCode).toBe(0);
+      expect(JSON.parse(update.stdout)).toMatchObject({
+        success: true,
+        data: { updated: 1, failed: 0 },
+      });
+      expect(runGit(cachePaths[scope], ['rev-parse', 'HEAD'])).toBe(newSha);
+      expect(runGit(cachePaths[otherScope], ['rev-parse', 'HEAD'])).toBe(oldSha);
+      for (const path of skillPaths[scope]) {
+        expect(readFileSync(path, 'utf8')).toContain('# Remote demo v2\n');
+      }
+      for (const path of skillPaths[otherScope]) {
+        expect(readFileSync(path, 'utf8')).toContain('# Remote demo\n');
+      }
+    }, 20_000);
+  }
+
   test(
     'reconciles a retained GitHub cache after an available update fetch fails',
     () => {

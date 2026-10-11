@@ -12,6 +12,18 @@ allagents plugin marketplace add anthropics/claude-plugins-official
 allagents plugin marketplace list
 ```
 
+### Project Scope
+
+Register and update a remote marketplace for the current project:
+
+```bash
+allagents plugin marketplace add owner/repo --scope project
+allagents plugin install demo@repo --scope project --client codex --yes
+allagents plugin update --scope project
+```
+
+Project registrations use a cache owned by that project's registry. A user registration with the same name keeps its own cache; updating one scope leaves the other scope's cache and installed files unchanged. Project plugins can also use a user marketplace when the project has no matching registration.
+
 ### Branch Selection
 
 To register a marketplace from a non-default branch, use a full GitHub URL with the branch path or the `--branch` flag. A custom `--name` is required for non-default branches:

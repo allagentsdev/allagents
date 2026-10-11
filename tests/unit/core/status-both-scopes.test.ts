@@ -6,6 +6,7 @@ import { dump } from 'js-yaml';
 import { getWorkspaceStatus } from '../../../src/core/status.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
+import { parseRemotePluginSource } from '../../../src/utils/plugin-path.js';
 import { stubHomeDir } from '../../helpers/env.js';
 
 describe('workspace status - both scopes', () => {
@@ -147,6 +148,21 @@ describe('workspace status - both scopes', () => {
     expect(result.userPlugins?.[1]?.type).toBe('github');
     // Declarations alone must not claim a native package is installed.
     expect(result.nativeResources).toEqual([]);
+  });
+
+  it('reads file SSH cache at the requested ref and selected subdirectory', async () => {
+    const source = 'ssh://alice@git.example.invalid:2222/team/skills.git#subdir=selected';
+    const ref = 'feature/demo';
+    const cache = parseRemotePluginSource(`${source}&ref=feature%2Fdemo`)!.cachePath;
+    await mkdir(join(cache, 'selected'), { recursive: true });
+    await writeFile(join(cache, 'selected', 'SKILL.md'), '---\nname: fixture\ndescription: fixture\n---\n');
+    await writeUserConfig({ repositories: [], clients: ['codex', 'pi'], plugins: [{ source, ref, install: 'file', clients: ['codex'] }, { source, install: 'native', clients: ['pi'] }] });
+    const cached = await getWorkspaceStatus(testDir);
+    expect(cached.userPlugins?.[0]).toMatchObject({ source, type: 'git', kind: 'skill', available: true, path: cache });
+    expect(cached.userPlugins?.[1]).toMatchObject({ source, type: 'package', available: false, path: '' });
+    await rm(join(cache, 'selected'), { recursive: true });
+    const missing = await getWorkspaceStatus(testDir);
+    expect(missing.userPlugins?.[0]).toMatchObject({ source, type: 'git', available: false });
   });
 
   it('should show empty userPlugins when no user config exists', async () => {

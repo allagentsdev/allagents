@@ -5,8 +5,8 @@ import {
   getEffectivePluginSource,
   getPluginSource,
 } from '../models/workspace-config.js';
-import { getPluginCachePath, parseGitHubUrl } from '../utils/plugin-path.js';
-import { cleanupTempDir, cloneToTemp, createGit, gitHubUrl } from './git.js';
+import { parseRemotePluginSource } from '../utils/plugin-path.js';
+import { cleanupTempDir, cloneToTemp, createGit } from './git.js';
 import { discoverSkillEntriesFromPluginRoot } from './skills.js';
 
 export type SkillUpdateScope = 'project' | 'user';
@@ -152,7 +152,7 @@ export interface BuildSkillUpdatePreflightDeps {
   onUnitCheckStart?: (unit: SkillUpdateUnitInput) => void;
 }
 
-export interface CreateGitHubSkillUpdateInstallationInput {
+export interface CreateRemoteSkillUpdateInstallationInput {
   scope: SkillUpdateScope;
   configIndex: number;
   plugin: PluginEntry;
@@ -261,26 +261,22 @@ export interface SkillUpdateExecutionResult {
 }
 
 /**
- * Convert a direct GitHub config entry plus its pre-update skill snapshot into
+ * Convert a direct remote config entry plus its pre-update skill snapshot into
  * the canonical physical-cache inventory consumed by preflight.
  */
-export function createGitHubSkillUpdateInstallation(
-  input: CreateGitHubSkillUpdateInstallationInput,
+export function createRemoteSkillUpdateInstallation(
+  input: CreateRemoteSkillUpdateInstallationInput,
 ): SkillUpdateInstallation | null {
   const rawSource = getPluginSource(input.plugin);
   const effectiveSource = getEffectivePluginSource(input.plugin);
-  const parsed = parseGitHubUrl(effectiveSource);
+  const parsed = parseRemotePluginSource(effectiveSource);
   if (!parsed) return null;
 
-  const cachePath = getPluginCachePath(
-    parsed.owner,
-    parsed.repo,
-    parsed.branch,
-  );
+  const cachePath = parsed.cachePath;
   const node: CheckoutNode = {
     id: cachePath,
     cachePath,
-    remoteUrl: gitHubUrl(parsed.owner, parsed.repo),
+    remoteUrl: parsed.url,
     role: 'root',
     currentSha: input.currentSha,
     ...(parsed.branch && { ref: parsed.branch }),

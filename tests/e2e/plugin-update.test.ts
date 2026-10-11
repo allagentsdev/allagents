@@ -12,6 +12,7 @@ import {
 import { watch } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { parseRemotePluginSource } from '../../src/utils/plugin-path.js';
 
 interface CliResult {
   exitCode: number;
@@ -692,6 +693,39 @@ describe('plugin update e2e', () => {
     },
     15_000,
   );
+
+  test('targeted file ref update never invokes a same-source native sibling', () => {
+    const remote = createRemotePlugin(rootDir);
+    runGit(remote.worktree, ['tag', 'v1']);
+    runGit(remote.worktree, ['push', 'origin', 'v1']);
+    const nativeTrace = join(rootDir, 'native-trace');
+    writeFileSync(join(remote.gitWrapperDir, 'pi'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$ALLAGENTS_TEST_NATIVE_TRACE"\nexit 37\n');
+    chmodSync(join(remote.gitWrapperDir, 'pi'), 0o755);
+    const source = 'ssh://git@git.example.invalid:2222/team/skills.git';
+    const effectiveSource = `${source}#ref=v1`;
+    const gitConfig = join(rootDir, 'native-boundary-gitconfig');
+    writeFileSync(gitConfig, `[url "file://${remote.worktree}"]\n\tinsteadOf = ${source}\n`);
+    const options = { gitConfig, gitWrapperDir: remote.gitWrapperDir, extraEnv: { ALLAGENTS_TEST_NATIVE_TRACE: nativeTrace } };
+    const previousHome = process.env.ALLAGENTS_TEST_HOME;
+    process.env.ALLAGENTS_TEST_HOME = homeDir;
+    const cache = parseRemotePluginSource(effectiveSource)?.cachePath;
+    if (previousHome === undefined) delete process.env.ALLAGENTS_TEST_HOME;
+    else process.env.ALLAGENTS_TEST_HOME = previousHome;
+    if (!cache) throw new Error('Fixture remote source rejected');
+    mkdirSync(dirname(cache), { recursive: true });
+    runGit(rootDir, ['clone', '--branch', 'v1', remote.worktree, cache]);
+    const configPath = join(workspaceDir, '.allagents', 'workspace.yaml');
+    writeFileSync(configPath, `version: 2\nrepositories: []\nclients: [pi, codex]\nplugins:\n  - source: '${source}'\n    install: native\n    clients: [pi]\n  - source: '${source}'\n    ref: v1\n    install: file\n    clients: [codex]\n`);
+    const originalConfig = readFileSync(configPath, 'utf8');
+    const skill = join(workspaceDir, '.codex', 'skills', 'fixture', 'SKILL.md');
+    const result = runCli(workspaceDir, homeDir, ['plugin', 'update', effectiveSource, '--scope', 'project'], options);
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ success: true, data: { results: [{ plugin: source, success: true }], failed: 0 } });
+    expect(existsSync(skill), result.stdout + result.stderr).toBe(true);
+    expect(readFileSync(skill, 'utf8')).toContain('v1');
+    expect(existsSync(nativeTrace)).toBe(false);
+    expect(readFileSync(configPath, 'utf8')).toBe(originalConfig);
+  }, 15_000);
 
   for (const layout of [
     { name: 'direct client copies', clients: ['codex', 'pi'], canonical: false },

@@ -457,7 +457,7 @@ The top-level `disabledSkills` and `enabledSkills` arrays are deprecated (v1 for
 
 ### Plugin Git Refs
 
-GitHub plugin entries can select a release tag or branch with `ref`:
+Remote file plugin entries can select a release tag or branch with `ref`:
 
 ```yaml
 plugins:
@@ -469,6 +469,26 @@ This is equivalent to the inline `owner/repo@<ref>` source form. An inline ref
 takes precedence, so do not configure both forms on the same entry. Local paths,
 marketplace plugin selectors, and GitHub `/tree/` or `/blob/` URLs already carry
 their own location and ignore object-form `ref`.
+
+File installations also accept arbitrary SSH, SCP-style, and HTTPS Git remotes:
+
+```yaml
+plugins:
+  - source: 'ssh://git@git.example.com:2222/team/skills.git#subdir=collections%2Fteam'
+    install: file
+    ref: release/stable
+    skills: [fixture]
+    clients: [codex, pi]
+```
+
+For these remotes, `#ref=release%2Fstable&subdir=collections%2Fteam` selects an
+inline ref and a repository subdirectory. Inline `ref` metadata takes precedence
+over the object field. Encode fragment values, and keep subdirectories inside
+the checkout. Authentication uses Git's existing SSH and credential-helper
+configuration. Plugin URLs reject HTTP(S) userinfo and SSH passwords before
+output or configuration writes. SSH usernames, keys, agents and Git credential
+helpers remain supported. See [Git remotes for file installations](/docs/guides/plugins/#git-remotes-for-file-installations)
+for CLI examples and offline behavior.
 
 `ref` selects a symbolic Git ref; it is not a content-integrity lock. Sync state
 records the resolved commit SHA for provenance, but AllAgents does not currently

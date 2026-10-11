@@ -1,6 +1,7 @@
+import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import chalk from 'chalk';
 import {
   command,
@@ -78,11 +79,16 @@ import {
 import {
   formatPluginSource,
   isGitHubUrl,
+  isRemotePluginSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
+  withPluginSourceRef,
   parseGitHubUrl,
   stripGitRef,
 } from '../../utils/plugin-path.js';
 import {
   getPluginSource,
+  getEffectivePluginSource,
   type PluginEntry,
 } from '../../models/workspace-config.js';
 import { parseWorkspaceConfig } from '../../utils/workspace-parser.js';
@@ -229,7 +235,7 @@ async function scopeContainsSkillSource(
   state: InstallScopeState | null,
 ): Promise<boolean> {
   if (!state) return false;
-  if (state.plugins?.some((entry) => getPluginSource(entry) === source)) {
+  if (state.plugins?.some((entry) => getPluginSource(entry) === source || getEffectivePluginSource(entry) === source)) {
     return true;
   }
   const identity = await resolveGitHubIdentity(source);
@@ -328,7 +334,7 @@ async function addSkillDeclarationForTarget(
   const installTarget = {
     declaration: targetedDeclaration,
     clients: target.clients,
-    ...(isGitHubUrl(targetedDeclaration.source) && {
+    ...(isRemotePluginSource(targetedDeclaration.source) && {
       sourceValidation: 'declaration' as const,
     }),
   };
@@ -370,8 +376,8 @@ async function recordSourceProvenance(opts: {
   isUser: boolean;
 }): Promise<void> {
   const { from, requestedRef, workspacePath, isUser } = opts;
-  if (!isGitHubUrl(from)) return;
-  const parsed = parseGitHubUrl(from);
+  if (!isRemotePluginSource(from)) return;
+  const parsed = parseRemotePluginSource(from);
   if (!parsed) return;
 
   const fetchResult = await fetchPlugin(from, {
@@ -380,13 +386,13 @@ async function recordSourceProvenance(opts: {
   if (!fetchResult.success || !fetchResult.resolvedSha) return;
 
   const stateRoot = isUser ? getHomeDir() : workspacePath;
-  const key = stripGitRef(`${parsed.owner}/${parsed.repo}`);
+  const key = parsed.type === 'git' ? parsed.provenanceKey : stripGitRef(`${parsed.owner}/${parsed.repo}`);
 
   await upsertSyncStateSource(stateRoot, key, {
     pluginSpec: key,
     resolvedRef: fetchResult.resolvedRef ?? parsed.branch ?? 'HEAD',
     resolvedSha: fetchResult.resolvedSha,
-    ...(requestedRef && { requestedRef }),
+    ...((requestedRef ?? parsed.branch) && { requestedRef: requestedRef ?? parsed.branch }),
   });
 }
 async function recordSourceProvenanceAtLocations(opts: {
@@ -421,9 +427,8 @@ export function resolveFetchedSourcePath(
   source: string,
   cachePath: string,
 ): string {
-  if (!isGitHubUrl(source)) return cachePath;
-  const parsed = parseGitHubUrl(source);
-  return parsed?.subpath ? join(cachePath, parsed.subpath) : cachePath;
+  const parsed = parseRemotePluginSource(source);
+  return parsed ? resolveRemotePluginPath(parsed, cachePath) : cachePath;
 }
 
 /**
@@ -432,6 +437,7 @@ export function resolveFetchedSourcePath(
  * so `plugin@marketplace` returns undefined.
  */
 function extractInlineRef(spec: string): string | undefined {
+  if (isRemotePluginSource(spec)) return parseRemotePluginSource(spec)?.branch;
   const slashIdx = spec.indexOf('/');
   if (slashIdx === -1) return undefined;
   const atIdx = spec.indexOf('@', slashIdx);
@@ -880,12 +886,13 @@ export async function installSkillFromSource(
     deps.installSkillViaMarketplace ?? installSkillViaMarketplace;
   const installSkillDirectFn = deps.installSkillDirect ?? installSkillDirect;
 
+  // Validate before a source can appear in output.
+  const parsed = parseRemotePluginSource(from);
   if (!isJsonMode()) {
     console.log(`Installing skill '${skill}' from ${from}...`);
   }
 
   // Fetch the source to a local cache so we can inspect it
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
   const fetchResult = await fetchPluginFn(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -932,8 +939,8 @@ async function ensureMarketplaceRegistrationForScope(opts: {
   | { success: false; error: string }
 > {
   const { from, scope, projectWorkspacePath } = opts;
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
-  const sourceLocation = parsed ? `${parsed.owner}/${parsed.repo}` : undefined;
+  const parsed = parseRemotePluginSource(from);
+  const sourceLocation = parsed?.type === 'github' ? `${parsed.owner}/${parsed.repo}` : undefined;
   const lookupWorkspace =
     scope === 'project' ? projectWorkspacePath : undefined;
   const visible = await findMarketplaceRegistration(
@@ -1129,8 +1136,8 @@ async function installSkillViaMarketplace(opts: {
   let { isUser, workspacePath } = opts;
   const { skill, from, targetContext } = opts;
   const projectWorkspacePath = targetContext?.workspacePath ?? workspacePath;
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
-  const sourceLocation = parsed ? `${parsed.owner}/${parsed.repo}` : undefined;
+  const parsed = parseRemotePluginSource(from);
+  const sourceLocation = parsed?.type === 'github' ? `${parsed.owner}/${parsed.repo}` : undefined;
   let registration = await findMarketplaceRegistration(
     parsed?.repo ?? from,
     sourceLocation,
@@ -1317,7 +1324,8 @@ export function classifySkillAddPositional(
         .filter(Boolean)
     : [];
   const hasSelector = skills.length > 0 || list || all;
-  if (isGitHubUrl(positional)) {
+  if (isRemotePluginSource(positional)) {
+    if (parseRemotePluginSource(positional)?.type === 'git') return hasSelector ? { shape: 'source', skills } : { shape: 'source-auto' };
     if (hasSelector) return { shape: 'source', skills };
     // No subpath → the repo is a standalone skill or skill bundle; auto-install all.
     // Subpath → legacy deep-URL form handled by resolveSkillFromUrl.
@@ -1383,7 +1391,7 @@ async function installSkillDirect(opts: {
     };
   }
   const canonicalSkill = resolved.canonical;
-  const pluginName = isGitHubUrl(from)
+  const pluginName = isRemotePluginSource(from)
     ? extractPrimaryPluginName(from)
     : getPluginName(sourcePath);
 
@@ -1392,8 +1400,8 @@ async function installSkillDirect(opts: {
     if (existingScope) {
       isUser = existingScope === 'user';
       workspacePath = isUser ? getHomeDir() : targetContext.workspacePath;
-      if (isGitHubUrl(from)) {
-        const existingEnabledSkills = await getEnabledSkillsForGitHubSource(
+      if (isRemotePluginSource(from)) {
+        const existingEnabledSkills = await getEnabledSkillsForRemoteSource(
           from,
           workspacePath,
         );
@@ -1458,8 +1466,8 @@ async function installSkillDirect(opts: {
     });
   }
 
-  if (isGitHubUrl(from)) {
-    const existingEnabledSkills = await getEnabledSkillsForGitHubSource(
+  if (isRemotePluginSource(from)) {
+    const existingEnabledSkills = await getEnabledSkillsForRemoteSource(
       from,
       workspacePath,
     );
@@ -1514,21 +1522,23 @@ async function installSkillDirect(opts: {
 }
 
 function extractPrimaryPluginName(source: string): string {
-  const parsed = isGitHubUrl(source) ? parseGitHubUrl(source) : null;
+  const parsed = parseRemotePluginSource(source);
   if (parsed?.subpath) {
     const segments = parsed.subpath.split('/').filter(Boolean);
     const leaf = segments[segments.length - 1];
     if (leaf) return leaf;
   }
 
-  return getPluginName(source);
+  return parsed?.type === 'git' ? parsed.repo : getPluginName(source);
 }
 
-async function getEnabledSkillsForGitHubSource(
+async function getEnabledSkillsForRemoteSource(
   source: string,
   workspacePath: string,
 ): Promise<string[]> {
-  const identity = await resolveGitHubIdentity(source);
+  const remote = parseRemotePluginSource(source);
+  const root = remote?.type === 'git' ? resolveRemotePluginPath(remote) : undefined;
+  const identity = remote?.type === 'git' ? remote.provenanceKey : await resolveGitHubIdentity(source);
   if (!identity) return [];
 
   const enabledSkills: string[] = [];
@@ -1536,8 +1546,11 @@ async function getEnabledSkillsForGitHubSource(
 
   for (const skill of allSkills) {
     if (skill.disabled) continue;
-    const skillIdentity = await resolveGitHubIdentity(skill.pluginSource);
-    if (skillIdentity !== identity) continue;
+    if (root) {
+      if (skill.path !== root && !skill.path.startsWith(`${root}${sep}`)) continue;
+    } else if ((await resolveGitHubIdentity(skill.pluginSource)) !== identity) {
+      continue;
+    }
     if (!enabledSkills.includes(skill.name)) enabledSkills.push(skill.name);
   }
 
@@ -1684,7 +1697,7 @@ async function discoverSkillsFromSource(
   | { success: true; skills: DiscoveredSkill[]; isMarketplace: boolean }
   | { success: false; error: string }
 > {
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
+  const parsed = parseRemotePluginSource(from);
   const fetchResult = await fetchPlugin(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -1801,8 +1814,8 @@ async function selectAndInstallSkillsFromSource(opts: {
     }
 
     // Subset selected → discover every affected declaration before mutating.
-    const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
-    const sourceLocation = parsed
+    const parsed = parseRemotePluginSource(from);
+    const sourceLocation = parsed?.type === 'github'
       ? `${parsed.owner}/${parsed.repo}`
       : undefined;
     const projectWorkspacePath = targetContext?.workspacePath ?? workspacePath;
@@ -1946,7 +1959,7 @@ async function selectAndInstallSkillsFromSource(opts: {
   }
 
   // Subset selected: configure allowlist with just those names, then sync once
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
+  const parsed = parseRemotePluginSource(from);
   const fetchResult = await fetchPlugin(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -1967,7 +1980,7 @@ async function selectAndInstallSkillsFromSource(opts: {
       : (targetContext?.workspacePath ?? workspacePath);
   }
   const existingEnabled = existingScope
-    ? await getEnabledSkillsForGitHubSource(from, workspacePath)
+    ? await getEnabledSkillsForRemoteSource(from, workspacePath)
     : [];
   const desiredSkills = [...existingEnabled];
   for (const name of selectedNames) {
@@ -2051,11 +2064,10 @@ async function installAllSkillsFromSource(opts: {
   let { isUser, workspacePath } = opts;
   const { from, targetContext } = opts;
 
+  const parsed = parseRemotePluginSource(from);
   if (!isJsonMode()) {
     console.log(`Installing all skills from ${from}...`);
   }
-
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
   const fetchResult = await fetchPlugin(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -2108,7 +2120,7 @@ async function installAllSkillsFromSource(opts: {
       workspacePath = isUser ? getHomeDir() : targetContext.workspacePath;
       const pluginName = extractPrimaryPluginName(
         installResult.normalizedPlugin ??
-          (isGitHubUrl(from) ? from : getPluginName(sourcePath)),
+          (isRemotePluginSource(from) ? from : getPluginName(sourcePath)),
       );
       if (!isJsonMode()) {
         console.log(
@@ -2132,8 +2144,8 @@ async function installAllSkillsFromSource(opts: {
     }
   }
 
-  if (isGitHubUrl(from)) {
-    const existingEnabledSkills = await getEnabledSkillsForGitHubSource(
+  if (isRemotePluginSource(from)) {
+    const existingEnabledSkills = await getEnabledSkillsForRemoteSource(
       from,
       workspacePath,
     );
@@ -2264,8 +2276,8 @@ async function installAllViaMarketplace(opts: {
 > {
   let { isUser, workspacePath } = opts;
   const { from, cachedPath, targetContext } = opts;
-  const parsed = isGitHubUrl(from) ? parseGitHubUrl(from) : null;
-  const sourceLocation = parsed ? `${parsed.owner}/${parsed.repo}` : undefined;
+  const parsed = parseRemotePluginSource(from);
+  const sourceLocation = parsed?.type === 'github' ? `${parsed.owner}/${parsed.repo}` : undefined;
   const projectWorkspacePath = targetContext?.workspacePath ?? workspacePath;
   let registration = await findMarketplaceRegistration(
     parsed?.repo ?? from,
@@ -2456,6 +2468,8 @@ const addCmd = command({
     all,
   }) => {
     try {
+      if (fromArg) assertPluginSourceNoCredentials(fromArg);
+      if (skillArg) assertPluginSourceNoCredentials(skillArg);
       // Classify the positional argument so we know which code path to take.
       const classified = classifySkillAddPositional(
         skillArg,
@@ -2515,9 +2529,7 @@ const addCmd = command({
           process.exit(1);
         }
         if (ref && fromArg) {
-          // Splice the ref into the source string so downstream parseGitHubUrl
-          // picks it up as the branch/tag.
-          fromArg = `${fromArg}@${ref}`;
+          fromArg = withPluginSourceRef(fromArg, ref);
           requestedRef = ref;
         } else if (inlineRef) {
           requestedRef = inlineRef;

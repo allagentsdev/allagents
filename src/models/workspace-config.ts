@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { assertPluginSourceNoCredentials } from '../utils/git-source.js';
+import { withPluginSourceRef } from '../utils/plugin-path.js';
 import {
   ClientEntryListSchema,
   ClientSelectorListSchema,
@@ -119,7 +121,13 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 /**
  * Plugin source - can be local path or GitHub URL
  */
-export const PluginSourceSchema = z.string();
+export const PluginSourceSchema = z.string().superRefine((source, ctx) => {
+  try {
+    assertPluginSourceNoCredentials(source);
+  } catch (error) {
+    ctx.addIssue({ code: 'custom', message: (error as Error).message });
+  }
+});
 
 export type PluginSource = z.infer<typeof PluginSourceSchema>;
 
@@ -192,32 +200,7 @@ export function getPluginSource(plugin: PluginEntry): string {
  * An inline ref remains authoritative when both forms are present.
  */
 export function getEffectivePluginSource(plugin: PluginEntry): string {
-  const source = getPluginSource(plugin);
-  const ref = getPluginRef(plugin);
-  if (!ref) return source;
-  if (
-    source.startsWith('.') ||
-    source.startsWith('/') ||
-    source.includes('\\') ||
-    /^[a-zA-Z]:/.test(source) ||
-    (/^[a-z]+:\/\//i.test(source) &&
-      !/^https?:\/\/(?:www\.)?github\.com\//i.test(source)) ||
-    source.slice(0, source.indexOf('/')).includes('@')
-  ) {
-    return source;
-  }
-
-  if (/\/tree\/|\/blob\//.test(source)) return source;
-  const shorthand = source
-    .replace(/^https?:\/\/(?:www\.)?github\.com\//, '')
-    .replace(/^github\.com\//, '')
-    .replace(/^gh:/, '');
-  const parts = shorthand.split('/');
-  const repoSegment = parts[1];
-  if (!repoSegment || repoSegment.includes('@')) return source;
-
-  parts[1] = `${repoSegment}@${ref}`;
-  return parts.join('/');
+  return withPluginSourceRef(getPluginSource(plugin), getPluginRef(plugin));
 }
 
 /**

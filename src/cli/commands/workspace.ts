@@ -703,7 +703,7 @@ function formatTimingMs(ms: number): string {
 
 function formatPluginStatusLine(plugin: {
   source: string;
-  type: 'local' | 'github' | 'marketplace' | 'package';
+  type: 'local' | 'github' | 'git' | 'marketplace' | 'package';
   kind: 'skill' | 'plugin';
   available: boolean;
 }): string {

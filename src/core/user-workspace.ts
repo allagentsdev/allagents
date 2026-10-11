@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { fetchPlugin } from './plugin.js';
 import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
@@ -19,6 +20,8 @@ import {
   getPluginDisplayName,
   isFilesystemRoot,
   isGitHubUrl,
+  isRemotePluginSource,
+  resolveRemotePluginPath,
   validatePluginSource,
   verifyGitHubUrlExists,
 } from '../utils/plugin-path.js';
@@ -190,7 +193,17 @@ async function addValidatedUserPlugin(
     );
   }
 
-  if (isGitHubUrl(plugin)) {
+  const effectiveSource = getEffectivePluginSource(declaration);
+  if (isRemotePluginSource(effectiveSource) && !isGitHubUrl(plugin)) {
+    try {
+      const fetched = await fetchPlugin(effectiveSource);
+      if (!fetched.success) return { success: false, error: fetched.error || `Failed to fetch ${plugin}` };
+      const path = resolveRemotePluginPath(effectiveSource, fetched.cachePath);
+      if (!existsSync(path)) return { success: false, error: `Path not found in repository: ${path}` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  } else if (isGitHubUrl(plugin)) {
     const validation = validatePluginSource(plugin);
     if (!validation.valid) {
       return {

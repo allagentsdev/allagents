@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import {
   buildPhysicalRefreshUnits,
   buildSkillUpdatePreflight,
-  createGitHubSkillUpdateInstallation,
+  createRemoteSkillUpdateInstallation,
   executeSkillUpdatePlan,
   inspectRemoteSkillUpdateUnit,
   resolveCheckoutSubpath,
@@ -90,9 +90,9 @@ describe('getEffectivePluginSource', () => {
   });
 });
 
-describe('createGitHubSkillUpdateInstallation', () => {
+describe('createRemoteSkillUpdateInstallation', () => {
   it('canonicalizes aliases to one cache node and separates requested refs', () => {
-    const shorthand = createGitHubSkillUpdateInstallation({
+    const shorthand = createRemoteSkillUpdateInstallation({
       scope: 'project',
       configIndex: 0,
       plugin: 'acme/skills',
@@ -100,7 +100,7 @@ describe('createGitHubSkillUpdateInstallation', () => {
       currentSha: 'old',
       skills: [{ name: 'keep', subpath: 'keep', enabled: true }],
     });
-    const url = createGitHubSkillUpdateInstallation({
+    const url = createRemoteSkillUpdateInstallation({
       scope: 'user',
       configIndex: 0,
       plugin: 'https://github.com/acme/skills',
@@ -108,7 +108,7 @@ describe('createGitHubSkillUpdateInstallation', () => {
       currentSha: 'old',
       skills: [{ name: 'keep', subpath: 'keep', enabled: true }],
     });
-    const requestedRef = createGitHubSkillUpdateInstallation({
+    const requestedRef = createRemoteSkillUpdateInstallation({
       scope: 'project',
       configIndex: 1,
       plugin: { source: 'acme/skills', ref: 'v2' },

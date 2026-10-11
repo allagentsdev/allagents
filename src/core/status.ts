@@ -11,10 +11,9 @@ import {
 } from '../models/workspace-config.js';
 import {
   parsePluginSource,
-  parseGitHubUrl,
-  getPluginCachePath,
   type ParsedPluginSource,
-  isNativePackageSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
 } from '../utils/plugin-path.js';
 import { parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { isPluginSpec, resolvePluginSpec } from './marketplace.js';
@@ -45,7 +44,7 @@ import { resolveClientContexts } from './client-context.js';
  */
 export interface PluginStatus {
   source: string;
-  type: 'local' | 'github' | 'marketplace' | 'package';
+  type: 'local' | 'github' | 'git' | 'marketplace' | 'package';
   /**
    * 'skill' when the resolved path looks like a single-skill source (root
    * SKILL.md, no skills/ subdir — matches the auto-wrap layout from #232/#249).
@@ -383,7 +382,7 @@ export async function getWorkspaceStatus(
         plugins.push(status);
       } else {
         const parsed = parsePluginSource(getEffectivePluginSource(pluginEntry), workspacePath);
-        const status = getPluginStatus(parsed);
+        const status = getPluginStatus(parsed, buildPluginSyncPlans([pluginEntry], config.clients, 'project').plans[0]?.clients.length === 0);
         plugins.push({ ...status, source: pluginSource });
       }
     }
@@ -429,8 +428,8 @@ export async function getWorkspaceStatus(
 /**
  * Get status of a single plugin
  */
-function getPluginStatus(parsed: ParsedPluginSource): PluginStatus {
-  if (isNativePackageSource(parsed.original)) {
+function getPluginStatus(parsed: ParsedPluginSource, nativeOnly = false): PluginStatus {
+  if (nativeOnly) {
     return {
       source: parsed.original,
       type: 'package',
@@ -439,33 +438,19 @@ function getPluginStatus(parsed: ParsedPluginSource): PluginStatus {
       path: '',
     };
   }
-  if (parsed.type === 'github') {
-    // Check if cached
-    const cachePath =
-      parsed.owner && parsed.repo
-        ? getPluginCachePath(parsed.owner, parsed.repo, parsed.branch)
-        : '';
-    const available = cachePath ? existsSync(cachePath) : false;
-
-    // For GitHub plugins with a subpath, classify the resolved subdir rather
-    // than the repo root — that's what users actually consume. ParsedPluginSource
-    // drops the subpath, so re-parse the original URL to recover it.
-    const subpath = parseGitHubUrl(parsed.original)?.subpath;
-    const classifyPath =
-      available && cachePath
-        ? subpath
-          ? join(cachePath, subpath)
-          : cachePath
-        : '';
-
+  const remote = parseRemotePluginSource(parsed.original);
+  if (remote) {
+    let selectedPath = '';
+    try { selectedPath = resolveRemotePluginPath(remote); } catch { /* unavailable checkout subdirectory */ }
+    const available = remote.type === 'github' ? existsSync(remote.cachePath) : Boolean(selectedPath && existsSync(selectedPath));
     return {
       source: parsed.original,
-      type: 'github',
-      kind: classifyKind(classifyPath),
+      type: remote.type,
+      kind: classifyKind(available ? selectedPath : ''),
       available,
-      path: cachePath,
-      ...(parsed.owner && { owner: parsed.owner }),
-      ...(parsed.repo && { repo: parsed.repo }),
+      path: remote.cachePath,
+      ...(remote.owner && { owner: remote.owner }),
+      repo: remote.repo,
     };
   }
 
@@ -495,7 +480,7 @@ async function getUserPluginStatuses(): Promise<PluginStatus[]> {
       statuses.push(await getMarketplacePluginStatus(pluginSource));
     } else {
       const parsed = parsePluginSource(getEffectivePluginSource(pluginEntry), getHomeDir());
-      statuses.push({ ...getPluginStatus(parsed), source: pluginSource });
+      statuses.push({ ...getPluginStatus(parsed, buildPluginSyncPlans([pluginEntry], config.clients, 'user').plans[0]?.clients.length === 0), source: pluginSource });
     }
   }
   return statuses;

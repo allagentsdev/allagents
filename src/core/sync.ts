@@ -49,9 +49,11 @@ import {
 } from '../models/workspace-config.js';
 import { getEmbeddedMarketplaceFileArtifacts } from '../utils/marketplace-manifest-parser.js';
 import {
-  isGitHubUrl,
+  getPluginDisplayName,
+  isRemotePluginSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
   parseFileSource,
-  parseGitHubUrl,
   stripGitRef,
 } from '../utils/plugin-path.js';
 import {
@@ -1550,9 +1552,9 @@ async function validatePlugin(
     };
   }
 
-  if (isGitHubUrl(pluginSource)) {
+  if (isRemotePluginSource(pluginSource)) {
     // Parse URL to extract branch and subpath
-    const parsed = parseGitHubUrl(pluginSource);
+    const parsed = parseRemotePluginSource(pluginSource);
 
     // Fetch remote plugin (with offline option and branch if specified)
     const fetchResult = await fetchPlugin(pluginSource, {
@@ -1569,10 +1571,13 @@ async function validatePlugin(
         ...(fetchResult.error && { error: fetchResult.error }),
       };
     }
-    // Handle subpath in GitHub URL (e.g., /tree/main/plugins/name)
-    const resolvedPath = parsed?.subpath
-      ? join(fetchResult.cachePath, parsed.subpath)
-      : fetchResult.cachePath;
+    let resolvedPath: string;
+    try {
+      resolvedPath = resolveRemotePluginPath(pluginSource, fetchResult.cachePath);
+      if (!existsSync(resolvedPath)) throw new Error(`Path not found in repository: ${resolvedPath}`);
+    } catch (error) {
+      return { plugin: pluginSource, resolved: '', success: false, clients: [], nativeClients: [], error: error instanceof Error ? error.message : String(error) };
+    }
     const fileArtifacts = await getEmbeddedMarketplaceFileArtifacts(
       resolvedPath,
       parsed?.repo,
@@ -1580,6 +1585,7 @@ async function validatePlugin(
     return {
       plugin: pluginSource,
       resolved: resolvedPath,
+      ...(parsed?.type === 'git' && { pluginName: getPluginDisplayName(pluginSource) }),
       success: true,
       clients: [],
       nativeClients: [],
@@ -2919,8 +2925,8 @@ async function buildSourcesProvenance(
   for (const validated of validatedPlugins) {
     if (!validated.success) continue;
     const spec = validated.plugin;
-    if (!isGitHubUrl(spec)) continue;
-    const parsed = parseGitHubUrl(spec);
+    if (!isRemotePluginSource(spec)) continue;
+    const parsed = parseRemotePluginSource(spec);
     if (!parsed) continue;
 
     // Re-call fetchPlugin to pick up the cached resolvedSha / resolvedRef.
@@ -2929,7 +2935,7 @@ async function buildSourcesProvenance(
     });
     if (!fetchResult.success || !fetchResult.resolvedSha) continue;
 
-    const rawBase = stripGitRef(`${parsed.owner}/${parsed.repo}`);
+    const rawBase = parsed.type === 'git' ? parsed.provenanceKey : stripGitRef(`${parsed.owner}/${parsed.repo}`);
     const requestedRef = refByRawSource.get(rawBase) ?? parsed.branch;
 
     sources[rawBase] = {

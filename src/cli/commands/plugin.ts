@@ -1,3 +1,4 @@
+import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { command, positional, option, string, optional, multioption, array, flag } from 'cmd-ts';
 import {
   addMarketplace,
@@ -86,7 +87,9 @@ import {
 } from '../format-sync.js';
 import {
   getPluginSource,
+  getEffectivePluginSource,
   type WorkspaceConfig,
+  type PluginEntry,
 } from '../../models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, getHomeDir } from '../../constants.js';
 import { existsSync } from 'node:fs';
@@ -94,7 +97,8 @@ import { join } from 'node:path';
 import {
   formatPluginSource,
   getPluginDisplayName,
-  isGitHubUrl,
+  isRemotePluginSource,
+  parseRemotePluginSource,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1198,6 +1202,7 @@ const pluginInstallCmd = command({
   },
   handler: async ({ plugin, scope, client, yes, skills }) => {
     try {
+      assertPluginSourceNoCredentials(plugin);
       const workspacePath = process.cwd();
       const projectConfigPath = join(
         workspacePath,
@@ -1574,7 +1579,17 @@ const pluginUninstallCmd = command({
 // plugin update
 // =============================================================================
 
-type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'scope'>;
+type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'effectiveSpec' | 'scope'> & { configIndex: number };
+
+function pluginUpdateSource(entry: PluginUpdateEntry): string {
+  // Preserve direct HTTPS update routing when object-ref normalization produces
+  // the legacy GitHub shorthand used for declaration and cache identity.
+  if (entry.spec.startsWith('https://github.com/') && !entry.effectiveSpec.startsWith('https://github.com/')) {
+    const ref = parseRemotePluginSource(entry.effectiveSpec)?.branch;
+    if (ref) return `${entry.spec}#ref=${encodeURIComponent(ref)}`;
+  }
+  return entry.effectiveSpec;
+}
 
 const pluginUpdateCmd = command({
   name: 'update',
@@ -1605,27 +1620,18 @@ const pluginUpdateCmd = command({
 
       // Collect installed plugins based on scope
       const pluginsToUpdate: PluginUpdateEntry[] = [];
-      const addPluginToUpdate = (spec: string, pluginScope: 'project' | 'user') => {
-        if (!pluginsToUpdate.some((entry) =>
-          entry.spec === spec && entry.scope === pluginScope
-        )) {
-          pluginsToUpdate.push({ spec, scope: pluginScope });
-        }
+      const addPluginToUpdate = (
+        declaration: PluginEntry,
+        pluginScope: 'project' | 'user',
+        configIndex: number,
+      ) => {
+        pluginsToUpdate.push({
+          spec: getPluginSource(declaration),
+          effectiveSpec: getEffectivePluginSource(declaration),
+          scope: pluginScope,
+          configIndex,
+        });
       };
-
-      if (updateProject && !isUserConfigPath(process.cwd())) {
-        const projectPlugins = await getInstalledProjectPlugins(process.cwd());
-        for (const p of projectPlugins) {
-          addPluginToUpdate(p.spec, 'project');
-        }
-      }
-
-      if (updateUser) {
-        const userPlugins = await getInstalledUserPlugins();
-        for (const p of userPlugins) {
-          addPluginToUpdate(p.spec, 'user');
-        }
-      }
 
       const configs: Partial<
         Record<'project' | 'user', WorkspaceConfig>
@@ -1642,8 +1648,8 @@ const pluginUpdateCmd = command({
         if (existsSync(configPath)) {
           const config = await parseWorkspaceConfig(configPath);
           configs.project = config;
-          for (const entry of config.plugins) {
-            addPluginToUpdate(getPluginSource(entry), 'project');
+          for (const [configIndex, entry] of config.plugins.entries()) {
+            addPluginToUpdate(entry, 'project', configIndex);
           }
         }
       }
@@ -1652,16 +1658,16 @@ const pluginUpdateCmd = command({
         const userConfig = await getUserWorkspaceConfig();
         if (userConfig) {
           configs.user = userConfig;
-          for (const entry of userConfig.plugins) {
-            addPluginToUpdate(getPluginSource(entry), 'user');
+          for (const [configIndex, entry] of userConfig.plugins.entries()) {
+            addPluginToUpdate(entry, 'user', configIndex);
           }
         }
       }
 
       // Filter to specific plugin if provided
       const toUpdate = plugin
-        ? pluginsToUpdate.filter(({ spec }) =>
-            nativeIdentityMatches(plugin, spec, spec))
+        ? pluginsToUpdate.filter(({ spec, effectiveSpec }) =>
+            nativeIdentityMatches(plugin, spec, effectiveSpec))
         : pluginsToUpdate;
 
       if (plugin && toUpdate.length === 0) {
@@ -1703,7 +1709,7 @@ const pluginUpdateCmd = command({
         }
       }
       const declarationKey = (entry: PluginUpdateEntry) =>
-        `${entry.scope}:${entry.spec}`;
+        `${entry.scope}:${entry.configIndex}`;
       const declarationLabel = (entry: PluginUpdateEntry) => {
         const label = terminalSafe(formatPluginSource(entry.spec));
         return duplicateCrossScopeLabels.has(label)
@@ -1757,10 +1763,7 @@ const pluginUpdateCmd = command({
         }
         const config = configs[entry.scope];
         if (config) {
-          const declaration =
-            config.plugins.find(
-              (candidate) => getPluginSource(candidate) === entry.spec,
-            ) ?? entry.spec;
+          const declaration = config.plugins[entry.configIndex] ?? entry.spec;
           const plan = buildPluginSyncPlans(
             [declaration],
             config.clients,
@@ -1778,7 +1781,7 @@ const pluginUpdateCmd = command({
             );
           }
           if ((plan?.nativeClients.length ?? 0) > 0) {
-            nativeTargets[entry.scope].push(entry.spec);
+            nativeTargets[entry.scope].push(plan?.source ?? entry.effectiveSpec);
             // Native state is outside a Git checkout, so a current checkout can
             // still need native reconciliation. Keep these available.
             checks.set(key, { plugin: entry.spec, status: 'available' });
@@ -1791,7 +1794,7 @@ const pluginUpdateCmd = command({
         checks.set(
           key,
           await checkPluginUpdate(
-            entry.spec,
+            pluginUpdateSource(entry),
             depsByScope[entry.scope],
             updateContext,
           ),
@@ -1851,10 +1854,11 @@ const pluginUpdateCmd = command({
         } else {
           announceDeclaration(entry);
           result = await applyPluginUpdate(
-            pluginSpec,
+            pluginUpdateSource(entry),
             depsByScope[pluginScope],
             updateContext,
           );
+          result = { ...result, plugin: pluginSpec };
           if (progressiveOutput) renderUpdateResult(result);
         }
         if (
@@ -1863,7 +1867,7 @@ const pluginUpdateCmd = command({
           (result.action === 'updated' ||
             check?.status === 'available' ||
             check?.status === 'up-to-date' ||
-            (check?.status === 'not-remote' && !isGitHubUrl(pluginSpec)))
+            (check?.status === 'not-remote' && !isRemotePluginSource(entry.effectiveSpec)))
         ) {
           // A successful source check or fetch does not guarantee that client
           // artifacts are materialized; retry reconciliation for skipped work too.
@@ -1879,24 +1883,15 @@ const pluginUpdateCmd = command({
       const nativeEffects: Partial<
         Record<'project' | 'user', NativeEffectData[]>
       > = {};
-      const targetsByScope = {
-        project: toUpdate
-          .filter((entry) => entry.scope === 'project')
-          .map((entry) => entry.spec),
-        user: toUpdate
-          .filter((entry) => entry.scope === 'user')
-          .map((entry) => entry.spec),
-      };
       if (
-        targetsByScope.project.length > 0 &&
-        (syncedScopes.has('project') || nativeTargets.project.length > 0)
+        syncedScopes.has('project') || nativeTargets.project.length > 0
       ) {
         const { ok, syncData } = await runSyncAndPrint(
           {
             skipAgentFiles: true,
             nativeSelection: {
               mode: 'update',
-              targets: targetsByScope.project,
+              targets: nativeTargets.project,
             },
           },
           {
@@ -1909,15 +1904,14 @@ const pluginUpdateCmd = command({
         nativeEffects.project = syncData.nativeResources?.effects ?? [];
       }
       if (
-        targetsByScope.user.length > 0 &&
-        (syncedScopes.has('user') || nativeTargets.user.length > 0)
+        syncedScopes.has('user') || nativeTargets.user.length > 0
       ) {
         const { ok, syncData } = await runUserSyncAndPrint(
           {
             skipAgentFiles: true,
             nativeSelection: {
               mode: 'update',
-              targets: targetsByScope.user,
+              targets: nativeTargets.user,
             },
           },
           { compactSuccess: progressiveOutput },
@@ -1930,10 +1924,10 @@ const pluginUpdateCmd = command({
       for (let index = 0; index < toUpdate.length; index++) {
         const entry = toUpdate[index];
         if (!entry || !nativeOnly.has(declarationKey(entry))) continue;
-        const settledResult = settleNativePluginUpdate(
-          entry.spec,
-          nativeEffects[entry.scope] ?? [],
-        );
+        const settledResult = {
+          ...settleNativePluginUpdate(entry.effectiveSpec, nativeEffects[entry.scope] ?? []),
+          plugin: entry.spec,
+        };
         results[index] = settledResult;
         if (progressiveOutput) renderUpdateResult(settledResult);
       }

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   resolveFetchedSourcePath,
+  classifySkillAddPositional,
   resolveSkillFromUrl,
   resolveSkillNameFromRepo,
 } from '../../../src/cli/commands/plugin-skills.js';
@@ -147,5 +148,20 @@ describe('resolveFetchedSourcePath', () => {
 
   it('leaves non-GitHub sources unchanged', () => {
     expect(resolveFetchedSourcePath('/tmp/local-skill', '/tmp/local-skill')).toBe('/tmp/local-skill');
+  });
+});
+
+describe('arbitrary Git skill source commands', () => {
+  it('classifies SCP transport usernames as a source with skill selection', () => {
+    expect(classifySkillAddPositional('alice@forgejo.example:team/skills.git', 'fixture', false, false)).toEqual({ shape: 'source', skills: ['fixture'] });
+  });
+  it('auto-discovers a generic selected repository directory', () => {
+    expect(classifySkillAddPositional('ssh://alice@git.example:2222/team/skills.git#ref=feature%2Fdemo&subdir=selected', undefined, false, false)).toEqual({ shape: 'source-auto' });
+  });
+  it('resolves encoded generic subdirectories at the fetched checkout', async () => {
+    const cache = await mkdtemp(join(tmpdir(), 'allagents-git-skill-path-'));
+    try {
+      expect(resolveFetchedSourcePath('https://git.example/team/skills.git#subdir=selected%2Fnested', cache)).toBe(join(cache, 'selected', 'nested'));
+    } finally { await rm(cache, { recursive: true, force: true }); }
   });
 });

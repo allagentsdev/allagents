@@ -17,7 +17,7 @@ import {
   executeSkillUpdatePlan,
   type SkillUpdatePreflight,
 } from '../../../src/core/skill-update.js';
-import { getPluginCachePath } from '../../../src/utils/plugin-path.js';
+import { getPluginCachePath, parseRemotePluginSource } from '../../../src/utils/plugin-path.js';
 
 const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
 
@@ -65,6 +65,26 @@ describe('skill update command adapters', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test('inventories a generic object ref without sharing its default checkout or native declaration', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-generic-inventory-'));
+    process.env.ALLAGENTS_TEST_HOME = join(root, 'home');
+    const workspace = join(root, 'workspace');
+    const source = 'alice@forgejo.example:team/collection.git#subdir=selected';
+    const remote = parseRemotePluginSource(`${source}&ref=feature%2Fdemo`)!;
+    try {
+      await mkdir(join(remote.cachePath, 'selected', 'skills', 'keep'), { recursive: true });
+      await writeFile(join(remote.cachePath, 'selected', 'skills', 'keep', 'SKILL.md'), '# Keep');
+      await initCheckout(remote.cachePath);
+      await mkdir(join(workspace, '.allagents'), { recursive: true });
+      await writeFile(join(workspace, '.allagents', 'workspace.yaml'), dump({ version: 2, repositories: [], clients: ['codex', 'pi'], plugins: [{ source, ref: 'feature/demo', install: 'file', clients: ['codex'] }, { source, install: 'native', clients: ['pi'] }] }));
+      const inventory = await buildSkillUpdateInventory(workspace, ['project']);
+      expect(inventory.failures).toEqual([]);
+      expect(inventory.installations).toHaveLength(1);
+      expect(inventory.installations[0]).toMatchObject({ rawSource: source, pluginName: 'selected', rootSubpath: 'selected', skills: [{ name: 'keep', enabled: true }] });
+      expect(inventory.installations[0]?.nodes[0]).toMatchObject({ cachePath: remote.cachePath, remoteUrl: 'alice@forgejo.example:team/collection.git', ref: 'feature/demo' });
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   test('normalizes project, user, and all scopes', () => {

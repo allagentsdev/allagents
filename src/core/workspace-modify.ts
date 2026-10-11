@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { fetchPlugin } from './plugin.js';
 import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
@@ -11,7 +12,7 @@ import type {
   Repository,
   WorkspaceConfig,
 } from '../models/workspace-config.js';
-import { getClientTypes, getPluginSource } from '../models/workspace-config.js';
+import { getClientTypes, getEffectivePluginSource, getPluginSource, getPluginClients, normalizeClientEntry, resolveInstallMode } from '../models/workspace-config.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
 import {
   parseWorkspaceConfigForEdit,
@@ -21,6 +22,10 @@ import {
 import {
   isFilesystemRoot,
   isGitHubUrl,
+  getPluginDisplayName,
+  isRemotePluginSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
   parseGitHubUrl,
   validatePluginSource,
   verifyGitHubUrlExists,
@@ -327,7 +332,17 @@ async function addValidatedPlugin(
     );
   }
 
-  if (isGitHubUrl(plugin)) {
+  const effectiveSource = getEffectivePluginSource(declaration);
+  if (isRemotePluginSource(effectiveSource) && !isGitHubUrl(plugin)) {
+    try {
+      const fetched = await fetchPlugin(effectiveSource);
+      if (!fetched.success) return { success: false, error: fetched.error || `Failed to fetch ${plugin}` };
+      const path = resolveRemotePluginPath(effectiveSource, fetched.cachePath);
+      if (!existsSync(path)) return { success: false, error: `Path not found in repository: ${path}` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  } else if (isGitHubUrl(plugin)) {
     const validation = validatePluginSource(plugin);
     if (!validation.valid) {
       return {
@@ -638,6 +653,8 @@ export function extractPluginNames(pluginSource: string): string[] {
     }
     return names;
   }
+  const remote = parseRemotePluginSource(pluginSource);
+  if (remote?.type === 'git') return [getPluginDisplayName(pluginSource)];
   // For GitHub URLs, include both repo name and {owner}-{repo} (cache directory) format
   if (isGitHubUrl(pluginSource)) {
     const parsed = parseGitHubUrl(pluginSource);
@@ -830,20 +847,30 @@ export async function upsertGitHubPluginSourceAllowlistInConfig(
   skillNames: string[],
 ): Promise<ModifyResult> {
   const normalizedSkills = uniqueSkillNames(skillNames);
-  const exactIndex = config.plugins.findIndex(
-    (entry) => getPluginSource(entry) === source,
-  );
+  const remote = parseRemotePluginSource(source);
+  const exactIndex = config.plugins.findIndex((entry) => {
+    if (remote?.type !== 'git') return getPluginSource(entry) === source;
+    if (parseRemotePluginSource(getEffectivePluginSource(entry))?.provenanceKey !== remote.provenanceKey) return false;
+    if (typeof entry !== 'string' && entry.install) return entry.install === 'file';
+    const selectedClients = getPluginClients(entry) ?? getClientTypes(config.clients);
+    return selectedClients.length > 0 && selectedClients.every((client) => {
+      const configuredClient = config.clients.find((candidate) =>
+        normalizeClientEntry(candidate).name === client,
+      );
+      return resolveInstallMode(entry, normalizeClientEntry(configuredClient ?? client)) === 'file';
+    });
+  });
 
   if (exactIndex !== -1) {
     const entry = ensureObjectPluginEntry(config, exactIndex);
-    entry.source = source;
+    if (remote?.type !== 'git') entry.source = source;
     entry.skills = normalizedSkills;
-    return { success: true, normalizedPlugin: source };
+    return { success: true, normalizedPlugin: entry.source };
   }
 
   const semanticIndex = await findPluginEntryByGitHubIdentity(config, source);
   if (semanticIndex === -1) {
-    config.plugins.push({ source, skills: normalizedSkills });
+    config.plugins.push({ source, ...(remote?.type === 'git' && { install: 'file' as const }), skills: normalizedSkills });
     return { success: true, normalizedPlugin: source };
   }
 

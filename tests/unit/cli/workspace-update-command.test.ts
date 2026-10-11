@@ -31,6 +31,7 @@ const defaultOptions: WorkspaceSyncCommandOptions = {
   verbose: false,
   noManaged: false,
   profile: [],
+  scope: undefined,
 };
 
 function successfulSyncResult(): SyncResult {
@@ -347,15 +348,129 @@ describe('workspace update command', () => {
     }
   });
 
-  test('rejects unsupported scope and client selectors during parsing', async () => {
+  test('parses each reconciliation scope', async () => {
+    for (const scope of ['project', 'user', 'all']) {
+      const result = await parse(syncCmd, ['--scope', scope]);
+      expect(result).toEqual({
+        _tag: 'ok',
+        value: { ...defaultOptions, scope },
+      });
+    }
+  });
+
+  test('rejects unsupported client selectors during parsing', async () => {
     for (const args of [
-      ['--scope', 'user'],
       ['--client', 'pi'],
-      ['--profile', 'work', '--scope', 'user'],
       ['--profile', 'work', '--client', 'pi'],
     ]) {
       const result = await parse(syncCmd, args);
       expect(result._tag).toBe('error');
+    }
+  });
+
+  test('project scope succeeds independently of unusable user and profile targets', async () => {
+    setJsonMode(true);
+    const failExcludedPass = () => {
+      throw new Error('Excluded user or profile target was accessed');
+    };
+    await executeWorkspaceSyncCommand(
+      { ...defaultOptions, scope: 'project' },
+      commandDependencies({
+        userConfigExists: failExcludedPass,
+        syncUserWorkspace: failExcludedPass,
+        updateInstalledProfiles: failExcludedPass,
+        syncWorkspace: async () => ({ ...successfulSyncResult(), totalCopied: 3 }),
+      }),
+    );
+    expect(JSON.parse(String(consoleLog.mock.calls[0]?.[0]))).toMatchObject({
+      success: true,
+      data: { copied: 3, profiles: [] },
+    });
+  });
+
+  test('user scope includes installed profiles without inspecting the project', async () => {
+    setJsonMode(true);
+    const failExcludedPass = () => {
+      throw new Error('Excluded project target was accessed');
+    };
+    await executeWorkspaceSyncCommand(
+      { ...defaultOptions, scope: 'user' },
+      commandDependencies({
+        projectConfigExists: failExcludedPass,
+        syncWorkspace: failExcludedPass,
+        syncUserWorkspace: async () => ({ ...successfulSyncResult(), totalCopied: 2 }),
+        updateInstalledProfiles: async () => [profileResult('work')],
+      }),
+    );
+    expect(JSON.parse(String(consoleLog.mock.calls[0]?.[0]))).toMatchObject({
+      success: true,
+      data: { copied: 2, profiles: [{ profile: 'work', status: 'installed' }] },
+    });
+  });
+
+  test('explicit all scope retains merged ordinary results and installed profiles', async () => {
+    setJsonMode(true);
+    await executeWorkspaceSyncCommand(
+      { ...defaultOptions, scope: 'all' },
+      commandDependencies({
+        syncUserWorkspace: async () => ({ ...successfulSyncResult(), totalCopied: 2 }),
+        syncWorkspace: async () => ({ ...successfulSyncResult(), totalCopied: 3 }),
+        updateInstalledProfiles: async () => [profileResult('work')],
+      }),
+    );
+    expect(JSON.parse(String(consoleLog.mock.calls[0]?.[0]))).toMatchObject({
+      success: true,
+      data: { copied: 5, profiles: [{ profile: 'work', status: 'installed' }] },
+    });
+  });
+
+  test('missing project config fails before creating a user workspace or resetting caches', async () => {
+    setJsonMode(true);
+    const exitCodes: number[] = [];
+    const failUnexpectedWork = () => {
+      throw new Error('Unexpected initialization or cache mutation');
+    };
+    await executeWorkspaceSyncCommand(
+      { ...defaultOptions, scope: 'project' },
+      commandDependencies({
+        projectConfigExists: () => false,
+        ensureUserWorkspace: failUnexpectedWork,
+        resetFetchCache: failUnexpectedWork,
+        exit: (code) => { exitCodes.push(code); },
+      }),
+    );
+    expect(exitCodes).toEqual([1]);
+    expect(JSON.parse(String(consoleLog.mock.calls[0]?.[0]))).toMatchObject({
+      success: false,
+      command: 'workspace update',
+      error: expect.stringContaining('No project workspace configured'),
+    });
+  });
+
+  test('rejects invalid scopes and every explicit scope/profile combination before work', async () => {
+    const failUnexpectedWork = () => { throw new Error('Unexpected work'); };
+    for (const jsonMode of [false, true]) {
+      setJsonMode(jsonMode);
+      for (const scope of ['', 'invalid', 'project', 'user', 'all']) {
+        consoleLog.mockClear();
+        consoleError.mockClear();
+        const exitCodes: number[] = [];
+        const invalidScope = scope === '' || scope === 'invalid';
+        await executeWorkspaceSyncCommand(
+          { ...defaultOptions, scope, profile: invalidScope ? [] : ['work'] },
+          commandDependencies({
+            userConfigExists: failUnexpectedWork,
+            projectConfigExists: failUnexpectedWork,
+            resetFetchCache: failUnexpectedWork,
+            exit: (code) => { exitCodes.push(code); },
+          }),
+        );
+        expect(exitCodes).toEqual([1]);
+        const error = jsonMode
+          ? JSON.parse(String(consoleLog.mock.calls[0]?.[0])).error
+          : consoleError.mock.calls.flat().join('\n');
+        expect(error).toContain(invalidScope ? 'Invalid scope' : 'cannot be combined');
+      }
     }
   });
 

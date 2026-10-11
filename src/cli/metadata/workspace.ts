@@ -87,11 +87,13 @@ export const syncMeta: AgentCommandMeta = {
     'allagents update --dry-run',
     'allagents update --offline',
     'allagents update --verbose',
+    'allagents update --scope project',
+    'allagents workspace update --scope user',
     'allagents update --profile work --profile review',
     'allagents workspace update --profile work',
   ],
   expectedOutput:
-    'Attempts user workspace, installed declared profiles, and project workspace in order without stopping later passes after a failure. With --profile, validates and updates only selected profiles that are both installed and declared. Exit 1 after all applicable passes if any pass fails.',
+    'By default attempts user workspace, installed declared profiles, and project workspace in order without stopping later passes after a failure. --scope project selects only the current project; --scope user selects user workspace and installed profiles. With --profile, validates and updates only selected profiles that are both installed and declared; cannot combine with --scope. Exit 1 after all applicable passes if any pass fails.',
   options: [
     {
       flag: '--offline',
@@ -114,6 +116,11 @@ export const syncMeta: AgentCommandMeta = {
       flag: '--profile',
       type: 'string',
       description: 'Update only this installed profile (repeatable)',
+    },
+    {
+      flag: '--scope',
+      type: 'string',
+      description: 'Reconciliation targets: project, user, or all (default); cannot combine with --profile',
     },
   ],
   outputSchema: {

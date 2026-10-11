@@ -299,6 +299,7 @@ export interface WorkspaceSyncCommandOptions {
   readonly verbose: boolean;
   readonly noManaged: boolean;
   readonly profile: readonly string[];
+  readonly scope?: string | undefined;
 }
 
 export interface WorkspaceSyncCommandDependencies {
@@ -473,18 +474,40 @@ export async function executeWorkspaceSyncCommand(
   dependencies: WorkspaceSyncCommandDependencies = workspaceSyncCommandDependencies,
 ): Promise<void> {
   try {
-    if (!isJsonMode() && options.dryRun) {
-      console.log('Dry run mode - no changes will be made\n');
+    if (
+      options.scope !== undefined &&
+      !['project', 'user', 'all'].includes(options.scope)
+    ) {
+      throw new Error(
+        `Invalid scope '${options.scope}'. Expected project, user, or all.`,
+      );
     }
 
     const requestedProfiles = [...new Set(options.profile)];
     const targetedProfileUpdate = requestedProfiles.length > 0;
+    if (targetedProfileUpdate && options.scope !== undefined) {
+      throw new Error('--scope and --profile cannot be combined.');
+    }
+
+    if (!isJsonMode() && options.dryRun) {
+      console.log('Dry run mode - no changes will be made\n');
+    }
+
     let userConfigExists = false;
     let projectConfigExists = false;
 
     if (!targetedProfileUpdate) {
-      userConfigExists = dependencies.userConfigExists();
-      projectConfigExists = dependencies.projectConfigExists(process.cwd());
+      userConfigExists =
+        options.scope !== 'project' && dependencies.userConfigExists();
+      projectConfigExists =
+        options.scope !== 'user' &&
+        dependencies.projectConfigExists(process.cwd());
+
+      if (options.scope === 'project' && !projectConfigExists) {
+        throw new Error(
+          'No project workspace configured in the current directory. Run `allagents workspace init` to create one.',
+        );
+      }
 
       // If neither config exists, auto-create user config and show guidance.
       if (!userConfigExists && !projectConfigExists) {
@@ -653,6 +676,12 @@ const syncCmd = command({
     noManaged: flag({
       long: 'no-managed',
       description: 'Skip managed repository clone/pull operations',
+    }),
+    scope: option({
+      type: optional(string),
+      long: 'scope',
+      description:
+        'Reconcile project, user (including installed profiles), or all (default); cannot combine with --profile',
     }),
     profile: multioption({
       type: array(string),

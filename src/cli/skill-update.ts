@@ -63,6 +63,7 @@ import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.j
 import {
   formatPluginSource,
   getPluginCachePath,
+  getPluginDisplayName,
   isRemotePluginSource,
   parseRemotePluginSource,
   resolveRemotePluginPath,
@@ -403,7 +404,7 @@ async function inventoryDirect(
     );
   }
   const discovered = await discoverSkillEntriesFromPluginRoot(root);
-  const pluginName = parsed.type === 'git' ? (parsed.subpath ? basename(parsed.subpath) : parsed.repo) : getPluginName(root);
+  const pluginName = parsed.type === 'git' ? getPluginDisplayName(effectiveSource) : getPluginName(root);
   const skills = enabledSkills(
     discovered,
     pluginName,
@@ -601,8 +602,8 @@ export async function buildSkillUpdateInventory(
       }
       let installation: SkillUpdateInstallation | null | 'local';
       try {
-        // Inline Git refs also use `@` (owner/repo@ref). Direct GitHub
-        // recognition must therefore take precedence over marketplace syntax.
+        // Recognize direct remotes before marketplace syntax because SSH usernames
+        // and inline Git refs can contain `@`.
         if (isRemotePluginSource(effectiveSource)) {
           installation = await inventoryDirect(
             scope,

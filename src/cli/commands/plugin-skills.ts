@@ -2526,8 +2526,6 @@ const addCmd = command({
           process.exit(1);
         }
         if (ref && fromArg) {
-          // Splice the ref into the source string so downstream parseGitHubUrl
-          // picks it up as the branch/tag.
           fromArg = withPluginSourceRef(fromArg, ref);
           requestedRef = ref;
         } else if (inlineRef) {

@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { copyFile, rm, rmdir, unlink } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import JSON5 from 'json5';
 import {
   AGENT_FILES,
@@ -49,6 +49,7 @@ import {
 } from '../models/workspace-config.js';
 import { getEmbeddedMarketplaceFileArtifacts } from '../utils/marketplace-manifest-parser.js';
 import {
+  getPluginDisplayName,
   isRemotePluginSource,
   parseRemotePluginSource,
   resolveRemotePluginPath,
@@ -1570,7 +1571,6 @@ async function validatePlugin(
         ...(fetchResult.error && { error: fetchResult.error }),
       };
     }
-    // Handle subpath in GitHub URL (e.g., /tree/main/plugins/name)
     let resolvedPath: string;
     try {
       resolvedPath = resolveRemotePluginPath(pluginSource, fetchResult.cachePath);
@@ -1585,7 +1585,7 @@ async function validatePlugin(
     return {
       plugin: pluginSource,
       resolved: resolvedPath,
-      ...(parsed?.type === 'git' && { pluginName: parsed.subpath ? basename(parsed.subpath) : parsed.repo }),
+      ...(parsed?.type === 'git' && { pluginName: getPluginDisplayName(pluginSource) }),
       success: true,
       clients: [],
       nativeClients: [],

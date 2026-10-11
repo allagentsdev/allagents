@@ -155,8 +155,8 @@ describe('file-mode Git remotes through the built CLI', () => {
   }, 30_000);
 
   test('refreshes a direct GitHub HTTPS declaration with an object ref', () => {
-    const source = 'https://github.com/fixture/skills.git';
-    writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = ${source}\n`);
+    const source = 'https://github.com/fixture/skills';
+    writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = ${source}.git\n`);
     writeFileSync(join(project, '.allagents', 'workspace.yaml'), `version: 2\nrepositories: []\nclients: [codex]\nplugins:\n  - source: '${source}'\n    ref: main\n    install: file\n    skills: [fixture]\n`);
     const synced = run(['workspace', 'sync']);
     expect(synced.exit, synced.stdout + synced.stderr).toBe(0);

@@ -94,6 +94,7 @@ import { join } from 'node:path';
 import {
   formatPluginSource,
   getPluginDisplayName,
+  isGitHubUrl,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1839,9 +1840,6 @@ const pluginUpdateCmd = command({
             success: true,
             action: 'skipped',
           };
-          // A current checkout still re-materializes client artifacts and
-          // retries an earlier sync failure, matching the pre-check contract.
-          syncedScopes.add(pluginScope);
           if (progressiveOutput) renderUpdateResult(result);
         } else if (nativeOnly.has(key)) {
           announceDeclaration(entry);
@@ -1859,7 +1857,18 @@ const pluginUpdateCmd = command({
           );
           if (progressiveOutput) renderUpdateResult(result);
         }
-        if (result.action === 'updated') syncedScopes.add(pluginScope);
+        if (
+          result.success &&
+          !nativeOnly.has(key) &&
+          (result.action === 'updated' ||
+            check?.status === 'available' ||
+            check?.status === 'up-to-date' ||
+            (check?.status === 'not-remote' && !isGitHubUrl(pluginSpec)))
+        ) {
+          // A successful source check or fetch does not guarantee that client
+          // artifacts are materialized; retry reconciliation for skipped work too.
+          syncedScopes.add(pluginScope);
+        }
         results.push(result);
       }
 

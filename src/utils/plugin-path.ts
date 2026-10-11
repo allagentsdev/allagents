@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { basename, isAbsolute, join, parse, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { getHomeDir } from '../constants.js';
 import {
   GitCloneError,
@@ -8,12 +9,12 @@ import {
   gitHubUrl,
   repoExists,
 } from '../core/git.js';
-import { parseGitHubSource } from './git-source.js';
+import { gitSourceKey, parseGitHubSource } from './git-source.js';
 
 /**
  * Plugin source types
  */
-export type PluginSourceType = 'github' | 'local';
+export type PluginSourceType = 'github' | 'git' | 'local';
 
 /**
  * Strip an inline `@<ref>` suffix from a plugin spec.
@@ -247,6 +248,152 @@ export function parseGitHubUrl(
   return null;
 }
 
+/** Ordinary file-mode remote, with one physical clone per remote and ref. */
+export interface RemotePluginSource {
+  type: 'github' | 'git';
+  url: string;
+  repo: string;
+  owner?: string;
+  branch?: string;
+  subpath?: string;
+  cachePath: string;
+  provenanceKey: string;
+}
+
+function isGenericGitRemote(source: string): boolean {
+  if (/^(?:ssh|https?):\/\//i.test(source)) return true;
+  if (/^(?:gh|npm|git):/.test(source) || /^[a-zA-Z]:/.test(source)) return false;
+  return /^(?:[^/@:\s]+@)?[^/:\\\s]+:[^\s]+$/.test(source);
+}
+
+/** Detect remote syntax independently of metadata validation. */
+export function isRemotePluginSource(source: string): boolean {
+  const base = source.split('#')[0] ?? source;
+  return isGitHubUrl(base) || isGenericGitRemote(base);
+}
+
+function validateRemoteSubpath(subpath: string): void {
+  if (
+    !subpath || isAbsolute(subpath) || /^[a-zA-Z]:/.test(subpath) ||
+    subpath.includes('\\') || subpath.split('/').includes('..') ||
+    /[\x00-\x1f\x7f]/.test(subpath)
+  ) {
+    throw new Error('Plugin source subdir must stay inside the repository');
+  }
+}
+
+function remoteMetadata(source: string): { base: string; ref?: string; subdir?: string } {
+  const hash = source.indexOf('#');
+  if (hash < 0) return { base: source };
+  const result: { base: string; ref?: string; subdir?: string } = { base: source.slice(0, hash) };
+  const metadata = source.slice(hash + 1);
+  if (!metadata) throw new Error('Plugin source metadata cannot be empty');
+  const seen = new Set<string>();
+  for (const part of metadata.split('&')) {
+    const equal = part.indexOf('=');
+    if (equal < 0) throw new Error('Expected plugin source metadata ref= or subdir=');
+    let key: string;
+    let value: string;
+    try {
+      key = decodeURIComponent(part.slice(0, equal).replace(/\+/g, ' '));
+      value = decodeURIComponent(part.slice(equal + 1).replace(/\+/g, ' '));
+    } catch {
+      throw new Error('Malformed encoding in plugin source metadata');
+    }
+    if ((key !== 'ref' && key !== 'subdir') || seen.has(key)) {
+      throw new Error(`Unknown or duplicate plugin source metadata: ${key}`);
+    }
+    if (!value.trim() || /[\x00-\x1f\x7f]/.test(value)) {
+      throw new Error(`Plugin source ${key} cannot be empty or contain control characters`);
+    }
+    seen.add(key);
+    if (key === 'ref') result.ref = value;
+    else {
+      validateRemoteSubpath(value);
+      result.subdir = value;
+    }
+  }
+  return result;
+}
+
+/** Parse ordinary remote sources. Invalid remote metadata throws; local sources return null. */
+export function parseRemotePluginSource(source: string): RemotePluginSource | null {
+  if (!isRemotePluginSource(source)) return null;
+  const { base, ref, subdir } = remoteMetadata(source);
+  const github = isGitHubUrl(base) || parseGitHubSource(base) ? parseGitHubUrl(base) : null;
+  if (github) {
+    const branch = github.branch ?? ref;
+    const subpath = subdir ?? github.subpath;
+    if (subpath) validateRemoteSubpath(subpath);
+    return {
+      type: 'github', url: gitHubUrl(github.owner, github.repo),
+      owner: github.owner, repo: github.repo,
+      ...(branch && { branch }), ...(subpath && { subpath }),
+      cachePath: getPluginCachePath(github.owner, github.repo, branch),
+      provenanceKey: source.includes('#') ? stripGitRef(base) + (subdir ? `#subdir=${encodeURIComponent(subdir)}` : '') : stripGitRef(source),
+    };
+  }
+  if (isGitHubUrl(base)) throw new Error('Invalid GitHub URL format. Expected: https://github.com/owner/repo');
+  let repositoryPath: string;
+  if (base.includes('://')) {
+    let url: URL;
+    try { url = new URL(base); } catch { throw new Error('Invalid Git remote URL'); }
+    if (!url.hostname || !url.pathname || url.pathname === '/') throw new Error('Git remote requires a repository path');
+    repositoryPath = url.pathname;
+  } else {
+    repositoryPath = base.slice(base.indexOf(':') + 1);
+  }
+  const repo = basename(repositoryPath.replace(/\/$/, '')).replace(/\.git$/i, '');
+  if (!repo || repo === '.' || repo === '..') throw new Error('Git remote requires a repository name');
+  const digest = createHash('sha256').update(gitSourceKey(base, ref)).digest('hex');
+  const label = repo.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  const parameters = new URLSearchParams();
+  if (ref) parameters.set('ref', ref);
+  if (subdir) parameters.set('subdir', subdir);
+  return {
+    type: 'git', url: base, repo, ...(ref && { branch: ref }), ...(subdir && { subpath: subdir }),
+    cachePath: resolve(getHomeDir(), '.allagents', 'plugins', 'marketplaces', `git-${label}-${digest}`),
+    provenanceKey: parameters.size ? `${base}#${parameters}` : base,
+  };
+}
+
+/** Apply object-form refs without replacing an authoritative inline ref. */
+export function withPluginSourceRef(source: string, ref?: string): string {
+  if (!ref) return source;
+  const remote = parseRemotePluginSource(source);
+  if (!remote || remote.branch) return source;
+  if (remote.type === 'github' && !source.includes('#') && !ref.includes('/')) {
+    const shorthand = source.replace(/^https?:\/\/(?:www\.)?github\.com\//, '').replace(/^github\.com\//, '').replace(/^gh:/, '');
+    if (!shorthand.includes(':')) {
+      const parts = shorthand.split('/');
+      parts[1] = `${parts[1]}@${ref}`;
+      return parts.join('/');
+    }
+  }
+  return `${source}${source.includes('#') ? '&' : '#'}ref=${encodeURIComponent(ref)}`;
+}
+
+/** Resolve the selected checkout root, including symlink containment. */
+export function resolveRemotePluginPath(source: string | RemotePluginSource, cachePath?: string): string {
+  const remote = typeof source === 'string' ? parseRemotePluginSource(source) : source;
+  if (!remote) throw new Error('Expected a remote plugin source');
+  const root = resolve(cachePath ?? remote.cachePath);
+  if (!remote.subpath) return root;
+  validateRemoteSubpath(remote.subpath);
+  const selected = resolve(root, remote.subpath);
+  // Inspect the closest existing ancestor too: a missing child below an
+  // escaping symlink is still outside the checkout.
+  let ancestor = selected;
+  while (!existsSync(ancestor) && ancestor !== root) ancestor = dirname(ancestor);
+  if (existsSync(root) && existsSync(ancestor)) {
+    const offset = relative(realpathSync(root), realpathSync(ancestor));
+    if (offset === '..' || offset.startsWith(`..${sep}`) || isAbsolute(offset)) {
+      throw new Error('Plugin source subdir resolves outside the repository');
+    }
+  }
+  return selected;
+}
+
 /**
  * Parse a marketplace location string into owner, repo, and optional branch.
  * Location format: "owner/repo" or "owner/repo/branch" (branch can contain slashes).
@@ -282,7 +429,7 @@ export function normalizePluginPath(
   baseDir: string = process.cwd(),
 ): string {
   // GitHub URLs remain unchanged
-  if (isGitHubUrl(source)) {
+  if (isRemotePluginSource(source)) {
     return source;
   }
 
@@ -305,15 +452,12 @@ export function parsePluginSource(
   source: string,
   baseDir: string = process.cwd(),
 ): ParsedPluginSource {
-  if (isGitHubUrl(source)) {
-    const parsed = parseGitHubUrl(source);
+  const parsed = parseRemotePluginSource(source);
+  if (parsed) {
     return {
-      type: 'github',
-      original: source,
-      normalized: source,
-      ...(parsed?.owner && { owner: parsed.owner }),
-      ...(parsed?.repo && { repo: parsed.repo }),
-      ...(parsed?.branch && { branch: parsed.branch }),
+      type: parsed.type, original: source, normalized: source,
+      ...(parsed.owner && { owner: parsed.owner }), repo: parsed.repo,
+      ...(parsed.branch && { branch: parsed.branch }),
     };
   }
 
@@ -372,6 +516,8 @@ export function getPluginDisplayName(source: string): string {
     const versionSeparator = spec.lastIndexOf('@');
     return versionSeparator > 0 ? spec.slice(0, versionSeparator) : spec;
   }
+  const remote = parseRemotePluginSource(trimmed);
+  if (remote) return remote.subpath ? basename(remote.subpath) : remote.repo;
   if (isNativePackageSource(trimmed)) return trimmed;
   const atIndex = trimmed.lastIndexOf('@');
   if (atIndex > 0 && !trimmed.slice(0, atIndex).includes('/')) return trimmed;
@@ -439,16 +585,10 @@ export function validatePluginSource(source: string): {
     return { valid: false, error: 'Plugin source cannot be empty' };
   }
 
-  // If it's a GitHub URL, validate the format
-  if (isGitHubUrl(source)) {
-    const parsed = parseGitHubUrl(source);
-    if (!parsed) {
-      return {
-        valid: false,
-        error:
-          'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
-      };
-    }
+  try {
+    parseRemotePluginSource(source);
+  } catch (error) {
+    return { valid: false, error: error instanceof Error ? error.message : String(error) };
   }
 
   return { valid: true };

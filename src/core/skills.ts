@@ -6,9 +6,10 @@ import {
   type PluginSkillsConfig,
   type WorkspaceConfig,
   getPluginSource,
+  getEffectivePluginSource,
   pluginUsesNativeInstall,
 } from '../models/workspace-config.js';
-import { isGitHubUrl, parseGitHubUrl } from '../utils/plugin-path.js';
+import { isRemotePluginSource, parseRemotePluginSource, resolveRemotePluginPath } from '../utils/plugin-path.js';
 import { parseUserWorkspaceConfig, parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { loadYaml } from '../utils/yaml.js';
 import { parseSkillMetadata } from '../validators/skill.js';
@@ -83,17 +84,15 @@ async function resolvePluginPath(
     };
   }
 
-  if (isGitHubUrl(pluginSource)) {
-    const parsed = parseGitHubUrl(pluginSource);
+  if (isRemotePluginSource(pluginSource)) {
+    const parsed = parseRemotePluginSource(pluginSource);
     const result = await fetchPlugin(pluginSource, {
       offline: true,
       ...(parsed?.branch && { branch: parsed.branch }),
     });
     if (!result.success) return null;
-    const path = parsed?.subpath
-      ? join(result.cachePath, parsed.subpath)
-      : result.cachePath;
-    return existsSync(path) ? { path } : null;
+    const path = resolveRemotePluginPath(pluginSource, result.cachePath);
+    return existsSync(path) ? { path, ...(parsed?.type === 'git' && { pluginName: parsed.subpath ? basename(parsed.subpath) : parsed.repo }) } : null;
   }
 
   // Local path
@@ -224,7 +223,7 @@ export async function getAllSkillsFromPlugins(
   // defaults it to [], but this reader consumes the raw YAML.
   for (const pluginEntry of config.plugins ?? []) {
     const pluginSource = getPluginSource(pluginEntry);
-    const resolved = await resolvePluginPath(pluginSource, workspacePath);
+    const resolved = await resolvePluginPath(getEffectivePluginSource(pluginEntry), workspacePath);
     if (!resolved) continue;
 
     const pluginPath = resolved.path;

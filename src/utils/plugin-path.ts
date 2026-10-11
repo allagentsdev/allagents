@@ -276,10 +276,17 @@ function validateRemoteSubpath(subpath: string): void {
   if (
     !subpath || isAbsolute(subpath) || /^[a-zA-Z]:/.test(subpath) ||
     subpath.includes('\\') || subpath.split('/').includes('..') ||
-    /[\x00-\x1f\x7f]/.test(subpath)
+    containsControlCharacter(subpath)
   ) {
     throw new Error('Plugin source subdir must stay inside the repository');
   }
+}
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
 }
 
 function remoteMetadata(source: string): { base: string; ref?: string; subdir?: string } {
@@ -303,7 +310,7 @@ function remoteMetadata(source: string): { base: string; ref?: string; subdir?: 
     if ((key !== 'ref' && key !== 'subdir') || seen.has(key)) {
       throw new Error(`Unknown or duplicate plugin source metadata: ${key}`);
     }
-    if (!value.trim() || /[\x00-\x1f\x7f]/.test(value)) {
+    if (!value.trim() || containsControlCharacter(value)) {
       throw new Error(`Plugin source ${key} cannot be empty or contain control characters`);
     }
     seen.add(key);

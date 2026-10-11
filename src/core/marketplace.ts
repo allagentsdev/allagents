@@ -28,6 +28,7 @@ import {
   parseGitHubUrl,
   parseMarketplaceLocation,
   isNativePackageSource,
+  isRemotePluginSource,
 } from '../utils/plugin-path.js';
 import {
   checkRepositoryHealth,
@@ -2474,6 +2475,8 @@ async function autoRegisterMarketplace(
  */
 export function isPluginSpec(spec: string): boolean {
   if (isNativePackageSource(spec)) return false;
+  // A marketplace URL following a bare plugin name is not an SCP transport.
+  if (isRemotePluginSource(spec) && !/^[^/:\s]+@(?:https?:\/\/|gh:)/.test(spec)) return false;
   const atIndex = spec.lastIndexOf('@');
   if (atIndex === -1 || atIndex === 0 || atIndex === spec.length - 1) {
     return false;

@@ -36,7 +36,7 @@ import {
   type SkillUpdateUnitInput,
   type UnitInspection,
   buildSkillUpdatePreflight,
-  createGitHubSkillUpdateInstallation,
+  createRemoteSkillUpdateInstallation,
   executeSkillUpdatePlan,
   matchesSkillUpdateFilter,
   resolveCheckoutSubpath,
@@ -46,7 +46,7 @@ import {
   type DiscoveredSkillEntry,
   discoverSkillEntriesFromPluginRoot,
 } from '../core/skills.js';
-import { syncUserWorkspace, syncWorkspace } from '../core/sync.js';
+import { buildPluginSyncPlans, syncUserWorkspace, syncWorkspace } from '../core/sync.js';
 import { getUserWorkspaceConfigPath } from '../core/user-workspace.js';
 import type {
   PluginEntry,
@@ -63,7 +63,9 @@ import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.j
 import {
   formatPluginSource,
   getPluginCachePath,
-  isGitHubUrl,
+  isRemotePluginSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
   parseGitHubUrl,
 } from '../utils/plugin-path.js';
 import {
@@ -391,21 +393,17 @@ async function inventoryDirect(
   config: SkillUpdateWorkspaceConfig,
 ): Promise<SkillUpdateInstallation | null> {
   const effectiveSource = getEffectivePluginSource(plugin);
-  const parsed = parseGitHubUrl(effectiveSource);
+  const parsed = parseRemotePluginSource(effectiveSource);
   if (!parsed) return null;
-  const cachePath = getPluginCachePath(
-    parsed.owner,
-    parsed.repo,
-    parsed.branch,
-  );
-  const root = resolveCheckoutSubpath(cachePath, parsed.subpath ?? '');
+  const cachePath = parsed.cachePath;
+  const root = resolveRemotePluginPath(parsed);
   if (!existsSync(root)) {
     throw new Error(
       `Cached plugin root not found for ${effectiveSource}: ${root}`,
     );
   }
   const discovered = await discoverSkillEntriesFromPluginRoot(root);
-  const pluginName = getPluginName(root);
+  const pluginName = parsed.type === 'git' ? (parsed.subpath ? basename(parsed.subpath) : parsed.repo) : getPluginName(root);
   const skills = enabledSkills(
     discovered,
     pluginName,
@@ -413,7 +411,7 @@ async function inventoryDirect(
     pluginSkillsConfig(plugin),
   );
   if (!skills.some((skill) => skill.enabled)) return null;
-  return createGitHubSkillUpdateInstallation({
+  return createRemoteSkillUpdateInstallation({
     scope,
     configIndex,
     plugin,
@@ -550,9 +548,9 @@ export async function buildSkillUpdateInventory(
     plugin: PluginEntry,
     scope: SkillUpdateScope,
   ): Promise<string[]> => {
-    const direct = parseGitHubUrl(getEffectivePluginSource(plugin));
+    const direct = parseRemotePluginSource(getEffectivePluginSource(plugin));
     if (direct) {
-      return [getPluginCachePath(direct.owner, direct.repo, direct.branch)];
+      return [direct.cachePath];
     }
     const spec = parsePluginSpec(source);
     if (!spec) return [];
@@ -588,23 +586,24 @@ export async function buildSkillUpdateInventory(
     }
     if (!config) continue;
     for (const [configIndex, plugin] of config.plugins.entries()) {
+      if (buildPluginSyncPlans([plugin], config.clients, scope).plans[0]?.clients.length === 0) continue;
       const rawSource = getPluginSource(plugin);
       const effectiveSource = getEffectivePluginSource(plugin);
-      const direct = isGitHubUrl(effectiveSource)
-        ? parseGitHubUrl(effectiveSource)
+      const direct = isRemotePluginSource(effectiveSource)
+        ? parseRemotePluginSource(effectiveSource)
         : null;
       if (direct) {
         directRemoteConsumers.push({
           scope,
           source: rawSource,
-          nodeId: getPluginCachePath(direct.owner, direct.repo, direct.branch),
+          nodeId: direct.cachePath,
         });
       }
       let installation: SkillUpdateInstallation | null | 'local';
       try {
         // Inline Git refs also use `@` (owner/repo@ref). Direct GitHub
         // recognition must therefore take precedence over marketplace syntax.
-        if (isGitHubUrl(effectiveSource)) {
+        if (isRemotePluginSource(effectiveSource)) {
           installation = await inventoryDirect(
             scope,
             configIndex,

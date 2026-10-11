@@ -34,6 +34,19 @@ describe('canonicalizeGitHubPluginSource', () => {
 });
 
 describe('upsertGitHubPluginSourceAllowlist', () => {
+  it('updates the exact generic object-ref declaration while preserving its source and another ref', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'allagents-generic-allowlist-'));
+    const source = 'ssh://alice@forgejo.example:2222/team/skills.git#subdir=selected';
+    try {
+      await mkdir(join(tmpDir, '.allagents'), { recursive: true });
+      await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({ version: 2, repositories: [], clients: ['codex'], plugins: [{ source, ref: 'feature/demo', install: 'file', skills: ['keep'] }, { source, ref: 'other', install: 'file', skills: ['unrelated'] }] }));
+      const result = await upsertGitHubPluginSourceAllowlist(`${source}&ref=feature%2Fdemo`, ['keep', 'new'], tmpDir);
+      expect(result.success).toBe(true);
+      const updated = load(await readFile(join(tmpDir, '.allagents/workspace.yaml'), 'utf-8')) as WorkspaceConfig;
+      expect(updated.plugins).toEqual([{ source, ref: 'feature/demo', install: 'file', skills: ['keep', 'new'] }, { source, ref: 'other', install: 'file', skills: ['unrelated'] }]);
+    } finally { await rm(tmpDir, { recursive: true, force: true }); }
+  });
+
   it('rewrites the stored source instead of creating a duplicate entry', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'allagents-skill-source-'));
 

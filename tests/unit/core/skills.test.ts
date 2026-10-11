@@ -10,7 +10,7 @@ import {
   type SkillInfo,
 } from '../../../src/core/skills.js';
 import { resetFetchCache } from '../../../src/core/plugin.js';
-import { getPluginCachePath } from '../../../src/utils/plugin-path.js';
+import { getPluginCachePath, parseRemotePluginSource } from '../../../src/utils/plugin-path.js';
 
 describe('getAllSkillsFromPlugins', () => {
   let tmpDir: string;
@@ -60,6 +60,25 @@ describe('getAllSkillsFromPlugins', () => {
     );
 
     expect(await getAllSkillsFromPlugins(tmpDir)).toEqual([]);
+  });
+
+  it('discovers the object-ref generic cache with logical names and skill selection', async () => {
+    const restoreHome = stubHomeDir(tmpDir);
+    resetFetchCache();
+    try {
+      const source = 'ssh://alice@git.example:2222/team/collection.git#subdir=selected';
+      const cache = parseRemotePluginSource(`${source}&ref=feature%2Fdemo`)!.cachePath;
+      await mkdir(join(cache, 'selected', 'skills', 'keep'), { recursive: true });
+      await mkdir(join(cache, 'selected', 'skills', 'exclude'), { recursive: true });
+      await writeFile(join(cache, 'selected', 'skills', 'keep', 'SKILL.md'), '# Keep');
+      await writeFile(join(cache, 'selected', 'skills', 'exclude', 'SKILL.md'), '# Exclude');
+      await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({ version: 2, repositories: [], clients: ['codex'], plugins: [{ source, ref: 'feature/demo', install: 'file', skills: ['keep'] }] }));
+      const skills = await getAllSkillsFromPlugins(tmpDir);
+      expect(skills.map(({ name, pluginName, disabled }) => ({ name, pluginName, disabled })).sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+        { name: 'exclude', pluginName: 'selected', disabled: true },
+        { name: 'keep', pluginName: 'selected', disabled: false },
+      ]);
+    } finally { restoreHome(); resetFetchCache(); }
   });
 
   it('marks disabled skills correctly', async () => {

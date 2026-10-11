@@ -86,7 +86,9 @@ import {
 } from '../format-sync.js';
 import {
   getPluginSource,
+  getEffectivePluginSource,
   type WorkspaceConfig,
+  type PluginEntry,
 } from '../../models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, getHomeDir } from '../../constants.js';
 import { existsSync } from 'node:fs';
@@ -94,7 +96,7 @@ import { join } from 'node:path';
 import {
   formatPluginSource,
   getPluginDisplayName,
-  isGitHubUrl,
+  isRemotePluginSource,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1574,7 +1576,7 @@ const pluginUninstallCmd = command({
 // plugin update
 // =============================================================================
 
-type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'scope'>;
+type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'effectiveSpec' | 'scope'> & { configIndex: number };
 
 const pluginUpdateCmd = command({
   name: 'update',
@@ -1605,27 +1607,18 @@ const pluginUpdateCmd = command({
 
       // Collect installed plugins based on scope
       const pluginsToUpdate: PluginUpdateEntry[] = [];
-      const addPluginToUpdate = (spec: string, pluginScope: 'project' | 'user') => {
-        if (!pluginsToUpdate.some((entry) =>
-          entry.spec === spec && entry.scope === pluginScope
-        )) {
-          pluginsToUpdate.push({ spec, scope: pluginScope });
-        }
+      const addPluginToUpdate = (
+        declaration: PluginEntry,
+        pluginScope: 'project' | 'user',
+        configIndex: number,
+      ) => {
+        pluginsToUpdate.push({
+          spec: getPluginSource(declaration),
+          effectiveSpec: getEffectivePluginSource(declaration),
+          scope: pluginScope,
+          configIndex,
+        });
       };
-
-      if (updateProject && !isUserConfigPath(process.cwd())) {
-        const projectPlugins = await getInstalledProjectPlugins(process.cwd());
-        for (const p of projectPlugins) {
-          addPluginToUpdate(p.spec, 'project');
-        }
-      }
-
-      if (updateUser) {
-        const userPlugins = await getInstalledUserPlugins();
-        for (const p of userPlugins) {
-          addPluginToUpdate(p.spec, 'user');
-        }
-      }
 
       const configs: Partial<
         Record<'project' | 'user', WorkspaceConfig>
@@ -1642,8 +1635,8 @@ const pluginUpdateCmd = command({
         if (existsSync(configPath)) {
           const config = await parseWorkspaceConfig(configPath);
           configs.project = config;
-          for (const entry of config.plugins) {
-            addPluginToUpdate(getPluginSource(entry), 'project');
+          for (const [configIndex, entry] of config.plugins.entries()) {
+            addPluginToUpdate(entry, 'project', configIndex);
           }
         }
       }
@@ -1652,16 +1645,16 @@ const pluginUpdateCmd = command({
         const userConfig = await getUserWorkspaceConfig();
         if (userConfig) {
           configs.user = userConfig;
-          for (const entry of userConfig.plugins) {
-            addPluginToUpdate(getPluginSource(entry), 'user');
+          for (const [configIndex, entry] of userConfig.plugins.entries()) {
+            addPluginToUpdate(entry, 'user', configIndex);
           }
         }
       }
 
       // Filter to specific plugin if provided
       const toUpdate = plugin
-        ? pluginsToUpdate.filter(({ spec }) =>
-            nativeIdentityMatches(plugin, spec, spec))
+        ? pluginsToUpdate.filter(({ spec, effectiveSpec }) =>
+            nativeIdentityMatches(plugin, spec, effectiveSpec))
         : pluginsToUpdate;
 
       if (plugin && toUpdate.length === 0) {
@@ -1703,7 +1696,7 @@ const pluginUpdateCmd = command({
         }
       }
       const declarationKey = (entry: PluginUpdateEntry) =>
-        `${entry.scope}:${entry.spec}`;
+        `${entry.scope}:${entry.configIndex}`;
       const declarationLabel = (entry: PluginUpdateEntry) => {
         const label = terminalSafe(formatPluginSource(entry.spec));
         return duplicateCrossScopeLabels.has(label)
@@ -1757,10 +1750,7 @@ const pluginUpdateCmd = command({
         }
         const config = configs[entry.scope];
         if (config) {
-          const declaration =
-            config.plugins.find(
-              (candidate) => getPluginSource(candidate) === entry.spec,
-            ) ?? entry.spec;
+          const declaration = config.plugins[entry.configIndex] ?? entry.spec;
           const plan = buildPluginSyncPlans(
             [declaration],
             config.clients,
@@ -1791,7 +1781,7 @@ const pluginUpdateCmd = command({
         checks.set(
           key,
           await checkPluginUpdate(
-            entry.spec,
+            entry.effectiveSpec,
             depsByScope[entry.scope],
             updateContext,
           ),
@@ -1851,10 +1841,11 @@ const pluginUpdateCmd = command({
         } else {
           announceDeclaration(entry);
           result = await applyPluginUpdate(
-            pluginSpec,
+            entry.effectiveSpec,
             depsByScope[pluginScope],
             updateContext,
           );
+          result = { ...result, plugin: pluginSpec };
           if (progressiveOutput) renderUpdateResult(result);
         }
         if (
@@ -1863,7 +1854,7 @@ const pluginUpdateCmd = command({
           (result.action === 'updated' ||
             check?.status === 'available' ||
             check?.status === 'up-to-date' ||
-            (check?.status === 'not-remote' && !isGitHubUrl(pluginSpec)))
+            (check?.status === 'not-remote' && !isRemotePluginSource(entry.effectiveSpec)))
         ) {
           // A successful source check or fetch does not guarantee that client
           // artifacts are materialized; retry reconciliation for skipped work too.

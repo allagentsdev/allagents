@@ -46,6 +46,7 @@ Read every guide whose trigger matches the task before implementation.
 | changes runtime behavior, tests, CLI output, filesystem effects, or requires build/E2E evidence | [`.agents/verification.md`](.agents/verification.md) |
 | changes TUI navigation, prompts, labels, progress, recovery, or needs screenshot/video evidence | [`.agents/tui-dogfooding.md`](.agents/tui-dogfooding.md) |
 | changes MCP ownership, synchronization output, client aliases, or related architecture boundaries | [`.agents/architecture.md`](.agents/architecture.md) |
+| changes update reconciliation scope or profile selection | [Reconciliation scope](docs/src/content/docs/docs/guides/workspaces.mdx#reconciliation-scope) and the [update CLI contract](docs/src/content/docs/docs/reference/cli.mdx#update) |
 | changes package versions, release tags, npm publication, or publish recovery | [`.agents/publishing.md`](.agents/publishing.md) |
 
 Before marking a branch ready, complete the checklist in [`.agents/verification.md`](.agents/verification.md). TUI changes additionally require the acceptance and evidence gates in [`.agents/tui-dogfooding.md`](.agents/tui-dogfooding.md).

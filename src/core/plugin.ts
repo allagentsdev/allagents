@@ -442,9 +442,10 @@ export interface PluginUpdateCheckDeps extends PluginUpdateFetchDeps {
   parsePluginSpec: (spec: string) => { plugin: string; marketplaceName: string; owner?: string; repo?: string } | null;
   getMarketplaceRegistration: (name: string, sourceLocation?: string) => Promise<{
     key: string;
+    registryPath: string;
     entry: { name: string; path: string; source: { type: 'github' | 'git' | 'local'; location: string } };
   } | null>;
-  validateMarketplaceAccess: (marketplace: { name: string; path: string; source: { type: 'github' | 'git' | 'local'; location: string } }) => string | undefined;
+  validateMarketplaceAccess: (marketplace: { name: string; path: string; source: { type: 'github' | 'git' | 'local'; location: string } }, registryPath: string, registryKey: string) => string | undefined;
   parseMarketplaceManifest: (path: string) => Promise<{ success: boolean; data?: { plugins: Array<{ name: string; source: string | { url: string } }> } }>;
 }
 
@@ -617,7 +618,11 @@ export async function checkPluginUpdate(
     };
   }
   const marketplace = registration.entry;
-  const accessError = deps.validateMarketplaceAccess(marketplace);
+  const accessError = deps.validateMarketplaceAccess(
+    marketplace,
+    registration.registryPath,
+    registration.key,
+  );
   if (accessError) {
     return { plugin: pluginSpec, status: 'failed', error: accessError };
   }
@@ -958,7 +963,11 @@ export async function applyPluginUpdate(
   }
   const marketplace = registration.entry;
 
-  const accessError = deps.validateMarketplaceAccess(marketplace);
+  const accessError = deps.validateMarketplaceAccess(
+    marketplace,
+    registration.registryPath,
+    registration.key,
+  );
   if (accessError) {
     return {
       plugin: pluginSpec,

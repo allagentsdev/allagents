@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import {
   checkPluginUpdate,
   fetchPlugin,
@@ -11,6 +11,12 @@ import {
 } from '../../../src/core/plugin.js';
 import { GitCloneError } from '../../../src/core/git.js';
 import { UpdateContext } from '../../../src/core/update-context.js';
+
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getMarketplaceAccessError } from '../../../src/core/marketplace.js';
 
 // Create mock functions for dependency injection
 const existsSyncMock = mock(() => false);
@@ -183,6 +189,7 @@ describe('updatePlugin', () => {
     if (name === 'test-marketplace') {
       return {
         key: 'test-marketplace',
+        registryPath: '/mock/.allagents/marketplaces.json',
         entry: { name: 'test-marketplace', path: '/mock/marketplace/path', source: { type: 'github' as const, location: 'owner/test-marketplace' } },
       };
     }
@@ -560,6 +567,7 @@ describe('updatePlugin', () => {
       ...updateDeps,
       getMarketplaceRegistration: mock(async () => ({
         key: 'legacy-alias',
+        registryPath: '/mock/.allagents/marketplaces.json',
         entry: {
           name: 'canonical-name',
           path: '/mock/marketplace/path',
@@ -664,6 +672,7 @@ describe('checkPluginUpdate', () => {
       checkDeps({
         getMarketplaceRegistration: async () => ({
           key: 'local-marketplace',
+          registryPath: '/mock/.allagents/marketplaces.json',
           entry: {
             name: 'local-marketplace',
             path: '/mock/local',
@@ -685,6 +694,7 @@ describe('checkPluginUpdate', () => {
     const deps = checkDeps({
       getMarketplaceRegistration: async () => ({
         key: 'test-marketplace',
+        registryPath: '/mock/.allagents/marketplaces.json',
         entry: {
           name: 'test-marketplace',
           path: '/mock/marketplace',
@@ -749,4 +759,68 @@ describe('checkPluginUpdate', () => {
       error: 'Marketplace not found: unknown-marketplace',
     });
   });
+});
+
+describe('marketplace ownership during plugin updates', () => {
+  let root: string;
+  let previousHome: string | undefined;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'plugin-update-ownership-'));
+    previousHome = process.env.ALLAGENTS_TEST_HOME;
+    process.env.ALLAGENTS_TEST_HOME = join(root, 'home');
+  });
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.ALLAGENTS_TEST_HOME;
+    else process.env.ALLAGENTS_TEST_HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  for (const phase of ['precheck', 'apply'] as const) {
+    for (const pathKind of ['owned', 'other-project', 'unmanaged', 'symlink'] as const) {
+      it(`${phase} ${pathKind === 'owned' ? 'accepts the owning registry key' : `rejects a ${pathKind} cache`}`, async () => {
+        const registryPath = join(root, 'project', '.allagents', 'marketplaces.json');
+        const scopeHash = createHash('sha256').update(registryPath).digest('hex').slice(0, 16);
+        const cacheRoot = join(root, 'home', '.allagents', 'plugins', 'marketplaces');
+        const ownedPath = join(cacheRoot, '.projects', scopeHash, 'registry-alias');
+        let cachePath = ownedPath;
+        if (pathKind === 'other-project') cachePath = join(cacheRoot, '.projects', 'other-scope', 'registry-alias');
+        if (pathKind === 'unmanaged') cachePath = join(root, 'unmanaged');
+        if (pathKind === 'symlink') {
+          mkdirSync(join(root, 'target'), { recursive: true });
+          mkdirSync(join(cacheRoot, '.projects', scopeHash), { recursive: true });
+          symlinkSync(join(root, 'target'), cachePath, 'dir');
+        } else mkdirSync(cachePath, { recursive: true });
+        const deps: UpdatePluginDeps = {
+          parsePluginSpec: () => ({ plugin: 'demo', marketplaceName: 'registry-alias' }),
+          getMarketplaceRegistration: async () => ({
+            key: 'registry-alias',
+            registryPath,
+            entry: {
+              name: 'manifest-name', path: cachePath,
+              source: { type: 'github', location: 'owner/source-repo' },
+            },
+          }),
+          validateMarketplaceAccess: getMarketplaceAccessError,
+          parseMarketplaceManifest: async () => ({
+            success: true,
+            data: { plugins: [{ name: 'demo', source: './plugins/demo' }] },
+          }),
+          updateMarketplace: async () => [{ name: 'registry-alias', success: true }],
+          resolveRemoteRevision: async () => ({ status: 'resolved', sha: 'a'.repeat(40), ref: 'main' }),
+          checkRepositoryHealth: async () => ({ status: 'healthy', head: 'a'.repeat(40), ref: 'main' }),
+        };
+        const result = phase === 'precheck'
+          ? await checkPluginUpdate('demo@registry-alias', deps, new UpdateContext())
+          : await updatePlugin('demo@registry-alias', deps);
+        if (pathKind === 'owned') {
+          if ('status' in result) expect(result.status).toBe('up-to-date');
+          else expect(result.success).toBe(true);
+        } else {
+          expect(result.error).toBe(`Refused to access unmanaged marketplace path: ${cachePath}`);
+          if ('status' in result) expect(result.status).toBe('failed');
+          else expect(result.success).toBe(false);
+        }
+      });
+    }
+  }
 });

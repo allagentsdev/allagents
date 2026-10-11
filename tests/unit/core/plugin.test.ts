@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import {
+  applyPluginUpdate,
   checkPluginUpdate,
   fetchPlugin,
   resetFetchCache,
@@ -17,6 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getMarketplaceAccessError } from '../../../src/core/marketplace.js';
+import { stubHomeDir } from '../../helpers/env.js';
 
 // Create mock functions for dependency injection
 const existsSyncMock = mock(() => false);
@@ -763,15 +765,13 @@ describe('checkPluginUpdate', () => {
 
 describe('marketplace ownership during plugin updates', () => {
   let root: string;
-  let previousHome: string | undefined;
+  let restoreHome: () => void;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'plugin-update-ownership-'));
-    previousHome = process.env.ALLAGENTS_TEST_HOME;
-    process.env.ALLAGENTS_TEST_HOME = join(root, 'home');
+    restoreHome = stubHomeDir(join(root, 'home'));
   });
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.ALLAGENTS_TEST_HOME;
-    else process.env.ALLAGENTS_TEST_HOME = previousHome;
+    restoreHome();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -811,7 +811,7 @@ describe('marketplace ownership during plugin updates', () => {
         };
         const result = phase === 'precheck'
           ? await checkPluginUpdate('demo@registry-alias', deps, new UpdateContext())
-          : await updatePlugin('demo@registry-alias', deps);
+          : await applyPluginUpdate('demo@registry-alias', deps);
         if (pathKind === 'owned') {
           if ('status' in result) expect(result.status).toBe('up-to-date');
           else expect(result.success).toBe(true);

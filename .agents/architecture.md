@@ -43,3 +43,11 @@ Put shared formatting in `src/cli/format-sync.ts` rather than duplicating it at 
 
 - Keep raw client names in MCP output because VS Code and Copilot have separate MCP support.
 - Keep `vscode` and `copilot` as distinct internal client types with separate path mappings.
+
+
+## Git source credentials
+
+Reject HTTP(S) userinfo and SSH passwords at plugin declaration validation,
+CLI install intake and remote descriptor parsing before output or writes.
+Diagnostics must not echo rejected source strings. SSH usernames and Git-managed
+keys, agents and credential helpers remain supported.

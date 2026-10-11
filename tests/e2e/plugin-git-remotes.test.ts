@@ -182,3 +182,56 @@ describe('file-mode Git remotes through the built CLI', () => {
     expect(failed.stdout.toLowerCase()).toMatch(/git|repository|fetch|clone/);
   }, 30_000);
 });
+
+
+describe('credential rejection through the built CLI', () => {
+  for (const source of [
+    'https://fake-token@git.example.invalid/team/skills.git',
+    'https:///fake-token@git.example.invalid/team/skills.git',
+    'git:https://fake-token@git.example.invalid/team/skills.git',
+    'https://fake-user:fake-password@github.com/team/skills.git',
+    'ssh://git:fake-password@git.example.invalid:2222/team/skills.git',
+    'ssh:/git:fake-password@git.example.invalid/team/skills.git',
+  ]) {
+    test('rejects credentials before project/user writes or terminal output', () => {
+      const config = join(project, '.allagents', 'workspace.yaml');
+      const original = readFileSync(config, 'utf8');
+      for (const scope of ['project', 'user']) {
+        const result = run(['plugin', 'install', source, '--scope', scope, '--client', 'codex', '--yes']);
+        expect(result.exit).toBe(1);
+        expect(JSON.parse(result.stdout).error).toContain('credential');
+        expect(result.stdout + result.stderr).not.toContain('fake');
+        expect(readFileSync(config, 'utf8')).toBe(original);
+        expect(existsSync(join(home, '.allagents'))).toBe(false);
+      }
+      writeFileSync(config, `version: 2\nrepositories: []\nclients: [codex]\nplugins:\n  - source: '${source}'\n    install: file\n`);
+      for (const args of [['workspace', 'sync'], ['plugin', 'update', '--scope', 'project'], ['status'], ['plugin', 'list']]) {
+        const result = run(args);
+        expect(result.exit).toBe(1);
+        expect(result.stdout + result.stderr).not.toContain('fake');
+      }
+      expect(existsSync(join(project, '.allagents', 'sync-state.json'))).toBe(false);
+    });
+  }
+});
+
+
+test('skill add rejects a padded credential source before human output', () => {
+  const config = join(project, '.allagents', 'workspace.yaml');
+  const original = readFileSync(config, 'utf8');
+  for (const source of [' https://fake-token@git.example.invalid/team/skills.git', 'git: https://fake-token@git.example.invalid/team/skills.git', 'ssh:/git:fake-password@git.example.invalid/team/skills.git']) {
+    for (const args of [['skill', 'add', 'fixture', '--from', source], ['skill', 'add', source, '--all']]) {
+      const result = Bun.spawnSync([cli, ...args, '--scope', 'project', '--client', 'codex', '--yes'], {
+        cwd: project,
+        env: { ...process.env, ALLAGENTS_TEST_HOME: home, HOME: home, USERPROFILE: home, NO_COLOR: '1', ALLAGENTS_SKIP_UPDATE_CHECK: '1' },
+        stdout: 'pipe', stderr: 'pipe',
+      });
+      const output = decoder.decode(result.stdout) + decoder.decode(result.stderr);
+      expect(result.exitCode).toBe(1);
+      expect(output).toContain('credential');
+      expect(output).not.toContain('fake');
+      expect(readFileSync(config, 'utf8')).toBe(original);
+      expect(existsSync(join(project, '.allagents', 'sync-state.json'))).toBe(false);
+    }
+  }
+});

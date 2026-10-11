@@ -485,7 +485,9 @@ For these remotes, `#ref=release%2Fstable&subdir=collections%2Fteam` selects an
 inline ref and a repository subdirectory. Inline `ref` metadata takes precedence
 over the object field. Encode fragment values, and keep subdirectories inside
 the checkout. Authentication uses Git's existing SSH and credential-helper
-configuration. See [Git remotes for file installations](/docs/guides/plugins/#git-remotes-for-file-installations)
+configuration. Plugin URLs reject HTTP(S) userinfo and SSH passwords before
+output or configuration writes. SSH usernames, keys, agents and Git credential
+helpers remain supported. See [Git remotes for file installations](/docs/guides/plugins/#git-remotes-for-file-installations)
 for CLI examples and offline behavior.
 
 `ref` selects a symbolic Git ref; it is not a content-integrity lock. Sync state

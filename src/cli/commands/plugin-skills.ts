@@ -1,3 +1,4 @@
+import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
@@ -885,12 +886,13 @@ export async function installSkillFromSource(
     deps.installSkillViaMarketplace ?? installSkillViaMarketplace;
   const installSkillDirectFn = deps.installSkillDirect ?? installSkillDirect;
 
+  // Validate before a source can appear in output.
+  const parsed = parseRemotePluginSource(from);
   if (!isJsonMode()) {
     console.log(`Installing skill '${skill}' from ${from}...`);
   }
 
   // Fetch the source to a local cache so we can inspect it
-  const parsed = parseRemotePluginSource(from);
   const fetchResult = await fetchPluginFn(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -2062,11 +2064,10 @@ async function installAllSkillsFromSource(opts: {
   let { isUser, workspacePath } = opts;
   const { from, targetContext } = opts;
 
+  const parsed = parseRemotePluginSource(from);
   if (!isJsonMode()) {
     console.log(`Installing all skills from ${from}...`);
   }
-
-  const parsed = parseRemotePluginSource(from);
   const fetchResult = await fetchPlugin(from, {
     ...(parsed?.branch && { branch: parsed.branch }),
   });
@@ -2467,6 +2468,8 @@ const addCmd = command({
     all,
   }) => {
     try {
+      if (fromArg) assertPluginSourceNoCredentials(fromArg);
+      if (skillArg) assertPluginSourceNoCredentials(skillArg);
       // Classify the positional argument so we know which code path to take.
       const classified = classifySkillAddPositional(
         skillArg,

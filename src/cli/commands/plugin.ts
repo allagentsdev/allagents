@@ -1,3 +1,4 @@
+import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { command, positional, option, string, optional, multioption, array, flag } from 'cmd-ts';
 import {
   addMarketplace,
@@ -1201,6 +1202,7 @@ const pluginInstallCmd = command({
   },
   handler: async ({ plugin, scope, client, yes, skills }) => {
     try {
+      assertPluginSourceNoCredentials(plugin);
       const workspacePath = process.cwd();
       const projectConfigPath = join(
         workspacePath,

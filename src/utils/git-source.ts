@@ -135,3 +135,32 @@ export function gitSourceKey(source: string, ref?: string): string {
     identity?.name ?? null,
   ]);
 }
+
+
+/** Reject inline secrets before plugin sources reach output or persisted state. */
+export function assertPluginSourceNoCredentials(source: string): void {
+  // URL parsing ignores embedded tabs/newlines; inspect the same authority.
+  const value = source.replace(/[\t\r\n]/g, '')
+    .replace(/^[\p{Cc}\s]+|[\p{Cc}\s]+$/gu, '')
+    .replace(/^git:/i, '')
+    .replace(/^[\p{Cc}\s]+|[\p{Cc}\s]+$/gu, '');
+  const scheme = /^(https?|ssh):/i.exec(value)?.[1]?.toLowerCase();
+  if (!scheme) return;
+  let url: URL | undefined;
+  try {
+    url = new URL(value);
+  } catch {
+    // Still reject userinfo in malformed authorities without echoing input.
+  }
+  const authority = /^(?:https?|ssh):\/+([^/?#]*)/i.exec(value)?.[1] ?? '';
+  const at = authority.lastIndexOf('@');
+  const userinfo = at < 0 ? undefined : authority.slice(0, at);
+  const hasCredentials = scheme === 'ssh'
+    ? !!url?.password || !!userinfo?.includes(':')
+    : !!url?.username || !!url?.password || userinfo !== undefined;
+  if (hasCredentials) {
+    throw new Error(
+      'Plugin source URLs must not contain credentials. Use Git credential helpers or SSH keys/agents.',
+    );
+  }
+}

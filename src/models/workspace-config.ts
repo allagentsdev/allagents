@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { assertPluginSourceNoCredentials } from '../utils/git-source.js';
 import { withPluginSourceRef } from '../utils/plugin-path.js';
 import {
   ClientEntryListSchema,
@@ -120,7 +121,13 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 /**
  * Plugin source - can be local path or GitHub URL
  */
-export const PluginSourceSchema = z.string();
+export const PluginSourceSchema = z.string().superRefine((source, ctx) => {
+  try {
+    assertPluginSourceNoCredentials(source);
+  } catch (error) {
+    ctx.addIssue({ code: 'custom', message: (error as Error).message });
+  }
+});
 
 export type PluginSource = z.infer<typeof PluginSourceSchema>;
 

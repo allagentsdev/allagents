@@ -9,7 +9,7 @@ import {
   gitHubUrl,
   repoExists,
 } from '../core/git.js';
-import { gitSourceKey, parseGitHubSource } from './git-source.js';
+import { assertPluginSourceNoCredentials, gitSourceKey, parseGitHubSource } from './git-source.js';
 
 /**
  * Plugin source types
@@ -325,6 +325,7 @@ function remoteMetadata(source: string): { base: string; ref?: string; subdir?: 
 
 /** Parse ordinary remote sources. Invalid remote metadata throws; local sources return null. */
 export function parseRemotePluginSource(source: string): RemotePluginSource | null {
+  assertPluginSourceNoCredentials(source);
   if (!isRemotePluginSource(source)) return null;
   const { base, ref, subdir } = remoteMetadata(source);
   const github = isGitHubUrl(base) || parseGitHubSource(base) ? parseGitHubUrl(base) : null;

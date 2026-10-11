@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as paths from '../../../src/utils/plugin-path.js';
-import { getEffectivePluginSource } from '../../../src/models/workspace-config.js';
+import { PluginEntrySchema, getEffectivePluginSource } from '../../../src/models/workspace-config.js';
 
 const remote = 'ssh://deploy@git.example.test:2222/team/skills.git';
 const temporary: string[] = [];
@@ -78,5 +78,52 @@ describe('ordinary remote plugin sources', () => {
     expect(() => paths.resolveRemotePluginPath(`${remote}#subdir=escaped/missing`, checkout)).toThrow('outside');
     mkdirSync(join(checkout, 'inside'));
     expect(paths.resolveRemotePluginPath(`${remote}#subdir=inside`, checkout)).toBe(join(checkout, 'inside'));
+  });
+});
+
+
+describe('credential-bearing plugin sources', () => {
+  const rejected = [
+    'https://fake-token@git.example.test/team/skills.git',
+    'https:///fake-token@git.example.test/team/skills.git',
+    'https:////fake-user:fake-password@git.example.test/team/skills.git',
+    'https:/fake-token@git.example.test/team/skills.git',
+    'https://fake-token@/team/skills.git',
+    'http://fake-user:fake-password@git.example.test/team/skills.git',
+    'https://@git.example.test/team/skills.git',
+    'SSH://git:fake-password@git.example.test:2222/team/skills.git',
+    'ssh:/git:fake-password@git.example.test/team/skills.git',
+    'ssh:///git:fake-password@git.example.test/team/skills.git',
+    'https://fake%40token@git.example.test/team/skills.git#ref=main',
+    'https://fake-token@github.com/team/skills.git',
+    'git:https://fake-token@git.example.test/team/skills.git',
+    'git:ssh://git:fake-password@git.example.test/team/skills.git',
+    'git: https://fake-token@git.example.test/team/skills.git',
+    '\u0000https://fake-token@git.example.test/team/skills.git',
+    '\u001fssh://git:fake-password@git.example.test/team/skills.git',
+  ];
+  it('rejects before forming cache and provenance identities without echoing credentials', () => {
+    for (const source of rejected) {
+      const validation = paths.validatePluginSource(source);
+      expect(validation.valid).toBe(false);
+      expect(validation.error).toContain('credential');
+      expect(validation.error).not.toContain('fake');
+      expect(() => paths.parseRemotePluginSource(source)).toThrow('credential');
+    }
+  });
+  it('rejects both YAML declaration forms at the configuration boundary', () => {
+    for (const source of rejected) {
+      for (const declaration of [source, { source, install: 'file' }]) {
+        const result = PluginEntrySchema.safeParse(declaration);
+        expect(result.success).toBe(false);
+        if (!result.success) expect(JSON.stringify(result.error.issues)).not.toContain('fake');
+      }
+    }
+  });
+  it('retains SSH usernames, SCP sources, credential-free HTTPS and local paths', () => {
+    for (const source of [remote, 'git@github.com:team/skills.git', 'https://git.example.test/team/skills.git', './local@directory', 'git:https://git.example.test/team/skills.git']) {
+      expect(paths.validatePluginSource(source).valid).toBe(true);
+      expect(PluginEntrySchema.safeParse({ source, install: 'file' }).success).toBe(true);
+    }
   });
 });

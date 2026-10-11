@@ -2,7 +2,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:te
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readlinkSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -507,6 +509,166 @@ describe('plugin update e2e', () => {
       'Updating plugin: demo@project-marketplace...\n\n',
     );
   }, 15_000);
+
+  for (const layout of [
+    { name: 'direct client copies', clients: ['codex', 'pi'], canonical: false },
+    {
+      name: 'universal canonical copy and client symlinks',
+      clients: ['universal', 'codex', 'pi'],
+      canonical: true,
+    },
+  ]) {
+    test(`refreshes local source artifacts in project scope with ${layout.name}`, () => {
+      const sourceDir = join(rootDir, 'local-source');
+      const skillDir = join(sourceDir, 'skills', 'fixture');
+      mkdirSync(join(skillDir, 'assets'), { recursive: true });
+      mkdirSync(join(sourceDir, 'skills', 'unselected'), { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        '---\nname: fixture\ndescription: Local update fixture\n---\n\nv1\n',
+      );
+      writeFileSync(join(skillDir, 'assets', 'support.txt'), 'support v1\n');
+      writeFileSync(
+        join(sourceDir, 'skills', 'unselected', 'SKILL.md'),
+        '---\nname: unselected\ndescription: Not selected\n---\n',
+      );
+
+      const installResult = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'install',
+        sourceDir,
+        '--scope',
+        'project',
+        '--client',
+        layout.clients.join(','),
+        '--skill',
+        'fixture',
+        '--yes',
+      ]);
+      expect(installResult.exitCode).toBe(0);
+      const projectConfigPath = join(workspaceDir, '.allagents', 'workspace.yaml');
+      const projectConfigAfterInstall = readFileSync(projectConfigPath, 'utf8');
+
+      const projectSkillPath = (client: string) =>
+        join(workspaceDir, `.${client}`, 'skills', 'fixture');
+      const canonicalSkillPath = join(workspaceDir, '.agents', 'skills', 'fixture');
+      if (layout.canonical) {
+        expect(readlinkSync(projectSkillPath('codex'))).toBe(
+          '../../.agents/skills/fixture',
+        );
+      } else {
+        expect(lstatSync(projectSkillPath('codex')).isSymbolicLink()).toBe(false);
+      }
+
+      const userSkillDir = join(homeDir, '.codex', 'skills', 'fixture');
+      mkdirSync(userSkillDir, { recursive: true });
+      writeFileSync(join(userSkillDir, 'SKILL.md'), 'user-owned\n');
+
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        '---\nname: fixture\ndescription: Local update fixture\n---\n\nv2\n',
+      );
+      writeFileSync(join(skillDir, 'assets', 'support.txt'), 'support v2\n');
+      rmSync(projectSkillPath('codex'), { recursive: true, force: true });
+
+      const updateResult = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'update',
+        '--scope',
+        'project',
+      ]);
+      expect(updateResult.exitCode).toBe(0);
+      const updatePayload = JSON.parse(updateResult.stdout);
+      expect(updatePayload).toMatchObject({
+        success: true,
+        data: {
+          results: [{ success: true, action: 'skipped' }],
+          skipped: 1,
+          failed: 0,
+        },
+      });
+      const materializedSkillPath = layout.canonical
+        ? canonicalSkillPath
+        : projectSkillPath('pi');
+      expect(readFileSync(join(materializedSkillPath, 'SKILL.md'), 'utf8')).toContain(
+        '\nv2\n',
+      );
+      expect(
+        readFileSync(join(materializedSkillPath, 'assets', 'support.txt'), 'utf8'),
+      ).toBe('support v2\n');
+      expect(existsSync(join(sourceDir, 'skills', 'unselected'))).toBe(true);
+      expect(existsSync(projectSkillPath('codex'))).toBe(true);
+      expect(readFileSync(join(userSkillDir, 'SKILL.md'), 'utf8')).toBe('user-owned\n');
+      expect(readFileSync(projectConfigPath, 'utf8')).toBe(projectConfigAfterInstall);
+      expect(updatePayload.data.syncResults).toMatchObject({
+        project: { failed: 0 },
+      });
+
+      const repeatedUpdate = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'update',
+        '--scope',
+        'project',
+      ]);
+      expect(repeatedUpdate.exitCode).toBe(0);
+      expect(readFileSync(join(materializedSkillPath, 'SKILL.md'), 'utf8')).toContain(
+        '\nv2\n',
+      );
+      expect(readFileSync(projectConfigPath, 'utf8')).toBe(projectConfigAfterInstall);
+    }, 15_000);
+  }
+
+  for (const layout of [
+    { name: 'direct client copies', clients: ['codex', 'pi'] },
+    {
+      name: 'universal canonical copy and client symlinks',
+      clients: ['universal', 'codex', 'pi'],
+    },
+  ]) {
+    test(`removes managed local source artifacts after deletion with ${layout.name}`, () => {
+      const sourceDir = join(rootDir, 'local-source');
+      const skillDir = join(sourceDir, 'skills', 'fixture');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        '---\nname: fixture\ndescription: Local deletion fixture\n---\n\nv1\n',
+      );
+
+      const installResult = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'install',
+        sourceDir,
+        '--scope',
+        'project',
+        '--client',
+        layout.clients.join(','),
+        '--yes',
+      ]);
+      expect(installResult.exitCode).toBe(0);
+
+      rmSync(skillDir, { recursive: true, force: true });
+      const updateResult = runCli(workspaceDir, homeDir, [
+        'plugin',
+        'update',
+        '--scope',
+        'project',
+      ]);
+      expect(updateResult.exitCode).toBe(0);
+      const updatePayload = JSON.parse(updateResult.stdout);
+      expect(updatePayload).toMatchObject({
+        success: true,
+        data: { results: [{ success: true, action: 'skipped' }] },
+      });
+      expect(existsSync(join(workspaceDir, '.codex', 'skills', 'fixture'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.pi', 'skills', 'fixture'))).toBe(false);
+      if (layout.clients.includes('universal')) {
+        expect(existsSync(join(workspaceDir, '.agents', 'skills', 'fixture'))).toBe(false);
+      }
+      expect(updatePayload.data.syncResults).toMatchObject({
+        project: { failed: 0 },
+      });
+    }, 15_000);
+  }
 
   test('keeps pseudo-TTY JSON output to one document without lifecycle text', async () => {
     const result = await runInteractiveCli(workspaceDir, homeDir, [

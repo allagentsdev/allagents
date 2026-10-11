@@ -1839,9 +1839,6 @@ const pluginUpdateCmd = command({
             success: true,
             action: 'skipped',
           };
-          // A current checkout still re-materializes client artifacts and
-          // retries an earlier sync failure, matching the pre-check contract.
-          syncedScopes.add(pluginScope);
           if (progressiveOutput) renderUpdateResult(result);
         } else if (nativeOnly.has(key)) {
           announceDeclaration(entry);
@@ -1859,7 +1856,11 @@ const pluginUpdateCmd = command({
           );
           if (progressiveOutput) renderUpdateResult(result);
         }
-        if (result.action === 'updated') syncedScopes.add(pluginScope);
+        if (result.success && !nativeOnly.has(key)) {
+          // A successful source check or fetch does not guarantee that client
+          // artifacts are materialized; retry reconciliation for skipped work too.
+          syncedScopes.add(pluginScope);
+        }
         results.push(result);
       }
 

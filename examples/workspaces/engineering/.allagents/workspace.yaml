@@ -39,7 +39,8 @@ plugins:
 
   # Pi owns package installation and loading. Explicit client overrides keep
   # these packages separate from the universal file-mode skills above.
-  # Save project trust in Pi before initialization; see ../README.md.
+  # Save project trust and select native CE skills in Pi before initialization;
+  # see ../README.md. Portable CE files otherwise shadow the native skills.
   # Reviewed pins are reconciled as declared, not upgraded to latest.
   - source: npm:pi-web-access@0.37.0
     clients: [pi]

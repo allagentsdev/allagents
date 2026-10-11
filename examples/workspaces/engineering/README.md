@@ -48,6 +48,38 @@ In Pi, run `/trust`, save a trusted decision for this folder, then exit. A one-t
 processes. AllAgents reads trust from the user Pi agent root outside the project;
 it does not set `defaultProjectTrust: always` or grant trust through setup scripts.
 
+Pi automatically discovers `.agents/skills` before package skills. Without a
+resource selection, the portable Compound Engineering skills shadow the native
+Pi versions. From this project directory, append exclusions for the portable
+Compound Engineering files to your existing `.pi/settings.json`:
+
+```sh
+node --input-type=module <<'JS'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+const path = resolve('.pi/settings.json');
+const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+if (settings.skills !== undefined && !Array.isArray(settings.skills)) {
+  throw new Error('Expected settings.skills to be an array; no settings were changed.');
+}
+const portable = resolve('.agents/skills').replaceAll('\\', '/');
+settings.skills = [...new Set([
+  ...(settings.skills ?? []),
+  `!${portable}/ce-*/SKILL.md`,
+  `!${portable}/lfg/SKILL.md`,
+])];
+mkdirSync('.pi', { recursive: true });
+writeFileSync(path, JSON.stringify(settings, null, 2) + '\n');
+JS
+```
+
+This preserves existing settings and skill selections. Pi still loads the other
+universal skills and custom `.pi/skills` resources, while Compound Engineering
+comes from the native package. The exclusions use the actual project path so
+they also work beneath hidden directories. These machine-specific selections
+remain user-owned; keep them out of the shared template and rerun the command if
+you move the project. AllAgents preserves them when installing or updating packages.
+
 Then initialize and install the stack:
 
 ```sh

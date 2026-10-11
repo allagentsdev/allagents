@@ -1768,7 +1768,7 @@ const pluginUpdateCmd = command({
             );
           }
           if ((plan?.nativeClients.length ?? 0) > 0) {
-            nativeTargets[entry.scope].push(entry.spec);
+            nativeTargets[entry.scope].push(plan?.source ?? entry.effectiveSpec);
             // Native state is outside a Git checkout, so a current checkout can
             // still need native reconciliation. Keep these available.
             checks.set(key, { plugin: entry.spec, status: 'available' });
@@ -1870,24 +1870,15 @@ const pluginUpdateCmd = command({
       const nativeEffects: Partial<
         Record<'project' | 'user', NativeEffectData[]>
       > = {};
-      const targetsByScope = {
-        project: toUpdate
-          .filter((entry) => entry.scope === 'project')
-          .map((entry) => entry.spec),
-        user: toUpdate
-          .filter((entry) => entry.scope === 'user')
-          .map((entry) => entry.spec),
-      };
       if (
-        targetsByScope.project.length > 0 &&
-        (syncedScopes.has('project') || nativeTargets.project.length > 0)
+        syncedScopes.has('project') || nativeTargets.project.length > 0
       ) {
         const { ok, syncData } = await runSyncAndPrint(
           {
             skipAgentFiles: true,
             nativeSelection: {
               mode: 'update',
-              targets: targetsByScope.project,
+              targets: nativeTargets.project,
             },
           },
           {
@@ -1900,15 +1891,14 @@ const pluginUpdateCmd = command({
         nativeEffects.project = syncData.nativeResources?.effects ?? [];
       }
       if (
-        targetsByScope.user.length > 0 &&
-        (syncedScopes.has('user') || nativeTargets.user.length > 0)
+        syncedScopes.has('user') || nativeTargets.user.length > 0
       ) {
         const { ok, syncData } = await runUserSyncAndPrint(
           {
             skipAgentFiles: true,
             nativeSelection: {
               mode: 'update',
-              targets: targetsByScope.user,
+              targets: nativeTargets.user,
             },
           },
           { compactSuccess: progressiveOutput },
@@ -1921,10 +1911,10 @@ const pluginUpdateCmd = command({
       for (let index = 0; index < toUpdate.length; index++) {
         const entry = toUpdate[index];
         if (!entry || !nativeOnly.has(declarationKey(entry))) continue;
-        const settledResult = settleNativePluginUpdate(
-          entry.spec,
-          nativeEffects[entry.scope] ?? [],
-        );
+        const settledResult = {
+          ...settleNativePluginUpdate(entry.effectiveSpec, nativeEffects[entry.scope] ?? []),
+          plugin: entry.spec,
+        };
         results[index] = settledResult;
         if (progressiveOutput) renderUpdateResult(settledResult);
       }

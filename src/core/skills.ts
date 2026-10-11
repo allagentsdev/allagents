@@ -9,7 +9,7 @@ import {
   getEffectivePluginSource,
   pluginUsesNativeInstall,
 } from '../models/workspace-config.js';
-import { isRemotePluginSource, parseRemotePluginSource, resolveRemotePluginPath } from '../utils/plugin-path.js';
+import { getPluginDisplayName, isRemotePluginSource, parseRemotePluginSource, resolveRemotePluginPath } from '../utils/plugin-path.js';
 import { parseUserWorkspaceConfig, parseWorkspaceConfig } from '../utils/workspace-parser.js';
 import { loadYaml } from '../utils/yaml.js';
 import { parseSkillMetadata } from '../validators/skill.js';
@@ -18,6 +18,7 @@ import {
   resolvePluginSpecWithAutoRegister,
 } from './marketplace.js';
 import { fetchPlugin, getPluginName } from './plugin.js';
+import { buildPluginSyncPlans } from './sync.js';
 
 /**
  * Information about a skill from an installed plugin
@@ -92,7 +93,7 @@ async function resolvePluginPath(
     });
     if (!result.success) return null;
     const path = resolveRemotePluginPath(pluginSource, result.cachePath);
-    return existsSync(path) ? { path, ...(parsed?.type === 'git' && { pluginName: parsed.subpath ? basename(parsed.subpath) : parsed.repo }) } : null;
+    return existsSync(path) ? { path, ...(parsed?.type === 'git' && { pluginName: getPluginDisplayName(pluginSource) }) } : null;
   }
 
   // Local path
@@ -223,7 +224,14 @@ export async function getAllSkillsFromPlugins(
   // defaults it to [], but this reader consumes the raw YAML.
   for (const pluginEntry of config.plugins ?? []) {
     const pluginSource = getPluginSource(pluginEntry);
-    const resolved = await resolvePluginPath(getEffectivePluginSource(pluginEntry), workspacePath);
+    const effectiveSource = getEffectivePluginSource(pluginEntry);
+    if (
+      parseRemotePluginSource(effectiveSource)?.type === 'git' &&
+      !buildPluginSyncPlans([pluginEntry], config.clients ?? [], 'project').plans[0]?.clients.length
+    ) {
+      continue;
+    }
+    const resolved = await resolvePluginPath(effectiveSource, workspacePath);
     if (!resolved) continue;
 
     const pluginPath = resolved.path;

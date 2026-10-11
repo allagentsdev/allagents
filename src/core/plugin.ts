@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   parseRemotePluginSource,
   isRemotePluginSource,
+  isGitHubUrl,
   type RemotePluginSource,
   getPluginCachePath,
   parseMarketplaceLocation,
@@ -641,6 +642,21 @@ async function directUrlUpdateCheck(
   };
 }
 
+function isPluginUpdateRemoteSource(source: string): boolean {
+  if (!isRemotePluginSource(source)) return false;
+  const base = source.split('#')[0] ?? source;
+  if (base.startsWith('https://github.com/') || /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)/i.test(base)) {
+    return true;
+  }
+  // GitHub shorthand retains its existing update contract. Generic transports
+  // and explicit SSH sources use the direct remote update path.
+  try {
+    return parseRemotePluginSource(source)?.type === 'git';
+  } catch {
+    return !isGitHubUrl(base);
+  }
+}
+
 /**
  * Classify a declared plugin without mutating any checkout, cache, or registry.
  * Callers use this to report discovery and to decide whether to apply.
@@ -654,7 +670,7 @@ export async function checkPluginUpdate(
     ? null
     : deps.parsePluginSpec(pluginSpec);
   if (!parsed) {
-    if (!isRemotePluginSource(pluginSpec)) {
+    if (!isPluginUpdateRemoteSource(pluginSpec)) {
       return { plugin: pluginSpec, status: 'not-remote' };
     }
     return {
@@ -981,7 +997,7 @@ export async function applyPluginUpdate(
     : deps.parsePluginSpec(pluginSpec);
   if (!parsed) {
     // A direct remote source or local path
-    if (isRemotePluginSource(pluginSpec)) {
+    if (isPluginUpdateRemoteSource(pluginSpec)) {
       // Direct remote source - update the cached repo
       const result = await fetchForUpdate(pluginSpec);
       return {

@@ -12,7 +12,7 @@ import type {
   Repository,
   WorkspaceConfig,
 } from '../models/workspace-config.js';
-import { getClientTypes, getEffectivePluginSource, getPluginSource } from '../models/workspace-config.js';
+import { getClientTypes, getEffectivePluginSource, getPluginSource, getPluginClients, normalizeClientEntry, resolveInstallMode } from '../models/workspace-config.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
 import {
   parseWorkspaceConfigForEdit,
@@ -22,6 +22,7 @@ import {
 import {
   isFilesystemRoot,
   isGitHubUrl,
+  getPluginDisplayName,
   isRemotePluginSource,
   parseRemotePluginSource,
   resolveRemotePluginPath,
@@ -653,7 +654,7 @@ export function extractPluginNames(pluginSource: string): string[] {
     return names;
   }
   const remote = parseRemotePluginSource(pluginSource);
-  if (remote?.type === 'git') return [remote.subpath ? basename(remote.subpath) : remote.repo];
+  if (remote?.type === 'git') return [getPluginDisplayName(pluginSource)];
   // For GitHub URLs, include both repo name and {owner}-{repo} (cache directory) format
   if (isGitHubUrl(pluginSource)) {
     const parsed = parseGitHubUrl(pluginSource);
@@ -847,11 +848,18 @@ export async function upsertGitHubPluginSourceAllowlistInConfig(
 ): Promise<ModifyResult> {
   const normalizedSkills = uniqueSkillNames(skillNames);
   const remote = parseRemotePluginSource(source);
-  const exactIndex = config.plugins.findIndex((entry) =>
-    remote?.type === 'git'
-      ? parseRemotePluginSource(getEffectivePluginSource(entry))?.provenanceKey === remote.provenanceKey
-      : getPluginSource(entry) === source,
-  );
+  const exactIndex = config.plugins.findIndex((entry) => {
+    if (remote?.type !== 'git') return getPluginSource(entry) === source;
+    if (parseRemotePluginSource(getEffectivePluginSource(entry))?.provenanceKey !== remote.provenanceKey) return false;
+    if (typeof entry !== 'string' && entry.install) return entry.install === 'file';
+    const selectedClients = getPluginClients(entry) ?? getClientTypes(config.clients);
+    return selectedClients.length > 0 && selectedClients.every((client) => {
+      const configuredClient = config.clients.find((candidate) =>
+        normalizeClientEntry(candidate).name === client,
+      );
+      return resolveInstallMode(entry, normalizeClientEntry(configuredClient ?? client)) === 'file';
+    });
+  });
 
   if (exactIndex !== -1) {
     const entry = ensureObjectPluginEntry(config, exactIndex);
@@ -862,7 +870,7 @@ export async function upsertGitHubPluginSourceAllowlistInConfig(
 
   const semanticIndex = await findPluginEntryByGitHubIdentity(config, source);
   if (semanticIndex === -1) {
-    config.plugins.push({ source, skills: normalizedSkills });
+    config.plugins.push({ source, ...(remote?.type === 'git' && { install: 'file' as const }), skills: normalizedSkills });
     return { success: true, normalizedPlugin: source };
   }
 

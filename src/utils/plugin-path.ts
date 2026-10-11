@@ -333,7 +333,9 @@ export function parseRemotePluginSource(source: string): RemotePluginSource | nu
     const subpath = subdir ?? github.subpath;
     if (subpath) validateRemoteSubpath(subpath);
     return {
-      type: 'github', url: gitHubUrl(github.owner, github.repo),
+      type: 'github', url: /^(?:git@github\.com:|ssh:\/\/git@github\.com\/)/i.test(base)
+        ? base
+        : gitHubUrl(github.owner, github.repo),
       owner: github.owner, repo: github.repo,
       ...(branch && { branch }), ...(subpath && { subpath }),
       cachePath: getPluginCachePath(github.owner, github.repo, branch),
@@ -369,7 +371,7 @@ export function withPluginSourceRef(source: string, ref?: string): string {
   if (!ref) return source;
   const remote = parseRemotePluginSource(source);
   if (!remote || remote.branch) return source;
-  if (remote.type === 'github' && !source.includes('#') && !ref.includes('/')) {
+  if (remote.type === 'github' && !source.includes('://') && !source.includes('#') && !ref.includes('/')) {
     const shorthand = source.replace(/^https?:\/\/(?:www\.)?github\.com\//, '').replace(/^github\.com\//, '').replace(/^gh:/, '');
     if (!shorthand.includes(':')) {
       const parts = shorthand.split('/');

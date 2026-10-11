@@ -6,6 +6,7 @@ import { dump, load } from 'js-yaml';
 import {
   canonicalizeGitHubPluginSource,
   upsertGitHubPluginSourceAllowlist,
+  upsertGitHubPluginSourceAllowlistInConfig,
 } from '../../../src/core/workspace-modify.js';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 
@@ -45,6 +46,36 @@ describe('upsertGitHubPluginSourceAllowlist', () => {
       const updated = load(await readFile(join(tmpDir, '.allagents/workspace.yaml'), 'utf-8')) as WorkspaceConfig;
       expect(updated.plugins).toEqual([{ source, ref: 'feature/demo', install: 'file', skills: ['keep', 'new'] }, { source, ref: 'other', install: 'file', skills: ['unrelated'] }]);
     } finally { await rm(tmpDir, { recursive: true, force: true }); }
+  });
+
+  for (const inherited of [false, true]) {
+    it(`preserves native-first generic declarations when file mode is ${inherited ? 'inherited' : 'explicit'}`, async () => {
+      const source = 'ssh://alice@forgejo.example:2222/team/skills.git';
+      const native = { source, clients: ['pi' as const], ...(inherited ? {} : { install: 'native' as const }) };
+      const file = { source, clients: ['codex' as const], ...(inherited ? {} : { install: 'file' as const }), skills: ['keep'] };
+      const config: WorkspaceConfig = { version: 2, repositories: [], clients: [{ name: 'pi', install: 'native' }, 'codex'], plugins: [native, file] };
+      expect((await upsertGitHubPluginSourceAllowlistInConfig(config, source, ['keep', 'new'])).success).toBe(true);
+      expect(config.plugins).toEqual([native, { ...file, skills: ['keep', 'new'] }]);
+      expect(native).not.toHaveProperty('skills');
+    });
+  }
+
+  it('keeps an inherited mixed file/native declaration indivisible when selecting skills', async () => {
+    const source = 'ssh://alice@forgejo.example:2222/team/skills.git';
+    const mixed = { source, clients: ['pi' as const, 'codex' as const] };
+    const config: WorkspaceConfig = { version: 2, repositories: [], clients: [{ name: 'pi', install: 'native' }, 'codex'], plugins: [mixed] };
+    expect((await upsertGitHubPluginSourceAllowlistInConfig(config, source, ['keep'])).success).toBe(true);
+    expect(config.plugins).toEqual([mixed, { source, install: 'file', skills: ['keep'] }]);
+    expect(mixed).not.toHaveProperty('skills');
+  });
+
+  it('creates an explicit file declaration when only a native generic source exists', async () => {
+    const source = 'ssh://alice@forgejo.example:2222/team/skills.git';
+    const native = { source, install: 'native' as const, clients: ['pi' as const] };
+    const config: WorkspaceConfig = { version: 2, repositories: [], clients: [{ name: 'pi', install: 'native' }], plugins: [native] };
+    expect((await upsertGitHubPluginSourceAllowlistInConfig(config, source, ['keep'])).success).toBe(true);
+    expect(config.plugins).toEqual([native, { source, install: 'file', skills: ['keep'] }]);
+    expect(native).not.toHaveProperty('skills');
   });
 
   it('rewrites the stored source instead of creating a duplicate entry', async () => {

@@ -142,6 +142,33 @@ describe('file-mode Git remotes through the built CLI', () => {
     expect(Object.values(sources())).toContainEqual(expect.objectContaining({ resolvedSha: git(upstream, 'rev-parse', 'main') }));
   }, 30_000);
 
+  test('lists the file selection once beside a native declaration sharing its cache', () => {
+    const source = 'git@git.example.invalid:team/skills.git#subdir=collection&ref=main';
+    const installed = run(['plugin', 'install', source, '--scope', 'project', '--client', 'codex', '--skill', 'fixture', '--yes']);
+    expect(installed.exit, installed.stdout + installed.stderr).toBe(0);
+    writeFileSync(join(project, '.allagents', 'workspace.yaml'), `version: 2\nrepositories: []\nclients: [codex, pi]\nplugins:\n  - source: '${source}'\n    install: file\n    clients: [codex]\n    skills: [fixture]\n  - source: '${source}'\n    install: native\n    clients: [pi]\n`);
+    const listed = run(['skill', 'list', '--scope', 'project']);
+    expect(listed.exit, listed.stdout + listed.stderr).toBe(0);
+    const skills = JSON.parse(listed.stdout).data.skills;
+    expect(skills).toHaveLength(2);
+    expect(skills.filter((skill: { disabled: boolean }) => !skill.disabled).map((skill: { name: string }) => skill.name)).toEqual(['fixture']);
+  }, 30_000);
+
+  test('refreshes a direct GitHub HTTPS declaration with an object ref', () => {
+    const source = 'https://github.com/fixture/skills.git';
+    writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = ${source}\n`);
+    writeFileSync(join(project, '.allagents', 'workspace.yaml'), `version: 2\nrepositories: []\nclients: [codex]\nplugins:\n  - source: '${source}'\n    ref: main\n    install: file\n    skills: [fixture]\n`);
+    const synced = run(['workspace', 'sync']);
+    expect(synced.exit, synced.stdout + synced.stderr).toBe(0);
+    expect(readFileSync(artifact('codex'), 'utf8')).toBe(content('one'));
+    writeFileSync(join(upstream, 'collection', 'fixture', 'SKILL.md'), content('two'));
+    git(upstream, 'add', 'collection'); git(upstream, 'commit', '-m', 'advance HTTPS fixture'); git(upstream, 'push', remote, 'main');
+    const updated = run(['plugin', 'update', '--scope', 'project']);
+    expect(updated.exit, updated.stdout + updated.stderr).toBe(0);
+    expect(readFileSync(artifact('codex'), 'utf8')).toBe(content('two'));
+    expect(Object.values(sources())).toContainEqual(expect.objectContaining({ requestedRef: 'main', resolvedSha: git(upstream, 'rev-parse', 'main') }));
+  }, 30_000);
+
   test('fails offline without a cache and reports remote transport failures', () => {
     const source = 'ssh://git@git.example.invalid:2222/team/skills.git';
     writeFileSync(join(project, '.allagents', 'workspace.yaml'), `version: 2\nrepositories: []\nclients: [codex]\nplugins:\n  - source: '${source}'\n    install: file\n`);

@@ -37,6 +37,20 @@ beforeEach(() => {
 afterEach(() => rmSync(fixture, { recursive: true, force: true }));
 
 describe('ordinary Git remote lifecycle', () => {
+  it('clones and refreshes explicit GitHub SSH sources through inherited SSH configuration', () => {
+    for (const githubSource of ['git@github.com:fixture/skills.git', 'ssh://git@github.com/fixture/skills.git#ref=main']) {
+      const first = probe(`console.log(JSON.stringify(await fetchPlugin(${JSON.stringify(githubSource)})));`);
+      expect(first.success).toBe(true);
+      expect(git('-C', first.cachePath, 'remote', 'get-url', 'origin')).toBe(githubSource.split('#')[0]);
+      writeFileSync(join(repository, 'SKILL.md'), githubSource);
+      git('-C', repository, 'add', 'SKILL.md');
+      git('-C', repository, 'commit', '-m', 'advance SSH fixture');
+      const refreshed = probe(`const deps={parsePluginSpec:()=>null,getMarketplaceRegistration:async()=>null,validateMarketplaceAccess:()=>undefined,parseMarketplaceManifest:async()=>({success:false}),updateMarketplace:async()=>[]}; console.log(JSON.stringify(await applyPluginUpdate(${JSON.stringify(githubSource)},deps,new UpdateContext())));`);
+      expect(refreshed).toMatchObject({ success: true, changed: true });
+      expect(git('-C', first.cachePath, 'rev-parse', 'HEAD')).toBe(git('-C', repository, 'rev-parse', 'HEAD'));
+    }
+  });
+
   it('clones exact custom-port transport using inherited Git configuration at branch and tag', () => {
     const results = probe(`console.log(JSON.stringify(await Promise.all([fetchPlugin(${JSON.stringify(`${source}#ref=feature%2Fdemo`)}), fetchPlugin(${JSON.stringify(`${source}#ref=v1`)})])));`);
     for (const result of results) {

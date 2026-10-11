@@ -81,6 +81,29 @@ describe('getAllSkillsFromPlugins', () => {
     } finally { restoreHome(); resetFetchCache(); }
   });
 
+  it('keeps native-only cached remotes out of the file allowlist inventory', async () => {
+    const restoreHome = stubHomeDir(tmpDir);
+    resetFetchCache();
+    try {
+      const source = 'git@git.example:team/collection.git';
+      const cache = parseRemotePluginSource(source)!.cachePath;
+      for (const name of ['keep', 'excluded']) {
+        await mkdir(join(cache, 'skills', name), { recursive: true });
+        await writeFile(join(cache, 'skills', name, 'SKILL.md'), `# ${name}`);
+      }
+      await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({
+        version: 2, repositories: [], clients: ['codex', { name: 'pi', install: 'native' }],
+        plugins: [
+          { source, install: 'file', clients: ['codex'], skills: ['keep'] },
+          { source, install: 'native', clients: ['pi'] },
+        ],
+      }));
+      const skills = await getAllSkillsFromPlugins(tmpDir);
+      expect(skills).toHaveLength(2);
+      expect(skills.filter((skill) => !skill.disabled).map((skill) => skill.name)).toEqual(['keep']);
+    } finally { restoreHome(); resetFetchCache(); }
+  });
+
   it('marks disabled skills correctly', async () => {
     const config = {
       repositories: [],

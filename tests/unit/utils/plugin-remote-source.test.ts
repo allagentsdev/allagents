@@ -32,6 +32,15 @@ describe('ordinary remote plugin sources', () => {
     expect(paths.parseRemotePluginSource('https://github.com/owner/repo/tree/main/skills/example')?.subpath).toBe('skills/example');
   });
 
+  it('preserves explicit GitHub SSH transports with the legacy cache identity', () => {
+    for (const source of ['git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git']) {
+      expect(paths.parseRemotePluginSource(`${source}#ref=main`)).toMatchObject({
+        type: 'github', url: source, branch: 'main',
+        cachePath: paths.getPluginCachePath('owner', 'repo', 'main'),
+      });
+    }
+  });
+
   it('decodes metadata and applies object refs only when an inline ref is absent', () => {
     const source = `${remote}#ref=feature%2Fdemo&subdir=collections%2Fteam`;
     expect(paths.parseRemotePluginSource(source)).toMatchObject({ url: remote, branch: 'feature/demo', subpath: 'collections/team' });
@@ -39,6 +48,7 @@ describe('ordinary remote plugin sources', () => {
     const effective = getEffectivePluginSource({ source: `${remote}#subdir=collections%2Fteam`, ref: 'release/demo' });
     expect(paths.parseRemotePluginSource(effective)).toMatchObject({ branch: 'release/demo', subpath: 'collections/team' });
     expect(getEffectivePluginSource({ source: 'owner/repo/sub', ref: 'release' })).toBe('owner/repo@release/sub');
+    expect(getEffectivePluginSource({ source: 'https://github.com/owner/repo', ref: 'main' })).toBe('https://github.com/owner/repo#ref=main');
     expect(getEffectivePluginSource({ source: './local', ref: 'release' })).toBe('./local');
   });
 

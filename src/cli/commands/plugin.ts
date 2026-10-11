@@ -94,6 +94,7 @@ import { join } from 'node:path';
 import {
   formatPluginSource,
   getPluginDisplayName,
+  isGitHubUrl,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1856,7 +1857,13 @@ const pluginUpdateCmd = command({
           );
           if (progressiveOutput) renderUpdateResult(result);
         }
-        if (result.success && !nativeOnly.has(key)) {
+        if (
+          result.success &&
+          !nativeOnly.has(key) &&
+          (result.action === 'updated' ||
+            check?.status === 'up-to-date' ||
+            (check?.status === 'not-remote' && !isGitHubUrl(pluginSpec)))
+        ) {
           // A successful source check or fetch does not guarantee that client
           // artifacts are materialized; retry reconciliation for skipped work too.
           syncedScopes.add(pluginScope);

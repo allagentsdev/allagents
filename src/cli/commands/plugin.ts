@@ -1861,6 +1861,7 @@ const pluginUpdateCmd = command({
           result.success &&
           !nativeOnly.has(key) &&
           (result.action === 'updated' ||
+            check?.status === 'available' ||
             check?.status === 'up-to-date' ||
             (check?.status === 'not-remote' && !isGitHubUrl(pluginSpec)))
         ) {

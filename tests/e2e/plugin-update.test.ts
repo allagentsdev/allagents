@@ -342,6 +342,60 @@ function createRemoteMarketplace(rootDir: string): {
   };
 }
 
+function createRemotePlugin(rootDir: string): {
+  gitWrapperDir: string;
+  source: string;
+  worktree: string;
+} {
+  const worktree = join(rootDir, 'remote-plugin-work');
+  const remote = join(rootDir, 'remote-plugin.git');
+  mkdirSync(worktree, { recursive: true });
+  runGit(worktree, ['init']);
+  runGit(worktree, ['checkout', '-b', 'main']);
+  runGit(worktree, ['config', '--local', 'user.name', 'AllAgents E2E']);
+  runGit(worktree, [
+    'config',
+    '--local',
+    'user.email',
+    'allagents@example.test',
+  ]);
+  mkdirSync(join(worktree, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(worktree, 'skills', 'fixture'), { recursive: true });
+  writeFileSync(
+    join(worktree, '.claude-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'remote-fixture', version: '1.0.0' }),
+  );
+  writeFileSync(
+    join(worktree, 'skills', 'fixture', 'SKILL.md'),
+    '---\nname: fixture\ndescription: Remote fixture\n---\n\nv1\n',
+  );
+  runGit(worktree, ['add', '.']);
+  runGit(worktree, ['commit', '-m', 'fixture v1']);
+  runGit(rootDir, ['init', '--bare', remote]);
+  runGit(worktree, ['remote', 'add', 'origin', remote]);
+  runGit(worktree, ['push', '-u', 'origin', 'main']);
+  runGit(remote, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+  const source = 'https://github.com/uat/remote-plugin';
+  const gitWrapperDir = join(rootDir, 'remote-plugin-bin');
+  mkdirSync(gitWrapperDir, { recursive: true });
+  writeFileSync(
+    join(gitWrapperDir, 'git'),
+    `#!/bin/bash\ncase " $* " in\n *" pull "*)\n  if [ "$ALLAGENTS_TEST_GIT_FAIL_PULL" = "1" ]; then echo "simulated git pull failure" >&2; exit 1; fi\n  ;;\nesac\nargs=()\nfor arg in "$@"; do\n  if [ "$arg" = "${source}.git" ]; then args+=("${remote}"); else args+=("$arg"); fi\ndone\nexec "$ALLAGENTS_TEST_REAL_GIT" "\${args[@]}"\n`,
+  );
+  chmodSync(join(gitWrapperDir, 'git'), 0o755);
+  return { gitWrapperDir, source, worktree };
+}
+
+function advanceRemotePlugin(worktree: string): void {
+  writeFileSync(
+    join(worktree, 'skills', 'fixture', 'SKILL.md'),
+    '---\nname: fixture\ndescription: Remote fixture\n---\n\nv2\n',
+  );
+  runGit(worktree, ['add', '.']);
+  runGit(worktree, ['commit', '-m', 'fixture v2']);
+  runGit(worktree, ['push', 'origin', 'main']);
+}
+
 /** Push a new commit to the fixture marketplace so an update is available. */
 function advanceRemoteMarketplace(
   worktree: string,
@@ -509,6 +563,80 @@ describe('plugin update e2e', () => {
       'Updating plugin: demo@project-marketplace...\n\n',
     );
   }, 15_000);
+
+  test(
+    'reconciles a retained GitHub cache after an available update fetch fails',
+    () => {
+      const remote = createRemotePlugin(rootDir);
+      const options = {
+        gitWrapperDir: remote.gitWrapperDir,
+      };
+      const installResult = runCli(
+        workspaceDir,
+        homeDir,
+        [
+          'plugin',
+          'install',
+          remote.source,
+          '--scope',
+          'project',
+          '--client',
+          'codex',
+          '--skill',
+          'fixture',
+          '--yes',
+        ],
+        options,
+      );
+      expect(installResult.exitCode).toBe(0);
+      const destination = join(
+        workspaceDir,
+        '.codex',
+        'skills',
+        'fixture',
+        'SKILL.md',
+      );
+      expect(readFileSync(destination, 'utf8')).toContain('\nv1\n');
+      const cachePath = join(
+        homeDir,
+        '.allagents',
+        'plugins',
+        'marketplaces',
+        'uat-remote-plugin',
+      );
+      const retainedSha = runGit(cachePath, ['rev-parse', 'HEAD']);
+      advanceRemotePlugin(remote.worktree);
+      rmSync(join(workspaceDir, '.codex', 'skills', 'fixture'), {
+        recursive: true,
+        force: true,
+      });
+
+      const updateResult = runCli(
+        workspaceDir,
+        homeDir,
+        ['plugin', 'update', '--scope', 'project'],
+        {
+          ...options,
+          extraEnv: { ALLAGENTS_TEST_GIT_FAIL_PULL: '1' },
+        },
+      );
+
+      expect(updateResult.exitCode).toBe(0);
+      const payload = JSON.parse(updateResult.stdout);
+      expect(payload).toMatchObject({
+        success: true,
+        data: {
+          results: [{ success: true, action: 'skipped' }],
+          skipped: 1,
+          failed: 0,
+          syncResults: { project: { failed: 0 } },
+        },
+      });
+      expect(readFileSync(destination, 'utf8')).toContain('\nv1\n');
+      expect(runGit(cachePath, ['rev-parse', 'HEAD'])).toBe(retainedSha);
+    },
+    15_000,
+  );
 
   for (const layout of [
     { name: 'direct client copies', clients: ['codex', 'pi'], canonical: false },

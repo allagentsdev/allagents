@@ -135,16 +135,23 @@ describe('syncWorkspace — install mode', () => {
     );
   });
 
-  it('plans the Pi engineering template as pinned native packages without portable file copies', async () => {
+  it('plans engineering skills as universal files and pinned Pi packages as native', async () => {
     const config = await parseWorkspaceConfig(
-      join(import.meta.dir, '../../../examples/workspaces/pi-engineering/.allagents/workspace.yaml'),
+      join(import.meta.dir, '../../../examples/workspaces/engineering/.allagents/workspace.yaml'),
     );
     const result = buildPluginSyncPlans(config.plugins, config.clients, 'project');
 
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
-    expect(result.plans).toHaveLength(4);
-    const packageIdentities = result.plans.map((plan) => {
+    expect(result.plans).toHaveLength(8);
+    const filePlans = result.plans.filter((plan) => !plan.source.startsWith('npm:'));
+    expect(filePlans).toHaveLength(4);
+    for (const plan of filePlans) {
+      expect(plan.clients).toEqual(['universal']);
+      expect(plan.nativeClients).toEqual([]);
+    }
+    const packagePlans = result.plans.filter((plan) => plan.source.startsWith('npm:'));
+    const packageIdentities = packagePlans.map((plan) => {
       expect(plan.clients).toEqual([]);
       expect(plan.nativeClients).toEqual(['pi']);
       const normalized = normalizePiPackageSource(plan.source, {

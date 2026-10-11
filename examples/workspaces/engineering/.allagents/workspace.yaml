@@ -37,5 +37,22 @@ plugins:
     skills:
       - herdr
 
+  # Pi owns package installation and loading. Explicit client overrides keep
+  # these packages separate from the universal file-mode skills above.
+  # Save project trust in Pi before initialization; see ../README.md.
+  # Reviewed pins are reconciled as declared, not upgraded to latest.
+  - source: npm:pi-web-access@0.37.0
+    clients: [pi]
+    install: native
+  - source: npm:pi-compound-engineering@3.19.2
+    clients: [pi]
+    install: native
+  - source: npm:pi-subagents@0.76.1
+    clients: [pi]
+    install: native
+  - source: npm:pi-ask-user@0.16.0
+    clients: [pi]
+    install: native
+
 clients:
   - universal

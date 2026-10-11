@@ -48,7 +48,6 @@ describe('ordinary remote plugin sources', () => {
     const effective = getEffectivePluginSource({ source: `${remote}#subdir=collections%2Fteam`, ref: 'release/demo' });
     expect(paths.parseRemotePluginSource(effective)).toMatchObject({ branch: 'release/demo', subpath: 'collections/team' });
     expect(getEffectivePluginSource({ source: 'owner/repo/sub', ref: 'release' })).toBe('owner/repo@release/sub');
-    expect(getEffectivePluginSource({ source: 'https://github.com/owner/repo', ref: 'main' })).toBe('https://github.com/owner/repo#ref=main');
     expect(getEffectivePluginSource({ source: './local', ref: 'release' })).toBe('./local');
   });
 

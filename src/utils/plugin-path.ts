@@ -371,7 +371,7 @@ export function withPluginSourceRef(source: string, ref?: string): string {
   if (!ref) return source;
   const remote = parseRemotePluginSource(source);
   if (!remote || remote.branch) return source;
-  if (remote.type === 'github' && !source.includes('://') && !source.includes('#') && !ref.includes('/')) {
+  if (remote.type === 'github' && !source.includes('#') && !ref.includes('/')) {
     const shorthand = source.replace(/^https?:\/\/(?:www\.)?github\.com\//, '').replace(/^github\.com\//, '').replace(/^gh:/, '');
     if (!shorthand.includes(':')) {
       const parts = shorthand.split('/');

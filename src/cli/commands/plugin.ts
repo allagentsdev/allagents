@@ -97,6 +97,7 @@ import {
   formatPluginSource,
   getPluginDisplayName,
   isRemotePluginSource,
+  parseRemotePluginSource,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1578,6 +1579,16 @@ const pluginUninstallCmd = command({
 
 type PluginUpdateEntry = Pick<InstalledPluginInfo, 'spec' | 'effectiveSpec' | 'scope'> & { configIndex: number };
 
+function pluginUpdateSource(entry: PluginUpdateEntry): string {
+  // Preserve direct HTTPS update routing when object-ref normalization produces
+  // the legacy GitHub shorthand used for declaration and cache identity.
+  if (entry.spec.startsWith('https://github.com/') && !entry.effectiveSpec.startsWith('https://github.com/')) {
+    const ref = parseRemotePluginSource(entry.effectiveSpec)?.branch;
+    if (ref) return `${entry.spec}#ref=${encodeURIComponent(ref)}`;
+  }
+  return entry.effectiveSpec;
+}
+
 const pluginUpdateCmd = command({
   name: 'update',
   description: buildDescription(pluginUpdateMeta),
@@ -1781,7 +1792,7 @@ const pluginUpdateCmd = command({
         checks.set(
           key,
           await checkPluginUpdate(
-            entry.effectiveSpec,
+            pluginUpdateSource(entry),
             depsByScope[entry.scope],
             updateContext,
           ),
@@ -1841,7 +1852,7 @@ const pluginUpdateCmd = command({
         } else {
           announceDeclaration(entry);
           result = await applyPluginUpdate(
-            entry.effectiveSpec,
+            pluginUpdateSource(entry),
             depsByScope[pluginScope],
             updateContext,
           );

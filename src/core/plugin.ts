@@ -2,7 +2,9 @@ import { mkdir, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
-  parseGitHubUrl,
+  parseRemotePluginSource,
+  isRemotePluginSource,
+  type RemotePluginSource,
   getPluginCachePath,
   parseMarketplaceLocation,
   validatePluginSource,
@@ -109,8 +111,21 @@ export function resetFetchCache(): void {
   fetchCache.clear();
 }
 
+function remoteWithBranch(
+  remote: RemotePluginSource,
+  branch: string,
+): RemotePluginSource {
+  const cachePath =
+    remote.type === 'github'
+      ? getPluginCachePath(remote.owner ?? '', remote.repo, branch)
+      : (parseRemotePluginSource(
+          `${remote.url}#ref=${encodeURIComponent(branch)}`,
+        )?.cachePath ?? remote.cachePath);
+  return { ...remote, branch, cachePath };
+}
+
 /**
- * Seed the fetch cache with a pre-resolved path for a GitHub URL.
+ * Seed the fetch cache with a pre-resolved path for a remote source.
  *
  * Call this after marketplace registration/update so that subsequent
  * `fetchPlugin` calls for the same repo skip the redundant git pull.
@@ -119,12 +134,17 @@ export function resetFetchCache(): void {
  * @param path - Local path where the repo already exists
  * @param branch - Optional branch override (seeds branch-qualified cache key)
  */
-export function seedFetchCache(url: string, path: string, branch?: string): void {
-  const parsed = parseGitHubUrl(url);
+export function seedFetchCache(
+  url: string,
+  path: string,
+  branch?: string,
+): void {
+  const parsed = parseRemotePluginSource(url);
   if (!parsed) return;
 
-  const { owner, repo } = parsed;
-  const cachePath = getPluginCachePath(owner, repo, branch ?? parsed.branch);
+  const cachePath = branch
+    ? remoteWithBranch(parsed, branch).cachePath
+    : parsed.cachePath;
 
   // Don't overwrite if already populated (e.g. by a prior fetchPlugin call)
   if (fetchCache.has(cachePath)) return;
@@ -140,7 +160,7 @@ export function seedFetchCache(url: string, path: string, branch?: string): void
 }
 
 /**
- * Fetch a plugin from GitHub to local cache.
+ * Fetch a plugin from a Git remote to local cache.
  *
  * Deduplicates git operations: the first caller for a given cache path
  * performs the git pull/clone; all subsequent callers (concurrent or
@@ -169,8 +189,8 @@ export async function fetchPlugin(
     };
   }
 
-  // Parse GitHub URL
-  const parsed = parseGitHubUrl(url);
+  // Resolve clone URL and physical cache identity
+  const parsed = parseRemotePluginSource(url);
   if (!parsed) {
     return {
       success: false,
@@ -181,9 +201,8 @@ export async function fetchPlugin(
     };
   }
 
-  const { owner, repo } = parsed;
-  const effectiveBranch = branch ?? parsed.branch;
-  const cachePath = getPluginCachePath(owner, repo, effectiveBranch);
+  const remote = branch ? remoteWithBranch(parsed, branch) : parsed;
+  const { cachePath } = remote;
 
   // Return cached result if this repo was already fetched this session
   const cached = fetchCache.get(cachePath);
@@ -191,14 +210,7 @@ export async function fetchPlugin(
     return cached;
   }
 
-  const promise = doFetchPlugin(
-    cachePath,
-    owner,
-    repo,
-    offline,
-    effectiveBranch,
-    deps,
-  );
+  const promise = doFetchPlugin(remote, offline, deps);
   fetchCache.set(cachePath, promise);
   return promise;
 }
@@ -207,11 +219,8 @@ export async function fetchPlugin(
  * Internal: performs the actual git fetch/pull/clone for a plugin.
  */
 async function doFetchPlugin(
-  cachePath: string,
-  owner: string,
-  repo: string,
+  remote: RemotePluginSource,
   offline: boolean,
-  branch: string | undefined,
   deps: FetchDeps,
 ): Promise<FetchResult> {
   const {
@@ -221,19 +230,30 @@ async function doFetchPlugin(
     pull: pullFn = pull,
   } = deps;
 
+  const { cachePath, branch, url: repoUrl } = remote;
+  const remoteName =
+    remote.type === 'github' ? `${remote.owner}/${remote.repo}` : remote.url;
   // Check if plugin is already cached
   const isCached = existsSyncFn(cachePath);
 
-  if (isCached && offline) {
+  if (offline) {
+    if (!isCached)
+      return {
+        success: false,
+        action: 'skipped',
+        cachePath,
+        error: `Offline: plugin is not cached: ${remoteName}`,
+      };
     // Offline mode: use cached version without fetching
+    const sha = await resolveHeadSha(cachePath);
     return {
       success: true,
       action: 'skipped',
       cachePath,
+      ...(branch && { resolvedRef: branch }),
+      ...(sha && { resolvedSha: sha }),
     };
   }
-
-  const repoUrl = gitHubUrl(owner, repo);
 
   if (isCached) {
     // Pull latest changes, but treat failures as non-fatal since the
@@ -252,12 +272,15 @@ async function doFetchPlugin(
         ...(branch && { resolvedRef: branch }),
         ...(sha && { resolvedSha: sha }),
       };
-    } catch {
+    } catch (error) {
       const sha = await resolveHeadSha(cachePath);
       return {
         success: true,
         action: 'skipped',
         cachePath,
+        ...(remote.type === 'git' && {
+          error: `Failed to update cached plugin: ${error instanceof Error ? error.message : String(error)}`,
+        }),
         ...(branch && { resolvedRef: branch }),
         ...(sha && { resolvedSha: sha }),
       };
@@ -290,7 +313,7 @@ async function doFetchPlugin(
           success: false,
           action: 'skipped',
           cachePath,
-          error: `Authentication failed for ${owner}/${repo}.\n  Check your SSH keys or git credentials.`,
+          error: `Authentication failed for ${remoteName}.\n  Check your SSH keys or git credentials.`,
         };
       }
       if (error.isTimeout) {
@@ -298,7 +321,7 @@ async function doFetchPlugin(
           success: false,
           action: 'skipped',
           cachePath,
-          error: `Clone timed out for ${owner}/${repo}.\n  Check your network connection.`,
+          error: `Clone timed out for ${remoteName}.\n  Check your network connection.`,
         };
       }
     }
@@ -439,20 +462,49 @@ export interface InstalledPluginUpdateResult {
  * Shared by the non-mutating check and the applying update.
  */
 export interface PluginUpdateCheckDeps extends PluginUpdateFetchDeps {
-  parsePluginSpec: (spec: string) => { plugin: string; marketplaceName: string; owner?: string; repo?: string } | null;
-  getMarketplaceRegistration: (name: string, sourceLocation?: string) => Promise<{
+  parsePluginSpec: (
+    spec: string,
+  ) => {
+    plugin: string;
+    marketplaceName: string;
+    owner?: string;
+    repo?: string;
+  } | null;
+  getMarketplaceRegistration: (
+    name: string,
+    sourceLocation?: string,
+  ) => Promise<{
     key: string;
-    entry: { name: string; path: string; source: { type: 'github' | 'git' | 'local'; location: string } };
+    entry: {
+      name: string;
+      path: string;
+      source: { type: 'github' | 'git' | 'local'; location: string };
+    };
   } | null>;
-  validateMarketplaceAccess: (marketplace: { name: string; path: string; source: { type: 'github' | 'git' | 'local'; location: string } }) => string | undefined;
-  parseMarketplaceManifest: (path: string) => Promise<{ success: boolean; data?: { plugins: Array<{ name: string; source: string | { url: string } }> } }>;
+  validateMarketplaceAccess: (marketplace: {
+    name: string;
+    path: string;
+    source: { type: 'github' | 'git' | 'local'; location: string };
+  }) => string | undefined;
+  parseMarketplaceManifest: (
+    path: string,
+  ) => Promise<{
+    success: boolean;
+    data?: {
+      plugins: Array<{ name: string; source: string | { url: string } }>;
+    };
+  }>;
 }
 
 /**
  * Dependencies for updatePlugin (for testing)
  */
 export interface UpdatePluginDeps extends PluginUpdateCheckDeps {
-  updateMarketplace: (name: string) => Promise<Array<{ name: string; success: boolean; error?: string; changed?: boolean }>>;
+  updateMarketplace: (
+    name: string,
+  ) => Promise<
+    Array<{ name: string; success: boolean; error?: string; changed?: boolean }>
+  >;
   /** Optional fetch function for testing - defaults to fetchPlugin */
   fetchFn?: (url: string) => Promise<FetchResult>;
   /** Optional dependencies for the context-aware direct update path. */
@@ -549,7 +601,9 @@ async function marketplaceUpdateState(
       : undefined;
   return checkoutUpdateState(
     marketplace.path,
-    location ? gitHubUrl(location.owner, location.repo) : marketplace.source.location,
+    location
+      ? gitHubUrl(location.owner, location.repo)
+      : marketplace.source.location,
     location?.branch,
     context,
     deps,
@@ -568,18 +622,19 @@ async function directUrlUpdateCheck(
       ...(validation.error && { error: validation.error }),
     };
   }
-  const github = parseGitHubUrl(url);
-  if (!github) {
+  const remote = parseRemotePluginSource(url);
+  if (!remote) {
     return {
       status: 'failed',
-      error: 'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
+      error:
+        'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
     };
   }
   return {
     status: await checkoutUpdateState(
-      getPluginCachePath(github.owner, github.repo, github.branch),
-      gitHubUrl(github.owner, github.repo),
-      github.branch,
+      remote.cachePath,
+      remote.url,
+      remote.branch,
       context,
       deps,
     ),
@@ -595,12 +650,17 @@ export async function checkPluginUpdate(
   deps: PluginUpdateCheckDeps,
   context?: UpdateContext,
 ): Promise<PluginUpdateCheck> {
-  const parsed = deps.parsePluginSpec(pluginSpec);
+  const parsed = isRemotePluginSource(pluginSpec)
+    ? null
+    : deps.parsePluginSpec(pluginSpec);
   if (!parsed) {
-    if (!pluginSpec.startsWith('https://github.com/')) {
+    if (!isRemotePluginSource(pluginSpec)) {
       return { plugin: pluginSpec, status: 'not-remote' };
     }
-    return { plugin: pluginSpec, ...(await directUrlUpdateCheck(pluginSpec, deps, context)) };
+    return {
+      plugin: pluginSpec,
+      ...(await directUrlUpdateCheck(pluginSpec, deps, context)),
+    };
   }
 
   const sourceLocation =
@@ -626,7 +686,9 @@ export async function checkPluginUpdate(
   // declaration as work to do rather than claiming it is current.
   const manifest = await deps.parseMarketplaceManifest(marketplace.path);
   const pluginEntry = manifest.success
-    ? manifest.data?.plugins.find((candidate) => candidate.name === parsed.plugin)
+    ? manifest.data?.plugins.find(
+        (candidate) => candidate.name === parsed.plugin,
+      )
     : undefined;
   if (!pluginEntry) {
     return { plugin: pluginSpec, status: 'available' };
@@ -685,7 +747,7 @@ async function fetchPluginForUpdate(
     };
   }
 
-  const parsed = parseGitHubUrl(url);
+  const parsed = parseRemotePluginSource(url);
   if (!parsed) {
     return {
       success: false,
@@ -697,9 +759,9 @@ async function fetchPluginForUpdate(
     };
   }
 
-  const { owner, repo, branch } = parsed;
-  const cachePath = getPluginCachePath(owner, repo, branch);
-  const source = gitHubUrl(owner, repo);
+  const { cachePath, branch, url: source } = parsed;
+  const remoteName =
+    parsed.type === 'github' ? `${parsed.owner}/${parsed.repo}` : source;
   const existsSyncFn = dependencies.existsSync ?? existsSync;
   const pullFn = dependencies.pull ?? pull;
   const mkdirFn = dependencies.mkdir ?? mkdir;
@@ -763,7 +825,7 @@ async function fetchPluginForUpdate(
           action: 'skipped',
           cachePath,
           changed: false,
-          error: `Authentication failed for ${owner}/${repo}.\n  Check your SSH keys or git credentials.`,
+          error: `Authentication failed for ${remoteName}.\n  Check your SSH keys or git credentials.`,
         };
       }
       if (error.isTimeout) {
@@ -772,7 +834,7 @@ async function fetchPluginForUpdate(
           action: 'skipped',
           cachePath,
           changed: false,
-          error: `Clone timed out for ${owner}/${repo}.\n  Check your network connection.`,
+          error: `Clone timed out for ${remoteName}.\n  Check your network connection.`,
         };
       }
     }
@@ -878,6 +940,9 @@ async function fetchPluginForUpdate(
       cachePath,
       changed: false,
       ...(branch && { resolvedRef: branch }),
+      ...(parsed.type === 'git' && {
+        error: `Failed to update cached plugin: ${fact.error instanceof Error ? fact.error.message : String(fact.error)}`,
+      }),
       resolvedSha: retainedCommit,
     };
   }
@@ -911,11 +976,13 @@ export async function applyPluginUpdate(
       : (deps.fetchFn ?? fetchPlugin);
 
   // Handle plugin@marketplace format
-  const parsed = deps.parsePluginSpec(pluginSpec);
+  const parsed = isRemotePluginSource(pluginSpec)
+    ? null
+    : deps.parsePluginSpec(pluginSpec);
   if (!parsed) {
-    // Might be a GitHub URL or local path
-    if (pluginSpec.startsWith('https://github.com/')) {
-      // External GitHub URL - update the cached repo
+    // A direct remote source or local path
+    if (isRemotePluginSource(pluginSpec)) {
+      // Direct remote source - update the cached repo
       const result = await fetchForUpdate(pluginSpec);
       return {
         plugin: pluginSpec,
@@ -927,7 +994,9 @@ export async function applyPluginUpdate(
               ? 'skipped'
               : 'failed',
         ...(result.error && { error: result.error }),
-        ...(context && { changed: result.success ? (result.changed ?? false) : false }),
+        ...(context && {
+          changed: result.success ? (result.changed ?? false) : false,
+        }),
       };
     }
 
@@ -1034,8 +1103,7 @@ export async function applyPluginUpdate(
   if (marketplace.source.type === 'github') {
     const marketplaceResult = (await deps.updateMarketplace(marketplaceKey))[0];
     marketplaceChanged =
-      marketplaceResult?.success === true &&
-      marketplaceResult.changed === true;
+      marketplaceResult?.success === true && marketplaceResult.changed === true;
   }
 
   // Update the external plugin cache. Its public result remains authoritative.

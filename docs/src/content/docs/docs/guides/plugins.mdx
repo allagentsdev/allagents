@@ -110,6 +110,41 @@ After sync:
 This rename-based deduplication applies to **plugin skills** (copied to `.claude/skills/`). **Repository skills** embedded in the WORKSPACE-RULES index use a different strategy — they pick a single winner rather than keeping all copies. See [Repository Skill Discovery](/docs/reference/configuration/#repository-skill-discovery) for details.
 :::
 
+## Git remotes for file installations
+
+File installations accept SSH URLs with custom ports, SCP-style remotes, and
+HTTPS remotes on Git servers such as Forgejo and GitLab. Git uses your existing
+SSH identity, agent, and credential helpers. A marketplace manifest is optional;
+ordinary plugin directories and collections of `SKILL.md` files are discovered
+after cloning.
+
+```bash
+allagents plugin install 'ssh://git@git.example.com:2222/team/skills.git' \
+  --scope project --client codex,pi --skill fixture --yes
+
+allagents plugin install 'git@git.example.com:team/skills.git' \
+  --scope user --client codex --yes
+
+allagents plugin install 'https://git.example.com/team/skills.git#ref=release%2Fstable&subdir=collections%2Fteam' \
+  --scope project --client codex --yes
+```
+
+Generic Git URLs treat the entire repository path as the remote. Select a
+repository subdirectory with `#subdir=...`, and a branch or tag with `#ref=...`.
+Percent-encode each value and quote the complete source in shell commands.
+Subdirectories must stay inside the checkout. An object-form `ref` supplies a
+ref when the source has no inline ref.
+
+`plugin update` refreshes the selected checkout and reconciles its owned client
+artifacts. `workspace sync --offline` uses an existing cache and fails if that
+source/ref has never been cached. Uninstall removes the declaration and owned
+artifacts. Different remote URLs and refs have separate caches; subdirectories
+of the same remote/ref share a checkout.
+
+Use `install: file` to declare this behavior explicitly when clients have native
+installation configured. Native package transport retains the client's own
+source syntax and lifecycle.
+
 ## Choosing Install Scope and Clients
 
 `allagents plugin install` asks where to save a new declaration and which

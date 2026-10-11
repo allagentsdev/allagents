@@ -34,6 +34,7 @@ Put shared formatting in `src/cli/format-sync.ts` rather than duplicating it at 
 - Explicit npm/Git package sources are not `plugin@marketplace` declarations. Do not interpret npm versions, Git refs, or SSH transport usernames as marketplace names.
 - Keep independently configured package and file installations distinct, even when they expose the same upstream skills. UI hints should identify their configured clients, install methods, and scopes; updates/removals retain exact source and configuration-index targeting.
 - Native package availability comes from native resource inspection, not from treating the source string as a local cache path.
+- Ordinary file Git sources use the shared remote descriptor for transport, requested ref, cache path and provenance. Keep generic host/port/path/ref identities distinct; interpret `ref` and `subdir` metadata before Git transport, and resolve subdirectories inside the checkout. Determine native versus file status from the declaration's effective install modes.
 - The Plugins menu selects individual resources. Bulk updates remain under Workspace → Status → Update all.
 
 ## VS Code and Copilot identity

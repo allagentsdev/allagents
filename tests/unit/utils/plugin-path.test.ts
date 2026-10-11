@@ -1,32 +1,20 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { describe, it, expect, spyOn, beforeEach, afterAll } from 'bun:test';
 import { join, resolve, sep } from 'node:path';
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getHomeDir } from '../../../src/constants.js';
 
-// Mock the git module for verifyGitHubUrlExists tests
-const repoExistsMock = mock(() => Promise.resolve(true));
-const cloneToTempMock = mock(() => Promise.resolve(''));
-const cleanupTempDirMock = mock(() => Promise.resolve());
+import * as git from '../../../src/core/git.js';
 
-mock.module('../../../src/core/git.js', () => ({
-  repoExists: repoExistsMock,
-  cloneToTemp: cloneToTempMock,
-  cleanupTempDir: cleanupTempDirMock,
-  gitHubUrl: (owner: string, repo: string) => `https://github.com/${owner}/${repo}.git`,
-  GitCloneError: class GitCloneError extends Error {
-    url: string;
-    isTimeout: boolean;
-    isAuthError: boolean;
-    constructor(message: string, url: string, isTimeout = false, isAuthError = false) {
-      super(message);
-      this.name = 'GitCloneError';
-      this.url = url;
-      this.isTimeout = isTimeout;
-      this.isAuthError = isAuthError;
-    }
-  },
-}));
+const repoExistsMock = spyOn(git, 'repoExists').mockResolvedValue(true);
+const cloneToTempMock = spyOn(git, 'cloneToTemp').mockResolvedValue('');
+const cleanupTempDirMock = spyOn(git, 'cleanupTempDir').mockResolvedValue();
+
+afterAll(() => {
+  repoExistsMock.mockRestore();
+  cloneToTempMock.mockRestore();
+  cleanupTempDirMock.mockRestore();
+});
 
 const {
   isGitHubUrl,

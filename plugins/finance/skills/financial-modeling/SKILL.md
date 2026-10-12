@@ -24,6 +24,8 @@ Give each sheet a clear role. For a substantial model, the logical flow is **Inp
 
 Keep label, unit, constant and timeline columns in consistent positions across calculation sheets. Use descriptive labels that specify the entity and basis when ambiguous, such as whole-asset versus owner share, or cash proceeds versus taxable gain. Visually distinguish inputs, ingredient links, calculations and unresolved values with a small documented legend. Keep the periods and labels visible while scrolling.
 
+Default to parentheses for negative monetary amounts, such as `(1,234.56)`, using a number format rather than converting numbers to text or changing their signs. Preserve the font colours that identify inputs, links and calculations. An established workbook may also colour negatives red; document that preference in its legend. Apply the chosen monetary format consistently across comparable figures and preserve any explicit user convention.
+
 ## Construct calculation blocks
 
 Read [references/calculation-blocks.md](references/calculation-blocks.md) when building blocks or refactoring a long formula. Open [references/basic-calculation-blocks.xlsx](references/basic-calculation-blocks.xlsx) to inspect the same conventions as an editable, original workbook with fictional inputs.

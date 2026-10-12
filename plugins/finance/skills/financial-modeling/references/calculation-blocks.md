@@ -10,6 +10,8 @@ Inspect `Workings!D12`, `D26` and `D36` and compare their formulas across column
 
 Change `Inputs!C5` to see the allocated expense and report subtotal update. Change the opening balance in `Inputs!C7` to zero: the reduction and closing balance stay zero. The saved example was independently recalculated, checked for consistent period formulas and tested with those edits. Keep real financial records outside the skill.
 
+Monetary cells use `#,##0.00;(#,##0.00);0.00`: negative amounts display in parentheses, zero displays as `0.00`, and font colours retain their input/link/calculation meaning. The stored values remain signed numbers. This is the example's display convention, not a claim that FAST requires this exact number format.
+
 ## Allocation: amount × exposure
 
 Suppose Inputs has a source amount in B4 and a documented day-count basis in B7. Time calculates eligible days for each period in row 25. State the coverage boundaries before calculating those days; a fraction of a year and an on/off flag represent different assumptions.

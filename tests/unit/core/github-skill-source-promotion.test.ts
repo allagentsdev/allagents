@@ -35,6 +35,20 @@ describe('canonicalizeGitHubPluginSource', () => {
 });
 
 describe('upsertGitHubPluginSourceAllowlist', () => {
+  it('keeps skill selections from sibling monorepo plugins distinct', async () => {
+    const finance = 'https://github.com/example/catalogue/tree/main/plugins/finance/skills/modeling';
+    const engineering = 'https://github.com/example/catalogue/tree/main/plugins/engineering/skills/review';
+    const config: WorkspaceConfig = {
+      version: 2, repositories: [], clients: ['universal'],
+      plugins: [{ source: finance, skills: ['modeling'] }],
+    };
+    expect((await upsertGitHubPluginSourceAllowlistInConfig(config, engineering, ['review'])).success).toBe(true);
+    expect(config.plugins).toEqual([
+      { source: finance, skills: ['modeling'] },
+      { source: engineering, skills: ['review'] },
+    ]);
+  });
+
   it('updates the exact generic object-ref declaration while preserving its source and another ref', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'allagents-generic-allowlist-'));
     const source = 'ssh://alice@forgejo.example:2222/team/skills.git#subdir=selected';

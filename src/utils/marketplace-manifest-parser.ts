@@ -33,6 +33,7 @@ export type ParseResult =
  */
 export async function parseMarketplaceManifest(
   marketplacePath: string,
+  selectedPlugin?: string,
 ): Promise<ParseResult> {
   const manifestPath = MANIFEST_PATHS
     .map((path) => join(marketplacePath, path))
@@ -65,6 +66,20 @@ export async function parseMarketplaceManifest(
     };
   }
 
+  // A selected remote declaration must fail closed without preventing
+  // best-effort listing or resolution of other valid catalogue entries.
+  if (selectedPlugin && isRecord(json) && Array.isArray(json.plugins)) {
+    for (const [index, entry] of json.plugins.entries()) {
+      if (!isRecord(entry) || entry.name !== selectedPlugin || !isRecord(entry.source)) continue;
+      if (!PluginSourceRefSchema.safeParse(entry.source).success) {
+        return {
+          success: false,
+          error: `plugins[${index}]: invalid external source (SHA pins are not supported by file installations)`,
+        };
+      }
+    }
+  }
+
   // Tier 1: strict validation
   const strictResult = MarketplaceManifestSchema.safeParse(json);
   if (strictResult.success) {
@@ -72,7 +87,7 @@ export async function parseMarketplaceManifest(
   }
 
   // Tier 2: lenient parsing
-  return parseLeniently(json);
+  return parseLeniently(json, selectedPlugin);
 }
 
 /**
@@ -94,6 +109,7 @@ export async function getEmbeddedMarketplaceFileArtifacts(
   const rootEntries = manifestResult.data.plugins.filter(
     (entry) =>
       typeof entry.source === 'string' &&
+      entry.source.length > 0 &&
       resolve(pluginPath, entry.source) === pluginRoot,
   );
   const entry =
@@ -108,7 +124,7 @@ export async function getEmbeddedMarketplaceFileArtifacts(
  * Requires at minimum a `plugins` array in the JSON.
  * Validates each plugin entry individually, collecting warnings.
  */
-function parseLeniently(json: unknown): ParseResult {
+function parseLeniently(json: unknown, selectedPlugin?: string): ParseResult {
   const lenientResult = MarketplaceManifestLenientSchema.safeParse(json);
   if (!lenientResult.success) {
     return {
@@ -135,7 +151,13 @@ function parseLeniently(json: unknown): ParseResult {
     }
 
     // Best-effort extraction
-    const extracted = extractPluginEntry(entry, i, warnings);
+    const entryWarnings: string[] = [];
+    const extracted = extractPluginEntry(entry, i, entryWarnings);
+    // Unknown identities remain relevant: malformed entries must not be
+    // interpreted as authoritative removal of the selected plugin.
+    if (!selectedPlugin || !isRecord(entry) || typeof entry.name !== 'string' || !entry.name || entry.name === selectedPlugin) {
+      warnings.push(...entryWarnings);
+    }
     if (extracted) {
       validPlugins.push(extracted);
     }

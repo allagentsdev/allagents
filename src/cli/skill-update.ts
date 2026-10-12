@@ -62,12 +62,10 @@ import { canonicalizeGitSource } from '../utils/git-source.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
 import {
   formatPluginSource,
-  getPluginCachePath,
   getPluginDisplayName,
   isRemotePluginSource,
   parseRemotePluginSource,
   resolveRemotePluginPath,
-  parseGitHubUrl,
 } from '../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -448,7 +446,7 @@ async function inventoryMarketplace(
   if (!marketplaceNode) return 'local';
   marketplaceNode.currentSha = await revision(marketplaceNode.cachePath);
 
-  const manifest = await parseMarketplaceManifest(marketplace.path);
+  const manifest = await parseMarketplaceManifest(marketplace.path, spec.plugin);
   if (!manifest.success) {
     throw new Error(
       `Could not inventory marketplace '${marketplace.name}': ${manifest.error}`,
@@ -467,27 +465,23 @@ async function inventoryMarketplace(
   let rootNode: CheckoutNode = marketplaceNode;
   const nodes: CheckoutNode[] = [marketplaceNode];
   if (manifestPlugin && typeof manifestPlugin.source === 'object') {
-    const parsed = parseGitHubUrl(manifestPlugin.source.url);
+    const parsed = parseRemotePluginSource(manifestPlugin.source.url);
     if (!parsed) {
       throw new Error(
-        `External marketplace plugin '${rawSource}' is not backed by a supported GitHub source`,
+        `External marketplace plugin '${rawSource}' is not backed by a supported Git source`,
       );
     }
-    const cachePath = getPluginCachePath(
-      parsed.owner,
-      parsed.repo,
-      parsed.branch,
-    );
+    const cachePath = parsed.cachePath;
     rootNode = {
       id: cachePath,
       cachePath,
-      remoteUrl: skillUpdateGitHubUrl(parsed.owner, parsed.repo),
+      remoteUrl: parsed.url,
       role: 'dependency',
       currentSha: await revision(cachePath),
       ...(parsed.branch && { ref: parsed.branch }),
     };
     nodes.unshift(rootNode);
-    root = resolveCheckoutSubpath(cachePath, parsed.subpath ?? '');
+    root = resolveRemotePluginPath(parsed, cachePath);
   } else {
     const source =
       manifestPlugin && typeof manifestPlugin.source === 'string'
@@ -703,7 +697,7 @@ async function inspectInstallation(
         `Inspected marketplace checkout missing for ${installation.rawSource}`,
       );
     }
-    const manifest = await parseMarketplaceManifest(marketplaceCheckout);
+    const manifest = await parseMarketplaceManifest(marketplaceCheckout, installation.marketplace?.pluginName);
     if (!manifest.success) {
       return {
         installationId: installation.id,
@@ -725,7 +719,7 @@ async function inspectInstallation(
       return { installationId: installation.id, outcome: 'plugin-removed' };
     }
     if (typeof entry.source === 'object') {
-      const parsed = parseGitHubUrl(entry.source.url);
+      const parsed = parseRemotePluginSource(entry.source.url);
       if (!parsed) {
         return {
           installationId: installation.id,
@@ -733,11 +727,7 @@ async function inspectInstallation(
           error: `Unsupported external source for ${installation.rawSource}`,
         };
       }
-      const expectedNode = getPluginCachePath(
-        parsed.owner,
-        parsed.repo,
-        parsed.branch,
-      );
+      const expectedNode = parsed.cachePath;
       if (expectedNode !== installation.rootNodeId) {
         return {
           installationId: installation.id,
@@ -751,7 +741,7 @@ async function inspectInstallation(
           `Inspected external checkout missing for ${expectedNode}`,
         );
       }
-      root = resolveCheckoutSubpath(checkout, parsed.subpath ?? '');
+      root = resolveRemotePluginPath(parsed, checkout);
     } else {
       root = resolveCheckoutSubpath(marketplaceCheckout, entry.source);
     }
@@ -819,7 +809,7 @@ export async function inspectSkillUpdateUnit(
         installation.marketplace?.nodeId ?? '',
       );
       if (!marketplaceCheckout) continue;
-      const manifest = await parseMarketplaceManifest(marketplaceCheckout);
+      const manifest = await parseMarketplaceManifest(marketplaceCheckout, installation.marketplace?.pluginName);
       if (!manifest.success || manifest.warnings.length > 0) continue;
       const entry = manifest.data.plugins.find(
         (candidate) => candidate.name === installation.marketplace?.pluginName,
@@ -898,8 +888,11 @@ async function skillUpdateDomainRootsReadable(
   }
   if (roots.size === 0) return false;
   if (includesMarketplace) {
-    const manifest = await parseMarketplaceManifest(node.cachePath);
-    if (!manifest.success || manifest.warnings.length > 0) return false;
+    for (const installation of unit.installations) {
+      if (installation.marketplace?.nodeId !== node.id) continue;
+      const manifest = await parseMarketplaceManifest(node.cachePath, installation.marketplace.pluginName);
+      if (!manifest.success || manifest.warnings.length > 0) return false;
+    }
   }
   const readable = await Promise.all(
     [...roots].map((root) =>

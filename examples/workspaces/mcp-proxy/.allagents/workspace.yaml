@@ -34,7 +34,7 @@ plugins:
   # Real HTTP MCP server from the official AllAgents marketplace.
   # The deepwiki plugin ships a `.mcp.json` that declares:
   #   { "deepwiki": { "type": "http", "url": "https://mcp.deepwiki.com/mcp" } }
-  - allagentsdev/allagents/plugins/deepwiki
+  - deepwiki@allagentsdev/agent-plugins
 
 clients:
   - claude

@@ -409,20 +409,20 @@ describe('skill update command adapters', () => {
     process.env.ALLAGENTS_TEST_HOME = home;
 
     try {
-      const external = getPluginCachePath('acme', 'external-skills');
+      const external = getPluginCachePath('acme', 'external-skills', 'review');
       await mkdir(join(workspace, '.allagents'), { recursive: true });
       await mkdir(join(home, '.allagents'), { recursive: true });
       await mkdir(join(marketplace, '.claude-plugin'), { recursive: true });
       await mkdir(join(marketplace, 'plugins/embedded/skills/inside'), {
         recursive: true,
       });
-      await mkdir(join(external, 'skills/outside'), { recursive: true });
+      await mkdir(join(external, 'plugins/finance/skills/outside'), { recursive: true });
       await writeFile(
         join(marketplace, 'plugins/embedded/skills/inside/SKILL.md'),
         '---\nname: inside\ndescription: embedded\n---\n',
       );
       await writeFile(
-        join(external, 'skills/outside/SKILL.md'),
+        join(external, 'plugins/finance/skills/outside/SKILL.md'),
         '---\nname: outside\ndescription: external\n---\n',
       );
       await writeFile(
@@ -431,6 +431,7 @@ describe('skill update command adapters', () => {
           name: 'catalog',
           description: 'test catalog',
           plugins: [
+            { name: 'unsupported', description: 'Pinned sibling', source: { source: 'github', repo: 'acme/unsupported', sha: 'a'.repeat(40) } },
             {
               name: 'embedded',
               description: 'embedded plugin',
@@ -440,8 +441,10 @@ describe('skill update command adapters', () => {
               name: 'external',
               description: 'external plugin',
               source: {
-                source: 'url',
+                source: 'git-subdir',
                 url: 'https://github.com/acme/external-skills',
+                path: 'plugins/finance',
+                ref: 'review',
               },
             },
           ],
@@ -487,6 +490,9 @@ describe('skill update command adapters', () => {
         marketplace,
       ]);
       expect(externalEntry?.nodes[0]?.role).toBe('dependency');
+      expect(externalEntry?.rootSubpath).toBe('plugins/finance');
+      expect(externalEntry?.nodes[0]?.ref).toBe('review');
+      expect(externalEntry?.skills.map((skill) => skill.name)).toEqual(['outside']);
       expect(embedded?.marketplace?.nodeId).toBe(marketplace);
       expect(externalEntry?.marketplace?.nodeId).toBe(marketplace);
     } finally {
@@ -540,6 +546,56 @@ describe('skill update command adapters', () => {
       expect(result.installations).toEqual([
         { installationId: 'project:0', outcome: 'plugin-removed' },
       ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('classifies a rejected selected declaration as failure rather than removal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-skill-update-removed-'));
+    try {
+      await mkdir(join(root, '.claude-plugin'), { recursive: true });
+      await writeFile(
+        join(root, '.claude-plugin/marketplace.json'),
+        JSON.stringify({
+          name: 'catalog',
+          description: 'test catalog',
+          plugins: [{ name: 'gone', description: 'Selected pinned plugin', source: { source: 'github', repo: 'acme/pinned', sha: 'a'.repeat(40) } }],
+        }),
+      );
+      await initCheckout(root);
+      const sha = runGit(root, ['rev-parse', 'HEAD']);
+      const result = await inspectSkillUpdateUnit({
+        id: root,
+        nodes: [
+          {
+            id: root,
+            cachePath: root,
+            remoteUrl: root,
+            role: 'root',
+            currentSha: sha,
+          },
+        ],
+        installations: [
+          {
+            id: 'project:0',
+            scope: 'project',
+            configIndex: 0,
+            rawSource: 'gone@catalog',
+            effectiveSource: 'gone@catalog',
+            pluginName: 'gone',
+            rootNodeId: root,
+            rootSubpath: 'plugins/gone',
+            nodes: [],
+            skills: [{ name: 'gone', subpath: 'gone', enabled: true }],
+            marketplace: { nodeId: root, pluginName: 'gone' },
+          },
+        ],
+      });
+
+      expect(result.outcome).toBe('failed');
+      expect(result.installations[0]?.outcome).toBe('failed');
+      expect(result.installations[0]?.error).toContain('SHA pins');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

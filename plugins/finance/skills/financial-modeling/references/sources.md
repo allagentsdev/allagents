@@ -17,3 +17,13 @@ Inspected on 10 October 2026 through the public download links on F1F9's example
 - [Renewables Model 01a (XLSM)](https://www.f1f9.com/wp-content/uploads/2026/02/F1F9-Example-Renewables-Model-01a.xlsm): `M-Devex!F9` imports an assumption from `Input!F48`, `M-Devex!L13` imports a timing flag from `M-Time!L60`, and `M-Devex!L16` combines the local constant and flag. `Repayment!L43` imports the prior closing balance from `K46` before `L46` calculates the next closing balance.
 
 These are observations of workbook structure, not independently validated business assumptions or calculations. The macro-enabled sample was inspected as spreadsheet data without executing VBA. The third-party files are not bundled with this plugin; the calculation-block examples in this skill were written separately with fictional inputs.
+
+Re-inspected both public samples on 12 October 2026. The corporate model's `Rev!L60:M60` and renewables model's `M-Devex!L16:M16` preserve the same relative formula pattern across periods. `Repayment!L43:L46` presents opening balance and movements locally before the closing result. The renewables sample uses yellow-filled assumption cells, blue import links and black local calculations; exported results can use red font.
+
+## Applying the standard to readable formulas
+
+FAST 02c sections 2.02-01 and 2.02-03 call for local ingredients above a result and consistent ingredient order; documented exceptions include balance roll-forwards, cascading or trivial calculations and efficient two-dimensional blocks. Section 3.02-01 calls for consistent formulas across a series. Sections 3.03-01 through 3.03-05 favour short explanations, few functions and appropriate timing flags. Section 3.06 addresses direct source links; section 1.01-06 specifies blue imports and red exports.
+
+The skill's preference for plain `SUM` over a contributing range is an application of those simplicity principles. The standard does not establish this model's missing-input policy. Choose any necessary guard from the supported input states, apply it consistently, and validate completeness at the appropriate source boundary. Keep substantive reconciliations separate from repeated populated-cell counts. An established user workbook may have a different documented colour convention; distinguish that choice from literal FAST formatting compliance.
+
+The bundled [basic-calculation-blocks.xlsx](basic-calculation-blocks.xlsx) is an original teaching example containing only fictional values. It is not a copy of either F1F9 sample or a user's workbook. Private reference models may inform layout decisions, but their records and full files belong in private storage.

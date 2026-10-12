@@ -33,7 +33,8 @@ AllAgents is a CLI for managing AI coding-assistant plugins, workspaces, and cli
 - `tests/unit/`: focused behavioral contracts.
 - `tests/e2e/`: built CLI and filesystem workflows.
 - `docs/src/content/docs/`: public documentation.
-- `plugins/`: first-party plugin content.
+- `examples/workspaces/`: workspace templates that compose plugin capabilities.
+- First-party plugin content lives in `allagentsdev/agent-plugins`; this repository retains forwarding marketplace manifests for existing installations.
 - `.agents/`: task-specific repository guidance reached through the routing table below.
 
 ## Routing

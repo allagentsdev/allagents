@@ -1,34 +1,61 @@
 import { z } from 'zod';
+import { parseRemotePluginSource } from '../utils/plugin-path.js';
 
-/**
- * URL source object for plugins hosted externally
- * e.g. { source: "url", url: "https://github.com/figma/mcp-server-guide.git" }
- */
+/** External sources share the ordinary remote descriptor used by file installs. */
+const ExternalPathSchema = z.string().min(1).refine((path) => {
+  try {
+    parseRemotePluginSource(`https://github.com/example/plugins#subdir=${encodeURIComponent(path)}`);
+    return true;
+  } catch { return false; }
+}, 'Plugin path must stay inside its repository');
+
+function externalSource(url: string, ref?: string, path?: string) {
+  const metadata = new URLSearchParams();
+  if (ref) metadata.set('ref', ref);
+  if (path) metadata.set('subdir', path);
+  return {
+    source: 'url' as const,
+    url: metadata.size ? `${url}${url.includes('#') ? '&' : '#'}${metadata}` : url,
+  };
+}
+
+const externalFields = {
+  ref: z.string().min(1).optional(),
+  // Raw SHA checkout is not supported by the file installer. Reject rather
+  // than dropping the pin and installing a different revision.
+  sha: z.never().optional(),
+};
+
 export const UrlSourceSchema = z.object({
   source: z.literal('url'),
   url: z.string().url(),
-});
+  path: ExternalPathSchema.optional(),
+  ...externalFields,
+}).transform((value) => externalSource(value.url, value.ref, value.path));
 
 export type UrlSource = z.infer<typeof UrlSourceSchema>;
 
-/**
- * GitHub source object for plugins hosted on GitHub
- * e.g. { source: "github", repo: "WiseTechGlobal/mcp-ediprod" }
- * Normalized to UrlSource at parse time.
- */
 export const GitHubSourceSchema = z.object({
   source: z.literal('github'),
-  repo: z.string().min(1),
-}).transform((val) => ({
-  source: 'url' as const,
-  url: `https://github.com/${val.repo}`,
-}));
+  repo: z.string().regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/),
+  path: ExternalPathSchema.optional(),
+  ...externalFields,
+}).transform((value) => externalSource(`https://github.com/${value.repo}`, value.ref, value.path));
 
-/**
- * Plugin source: a relative path string, a URL source object, or a GitHub source object.
- * GitHub sources are normalized to URL sources during parsing.
- */
-export const PluginSourceRefSchema = z.union([z.string(), UrlSourceSchema, GitHubSourceSchema]);
+export const GitSubdirSourceSchema = z.object({
+  source: z.literal('git-subdir'),
+  url: z.string().min(1),
+  path: ExternalPathSchema,
+  ...externalFields,
+}).transform((value) => externalSource(value.url, value.ref, value.path));
+
+export const PluginSourceRefSchema = z.union([
+  z.string(), UrlSourceSchema, GitHubSourceSchema, GitSubdirSourceSchema,
+]).refine((source) => {
+  if (typeof source === 'string') return true;
+  try { return parseRemotePluginSource(source.url) !== null; }
+  catch { return false; }
+}, 'Invalid external Git source');
 
 export type PluginSourceRef = z.infer<typeof PluginSourceRefSchema>;
 

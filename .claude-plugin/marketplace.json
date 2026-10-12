@@ -10,27 +10,47 @@
     {
       "name": "allagents",
       "description": "End-user guidance for managing AllAgents through its CLI",
-      "source": "./plugins/allagents"
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/allagentsdev/agent-plugins.git",
+        "path": "plugins/allagents"
+      }
     },
     {
       "name": "deepwiki",
       "description": "AI-generated documentation for GitHub repositories",
-      "source": "./plugins/deepwiki"
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/allagentsdev/agent-plugins.git",
+        "path": "plugins/deepwiki"
+      }
     },
     {
       "name": "engineering",
       "description": "Reusable engineering workflow skills",
-      "source": "./plugins/engineering"
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/allagentsdev/agent-plugins.git",
+        "path": "plugins/engineering"
+      }
     },
     {
       "name": "tradingview",
       "description": "Official TradingView market data and analytics",
-      "source": "./plugins/tradingview"
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/allagentsdev/agent-plugins.git",
+        "path": "plugins/tradingview"
+      }
     },
     {
       "name": "finance",
       "description": "Transparent spreadsheet financial modeling with reusable calculation blocks and validated outputs",
-      "source": "./plugins/finance",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/allagentsdev/agent-plugins.git",
+        "path": "plugins/finance"
+      },
       "category": "finance"
     }
   ]

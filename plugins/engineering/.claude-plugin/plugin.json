@@ -1,9 +1,0 @@
-{
-  "name": "engineering",
-  "description": "Reusable engineering workflow skills for repository maintenance, delivery, and interactive pull request review.",
-  "author": {
-    "name": "AllAgents"
-  },
-  "version": "1.0.1",
-  "homepage": "https://github.com/allagentsdev/allagents/tree/main/plugins/engineering"
-}

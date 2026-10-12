@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, posix } from 'node:path';
 import { fetchPlugin } from './plugin.js';
 import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
@@ -836,6 +836,22 @@ async function findPluginEntryByGitHubIdentity(
       getPluginSource(entry),
     );
     if (existingIdentity === identity) return i;
+    // Skill-source promotion may widen two direct skill selections to their
+    // common parent. Keep that operation within one plugin's skills tree;
+    // marketplace selections and sibling monorepo plugins stay distinct.
+    const current = parseRemotePluginSource(getPluginSource(entry));
+    const next = parseRemotePluginSource(source);
+    if (current?.type !== 'github' || next?.type !== 'github') continue;
+    const skillRoot = (subpath: string | undefined): string | null => {
+      if (!subpath) return '';
+      const parts = subpath.split('/');
+      const index = parts.indexOf('skills');
+      return index === -1 ? null : parts.slice(0, index).join('/');
+    };
+    const currentRoot = skillRoot(current.subpath);
+    if (currentRoot !== null && currentRoot === skillRoot(next.subpath) &&
+      current.owner?.toLowerCase() === next.owner?.toLowerCase() &&
+      current.repo.toLowerCase() === next.repo.toLowerCase()) return i;
   }
 
   return -1;
@@ -1397,17 +1413,20 @@ export function pruneEnabledSkillsForPlugin(
 }
 
 /**
- * Resolve a plugin source to its GitHub owner/repo identity, if it points to
- * a GitHub repo (directly or via a marketplace URL source). Returns null for
- * local-path plugins.
+ * Resolve a source's selected GitHub plugin identity, directly or through a
+ * marketplace. Subdirectories distinguish plugins sharing a repository; refs
+ * do not change the selected plugin's identity.
  */
 export async function resolveGitHubIdentity(
   pluginSource: string,
 ): Promise<string | null> {
-  if (isGitHubUrl(pluginSource)) {
-    const parsed = parseGitHubUrl(pluginSource);
-    return parsed ? `${parsed.owner}/${parsed.repo}`.toLowerCase() : null;
-  }
+  const identity = (source: string): string | null => {
+    const remote = parseRemotePluginSource(source);
+    if (remote?.type !== 'github') return null;
+    const repository = `${remote.owner}/${remote.repo}`.toLowerCase();
+    return `${repository}${remote.subpath ? `/${posix.normalize(remote.subpath)}` : ''}`;
+  };
+  if (isRemotePluginSource(pluginSource)) return identity(pluginSource);
 
   if (isPluginSpec(pluginSource)) {
     const parsed = parsePluginSpec(pluginSource);
@@ -1417,18 +1436,14 @@ export async function resolveGitHubIdentity(
     if (!marketplace) return null;
     if (getMarketplaceAccessError(marketplace)) return null;
 
-    const manifestResult = await parseMarketplaceManifest(marketplace.path);
+    const manifestResult = await parseMarketplaceManifest(marketplace.path, parsed.plugin);
     if (!manifestResult.success) return null;
 
     const entry = manifestResult.data.plugins.find(
       (p) => p.name === parsed.plugin,
     );
     if (!entry || typeof entry.source === 'string') return null;
-
-    const parsedUrl = parseGitHubUrl(entry.source.url);
-    return parsedUrl
-      ? `${parsedUrl.owner}/${parsedUrl.repo}`.toLowerCase()
-      : null;
+    return identity(entry.source.url);
   }
 
   return null;

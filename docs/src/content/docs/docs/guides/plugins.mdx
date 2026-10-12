@@ -260,3 +260,37 @@ Plugins use the `plugin@marketplace` format:
 | Well-known | `code-review@claude-plugins-official` |
 | owner/repo | `my-plugin@owner/repo` |
 | GitHub marketplace URL | `my-plugin@https://github.com/owner/repo` |
+
+## First-party Plugin Catalogue
+
+Reusable AllAgents plugins live in [allagentsdev/agent-plugins](https://github.com/allagentsdev/agent-plugins).
+Workspace templates remain in [allagentsdev/allagents/examples/workspaces](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces)
+and select capabilities from that catalogue:
+
+```yaml
+plugins:
+  - finance@allagentsdev/agent-plugins
+```
+
+Existing marketplace declarations such as `finance@allagentsdev/allagents`
+continue to use the `allagents` marketplace, whose entries forward to the new
+catalogue. Upgrade AllAgents before refreshing that marketplace: external
+plugin paths require the updated resolver. Native Claude and Copilot clients
+use their own marketplace source formats; update those clients if their
+installed versions do not support external plugin subdirectories.
+
+Direct old paths such as `allagentsdev/allagents/plugins/deepwiki` must be
+changed to `deepwiki@allagentsdev/agent-plugins`. Plugin directories are no
+longer stored in the CLI repository. Git refs that predate the move retain
+their original contents.
+
+External marketplace entries accept `github`, `url` and `git-subdir` source
+objects. AllAgents preserves their `ref` and `path`, resolves only the selected
+subdirectory for online and offline file installations, and rejects paths
+that escape the checkout. File installations currently reject explicit `sha`
+pins; use a branch or tag in `ref` instead. This limitation does not alter
+what native clients support themselves.
+
+For contributors, merge the catalogue extraction into `agent-plugins/main`
+before merging the CLI relocation: the forwarding entries follow the new
+repository's default branch.

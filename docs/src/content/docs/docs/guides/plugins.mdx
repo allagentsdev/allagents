@@ -263,7 +263,9 @@ Plugins use the `plugin@marketplace` format:
 
 ## First-party Plugin Catalogue
 
-Reusable AllAgents plugins live in [allagentsdev/agent-plugins](https://github.com/allagentsdev/agent-plugins).
+Reusable plugins live in [allagentsdev/agent-plugins](https://github.com/allagentsdev/agent-plugins).
+The CLI-specific `allagents` guidance plugin remains in this repository under
+`plugins/allagents`, installed as `allagents@allagentsdev/allagents`.
 Workspace templates remain in [allagentsdev/allagents/examples/workspaces](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces)
 and select capabilities from that catalogue:
 
@@ -280,8 +282,8 @@ use their own marketplace source formats; update those clients if their
 installed versions do not support external plugin subdirectories.
 
 Direct old paths such as `allagentsdev/allagents/plugins/deepwiki` must be
-changed to `deepwiki@allagentsdev/agent-plugins`. Plugin directories are no
-longer stored in the CLI repository. Git refs that predate the move retain
+changed to `deepwiki@allagentsdev/agent-plugins`. The four reusable plugin
+directories move out of the CLI repository. Git refs that predate the move retain
 their original contents.
 
 External marketplace entries accept `github`, `url` and `git-subdir` source

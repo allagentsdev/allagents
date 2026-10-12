@@ -10,11 +10,7 @@
     {
       "name": "allagents",
       "description": "End-user guidance for managing AllAgents through its CLI",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/allagentsdev/agent-plugins.git",
-        "path": "plugins/allagents"
-      }
+      "source": "./plugins/allagents"
     },
     {
       "name": "deepwiki",

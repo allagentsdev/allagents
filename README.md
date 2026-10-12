@@ -28,7 +28,7 @@ Install the end-user AllAgents skill when you want your coding agent to operate
 the CLI using its current machine-readable command contracts:
 
 ```bash
-npx allagents plugin install allagents@allagentsdev/agent-plugins --scope user
+npx allagents plugin install allagents@allagentsdev/allagents --scope user
 ```
 
 The Finance plugin provides a `financial-modeling` skill for forecasts, budgets,

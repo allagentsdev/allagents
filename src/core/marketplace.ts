@@ -23,12 +23,13 @@ import {
 } from '../utils/marketplace-manifest-parser.js';
 import { normalizeGitRef } from '../utils/git-source.js';
 import {
-  getPluginCachePath,
   isFilesystemRoot,
   parseGitHubUrl,
   parseMarketplaceLocation,
   isNativePackageSource,
   isRemotePluginSource,
+  parseRemotePluginSource,
+  resolveRemotePluginPath,
 } from '../utils/plugin-path.js';
 import {
   checkRepositoryHealth,
@@ -1919,7 +1920,10 @@ export async function resolvePluginSpec(
   }
 
   // Try manifest-based resolution first: look up plugin name in manifest entries
-  const manifestResult = await parseMarketplaceManifest(marketplacePath);
+  const manifestResult = await parseMarketplaceManifest(marketplacePath, parsed.plugin);
+  if (!manifestResult.success && !manifestResult.error.startsWith('Marketplace manifest not found')) {
+    return null;
+  }
   if (manifestResult.success) {
     const pluginEntry = manifestResult.data.plugins.find(
       (p) => p.name === parsed.plugin,
@@ -1940,48 +1944,25 @@ export async function resolvePluginSpec(
           };
         }
       } else {
-        if (options.offline) {
-          // Offline mode: check if plugin is already cached, don't fetch
-          const parsedUrl = parseGitHubUrl(pluginEntry.source.url);
-          if (parsedUrl) {
-            const cachePath = getPluginCachePath(
-              parsedUrl.owner,
-              parsedUrl.repo,
-            );
-            if (existsSync(cachePath)) {
-              const fileArtifacts =
-                declaredFileArtifacts ??
-                (await getEmbeddedMarketplaceFileArtifacts(
-                  cachePath,
-                  parsed.plugin,
-                ));
-              return {
-                path: cachePath,
-                marketplace: marketplaceName,
-                plugin: parsed.plugin,
-                ...(fileArtifacts && { fileArtifacts }),
-              };
-            }
-          }
-          return null;
-        }
-        // URL source - fetch/clone the plugin
-        const fetchFn = options.fetchFn ?? fetchPlugin;
-        const fetchResult = await fetchFn(pluginEntry.source.url);
+        const remote = parseRemotePluginSource(pluginEntry.source.url);
+        if (!remote) return null;
+        const fetchResult = options.offline
+          ? { success: existsSync(remote.cachePath), cachePath: remote.cachePath }
+          : await (options.fetchFn ?? fetchPlugin)(pluginEntry.source.url);
         if (fetchResult.success && fetchResult.cachePath) {
+          const pluginPath = resolveRemotePluginPath(remote, fetchResult.cachePath);
+          if (!existsSync(pluginPath)) return null;
           const fileArtifacts =
             declaredFileArtifacts ??
-            (await getEmbeddedMarketplaceFileArtifacts(
-              fetchResult.cachePath,
-              parsed.plugin,
-            ));
+            (await getEmbeddedMarketplaceFileArtifacts(pluginPath, parsed.plugin));
           return {
-            path: fetchResult.cachePath,
+            path: pluginPath,
             marketplace: marketplaceName,
             plugin: parsed.plugin,
             ...(fileArtifacts && { fileArtifacts }),
           };
         }
+        return null;
       }
     }
   }

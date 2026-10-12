@@ -37,7 +37,7 @@ consistent timelines and traceable outputs, with guidance for preserving missing
 inputs and validating the delivered workbook.
 
 ```bash
-npx allagents plugin install finance@allagentsdev/allagents --scope user
+npx allagents plugin install finance@allagentsdev/agent-plugins --scope user
 ```
 
 ## How It Works

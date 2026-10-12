@@ -1,0 +1,9 @@
+version: 2
+
+repositories: []
+
+plugins:
+  - finance@allagentsdev/agent-plugins
+
+clients:
+  - universal

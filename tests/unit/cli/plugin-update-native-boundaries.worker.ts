@@ -84,7 +84,7 @@ test('targeting a file ref reconciles files without updating its native sibling'
 });
 
 test('a selected native source still updates its lifecycle and reports the configured source', async () => {
-  await configure([{ source, install: 'native', clients: ['pi'] }]);
+  await configure([{ source, clients: ['pi:native'] }]);
   expect((await syncUserWorkspace({ offline: true })).success).toBe(true);
   output = [];
   await run(pluginCmd, ['update', source, '--scope', 'user']);

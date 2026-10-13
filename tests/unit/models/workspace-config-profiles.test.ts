@@ -594,3 +594,27 @@ describe('profile workspace declarations', () => {
     ).toBe(true);
   });
 });
+
+
+describe('profile plugin client install modes', () => {
+  const profile = (clients: unknown[]) => UserWorkspaceConfigSchema.safeParse({
+    profiles: { review: {
+      clients: [{ name: 'claude', install: 'file' }],
+      plugins: [{ source: 'demo@tools', clients }],
+    } },
+  });
+
+  it('accepts equivalent shorthand/object selectors and keeps bare names', () => {
+    const shorthand = profile(['claude-code:native']);
+    const object = profile([{ name: 'claude', install: 'native' }]);
+    expect(shorthand.success).toBe(true);
+    expect(object.success).toBe(true);
+    if (shorthand.success && object.success) expect(shorthand.data).toEqual(object.data);
+    expect(profile(['claude']).success).toBe(true);
+  });
+
+  it('continues rejecting duplicate and undeclared profile selectors', () => {
+    expect(profile(['claude-code:native', 'claude:file']).success).toBe(false);
+    expect(profile(['pi:native']).success).toBe(false);
+  });
+});

@@ -239,6 +239,22 @@ describe('user-workspace', () => {
   });
 
   describe('addUserPluginForTarget', () => {
+    test('preserves user-only native client modes when reinstalling default targets', async () => {
+      const pluginDir = join(tempHome, 'target-plugin');
+      await mkdir(pluginDir, { recursive: true });
+      await mkdir(join(tempHome, '.allagents'), { recursive: true });
+      const configPath = getUserWorkspaceConfigPath();
+      const initial = {
+        repositories: [],
+        clients: ['codex', 'copilot'],
+        plugins: [{ source: pluginDir, clients: ['codex:native', { name: 'github-copilot', install: 'native' }] }],
+      };
+      await writeFile(configPath, dump(initial));
+      const result = await addUserPluginForTarget({ declaration: pluginDir, clients: ['codex', 'copilot'] });
+      expect(result.success).toBe(true);
+      expect(load(await readFile(configPath, 'utf8'))).toEqual(initial);
+    });
+
     test('initializes a first config with selected clients and inherited string declaration', async () => {
       const pluginDir = join(tempHome, 'target-plugin');
       await mkdir(pluginDir, { recursive: true });

@@ -12,7 +12,7 @@ import type {
   Repository,
   WorkspaceConfig,
 } from '../models/workspace-config.js';
-import { getClientTypes, getEffectivePluginSource, getPluginSource, getPluginClients, normalizeClientEntry, resolveInstallMode } from '../models/workspace-config.js';
+import { parseClientEntry, getClientTypes, getEffectivePluginSource, getPluginSource, getPluginClients, normalizeClientEntry, resolveInstallMode } from '../models/workspace-config.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
 import {
   parseWorkspaceConfigForEdit,
@@ -180,12 +180,24 @@ export function mergeTargetedPluginEntry(
     source: normalizedSource,
   };
 
+  const defaultClients = getClientTypes(scopeClients.map(parseClientEntry));
+  const selectedEntries = prospectiveObject?.clients ?? defaultClients;
+  const clients = selectedEntries.map((entry) => {
+    const parsed = parseClientEntry(entry);
+    if (typeof parsed !== 'string') return entry;
+    const previous = existingObject?.clients?.find((candidate) => {
+      const prior = parseClientEntry(candidate);
+      return (typeof prior === 'string' ? prior : prior.name) === parsed;
+    });
+    return previous !== undefined && typeof parseClientEntry(previous) !== 'string'
+      ? previous
+      : entry;
+  });
+  const parsedClients = clients.map(parseClientEntry);
   if (
-    prospectiveObject?.clients !== undefined &&
-    !sameClients(prospectiveObject.clients, getClientTypes([...scopeClients]))
-  ) {
-    return merged;
-  }
+    parsedClients.some((entry) => typeof entry !== 'string') ||
+    !sameClients(getClientTypes(parsedClients), defaultClients)
+  ) return { ...merged, clients };
 
   const { clients: _clients, ...inherited } = merged;
   return Object.keys(inherited).length === 1 ? normalizedSource : inherited;

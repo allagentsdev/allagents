@@ -104,8 +104,9 @@ clients:
     install: native
 ```
 
-The colon shorthand and object form are equivalent. A plugin object may set its
-own `install: file` or `install: native` override.
+The colon shorthand and object form are equivalent at the workspace level and
+inside a plugin's `clients` list. A plugin object may set its own `install: file`
+or `install: native` override.
 
 Native installation always installs the whole plugin. A plugin with
 `install: native` (or targeting a client configured for native installation)
@@ -144,11 +145,36 @@ plugins:
 clients: [claude, codex, cursor]
 ```
 
+Plugin client entries may also select an install mode per destination:
+
+```yaml
+clients: [pi, codex]
+plugins:
+  - source: ./local-package
+    clients:
+      - pi:native
+      - name: codex
+        install: file
+```
+
+A bare plugin client name inherits that client's workspace install mode, or
+defaults to file when the client is absent from the workspace list. An explicit
+plugin client mode overrides the workspace mode. As with top-level objects,
+`{name: pi}` defaults to file; use bare `pi` to inherit. Plugin-wide `install`
+has the highest precedence and applies to every selected client.
+
+The same client-entry grammar is available on user-workspace plugins and profile
+plugins. Client aliases, supported native modes and project/user scope limits
+remain the same as for the corresponding top-level client entries. Profile
+selectors must still name declared profile clients and cannot repeat a client.
+
 Interactive `plugin install` and source-backed `skill add` commands omit the
 override when the selected clients equal the scope default. A first install
 into a new scope seeds its top-level `clients` list. Reinstalling a declaration
-preserves existing `install`, `skills`, `mcpServers`, `exclude`, `ref`, and
-other object fields while applying the selected client target.
+preserves existing `install`, explicit modes for clients that remain selected,
+`skills`, `mcpServers`, `exclude`, `ref`, and other object fields while applying
+the selected client target. Explicit plugin client modes keep the override even
+when the targets match the scope default.
 
 ### Global Profiles
 

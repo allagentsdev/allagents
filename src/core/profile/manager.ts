@@ -9,6 +9,8 @@ import {
   type ClientType,
   type ProfileDeclaration,
   ProfileNameSchema,
+  getPluginClients,
+  resolveInstallMode,
 } from '../../models/workspace-config.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
@@ -757,14 +759,10 @@ function declarationUsesNative(
       if (
         typeof plugin === 'object' &&
         plugin.clients &&
-        !plugin.clients.includes(client)
+        !getPluginClients(plugin)?.includes(client)
       )
         return false;
-      return (
-        (typeof plugin === 'object' && plugin.install
-          ? plugin.install
-          : declaredClient.install) === 'native'
-      );
+      return resolveInstallMode(plugin, declaredClient) === 'native';
     }) ?? false
   );
 }

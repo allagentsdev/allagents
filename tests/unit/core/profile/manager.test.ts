@@ -535,9 +535,9 @@ describe('profile lifecycle manager', () => {
       work: {
         clients: [{ name: 'pi', install: 'native' }],
         plugins: [
-          { source: local, install: 'file', clients: ['pi'] },
+          { source: local, clients: ['pi:file'] },
           { source: 'npm:default', clients: ['pi'] },
-          { source: 'npm:override', install: 'native', clients: ['pi'] },
+          { source: 'npm:override', install: 'native', clients: ['pi:file'] },
         ],
       },
     });
@@ -552,6 +552,15 @@ describe('profile lifecycle manager', () => {
     expect(plan.steps.some((step) => step.client === 'pi' && step.kind === 'native' && step.identity === 'npm:default')).toBe(true);
     expect(plan.steps.some((step) => step.client === 'pi' && step.kind === 'native' && step.identity === 'npm:override')).toBe(true);
     expect(plan.steps.some((step) => step.client === 'pi' && step.kind === 'file')).toBe(true);
+
+    await writeWorkspace(test.userConfigPath, {
+      explicit: {
+        clients: [{ name: 'pi', install: 'file' }],
+        plugins: [{ source: 'npm:explicit', clients: ['pi:native'] }],
+      },
+    });
+    const explicit = await planProfileOperation('explicit', 'install', test.options, dependencies(pi));
+    expect(explicit.steps.some((step) => step.kind === 'native' && step.identity === 'npm:explicit')).toBe(true);
 
     await writeWorkspace(test.userConfigPath, {
       invalid: {

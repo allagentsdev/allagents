@@ -9,6 +9,8 @@ import {
   type ClientType,
   getPluginRef,
   getPluginSource,
+  getPluginClients,
+  resolveInstallMode,
   type InstallMode,
   type McpServerConfig,
   type ProfileDeclaration,
@@ -213,6 +215,7 @@ function normalizedPlugin(
   const requestedRef = getPluginRef(entry);
   if (requestedRef)
     validateDisplaySafe(requestedRef, `Profile plugin ${declarationIndex} ref`);
+  const clients = getPluginClients(entry);
   return Object.freeze({
     declarationIndex,
     source,
@@ -220,8 +223,7 @@ function normalizedPlugin(
     install,
     ...(typeof entry === 'object' &&
       entry.skills !== undefined && { skills: entry.skills }),
-    ...(typeof entry === 'object' &&
-      entry.clients !== undefined && { clients: entry.clients }),
+    ...(clients !== undefined && { clients }),
   });
 }
 
@@ -232,7 +234,7 @@ function selectedForClient(
   return (
     typeof entry === 'string' ||
     !entry.clients ||
-    entry.clients.includes(client)
+    getPluginClients(entry)?.includes(client) === true
   );
 }
 
@@ -887,10 +889,7 @@ export async function planProfileOperation(
       for (let index = 0; index < declaration.plugins.length; index++) {
         const entry = declaration.plugins[index];
         if (!entry || !selectedForClient(entry, client)) continue;
-        const install =
-          typeof entry === 'object' && entry.install
-            ? entry.install
-            : declaredClient.install;
+        const install = resolveInstallMode(entry, declaredClient);
         let plugin = normalizedPlugin(entry, index, install);
         if (plugin.skills !== undefined && !adapter.capabilities.skillFilters) {
           throw new Error(

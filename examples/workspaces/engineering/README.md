@@ -1,6 +1,12 @@
-# Pi Engineering
+# Engineering
 
-An opt-in, project-scoped Pi workspace with a complete research-to-review stack:
+One project workspace with portable engineering skills and Pi-native tools.
+The portable sources install into `.agents/skills/` through the `universal`
+client: Compound Engineering, selected Matt Pocock workflows and their helpers,
+Hermes LLM Wiki, and Herdr. The workspace also retains the optional Herdr
+installation commands, which run only when you invoke `allagents workspace setup`.
+
+The following pinned packages install through Pi's native lifecycle:
 
 | Package | Purpose |
 | --- | --- |
@@ -9,10 +15,11 @@ An opt-in, project-scoped Pi workspace with a complete research-to-review stack:
 | [pi-subagents](https://github.com/nicobailon/pi-subagents) | Delegation and parallel agent work |
 | [pi-ask-user](https://github.com/edlsh/pi-ask-user) | Structured clarification and interactive decisions |
 
-Compound Engineering uses subagents and interactive questions in its workflows;
-web access supplies the research tools. This is a Pi-specific alternative to the
-portable [`engineering`](../engineering/) template, not an extra layer to install
-on top of its existing Compound Engineering skills.
+Pi Compound Engineering uses subagents and interactive questions in its workflows;
+web access supplies the research tools. Each npm declaration targets only `pi`
+with `install: native`, while the portable sources inherit `universal` file
+installation. The two Compound Engineering distributions remain separate
+resources with independent destinations and lifecycles.
 
 ## Prerequisites
 
@@ -31,8 +38,8 @@ Save trust for the actual target directory **before** AllAgents attempts native
 installation:
 
 ```sh
-mkdir pi-engineering-demo
-cd pi-engineering-demo
+mkdir engineering-demo
+cd engineering-demo
 pi
 ```
 
@@ -41,18 +48,50 @@ In Pi, run `/trust`, save a trusted decision for this folder, then exit. A one-t
 processes. AllAgents reads trust from the user Pi agent root outside the project;
 it does not set `defaultProjectTrust: always` or grant trust through setup scripts.
 
+Pi automatically discovers `.agents/skills` before package skills. Without a
+resource selection, the portable Compound Engineering skills shadow the native
+Pi versions. From this project directory, append exclusions for the portable
+Compound Engineering files to your existing `.pi/settings.json`:
+
+```sh
+node --input-type=module <<'JS'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+const path = resolve('.pi/settings.json');
+const settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+if (settings.skills !== undefined && !Array.isArray(settings.skills)) {
+  throw new Error('Expected settings.skills to be an array; no settings were changed.');
+}
+const portable = resolve('.agents/skills').replaceAll('\\', '/');
+settings.skills = [...new Set([
+  ...(settings.skills ?? []),
+  `!${portable}/ce-*/SKILL.md`,
+  `!${portable}/lfg/SKILL.md`,
+])];
+mkdirSync('.pi', { recursive: true });
+writeFileSync(path, JSON.stringify(settings, null, 2) + '\n');
+JS
+```
+
+This preserves existing settings and skill selections. Pi still loads the other
+universal skills and custom `.pi/skills` resources, while Compound Engineering
+comes from the native package. The exclusions use the actual project path so
+they also work beneath hidden directories. These machine-specific selections
+remain user-owned; keep them out of the shared template and rerun the command if
+you move the project. AllAgents preserves them when installing or updating packages.
+
 Then initialize and install the stack:
 
 ```sh
 allagents workspace init . \
-  --from allagentsdev/allagents/examples/workspaces/pi-engineering
+  --from allagentsdev/allagents/examples/workspaces/engineering
 allagents plugin list
 pi list
 pi
 ```
 
 From a local repository checkout, replace `--from` with the absolute path to
-`examples/workspaces/pi-engineering`.
+`examples/workspaces/engineering`.
 
 In the new Pi session, inspect `/ce-status` and `/subagents-doctor`. Confirm the
 Compound Engineering skills are listed and the question and web tools are
@@ -61,7 +100,8 @@ verify provider credentials or execute delegated work.
 
 ## Ownership and configuration
 
-The template declares packages under `plugins` with `pi:native`. AllAgents invokes
+The template declares packages under `plugins` with `clients: [pi]` and
+`install: native`. AllAgents invokes
 Pi's native lifecycle rather than copying TypeScript extensions or running a
 second install script. Pi writes project package declarations to
 `.pi/settings.json` and installs npm packages under `.pi/npm/`. AllAgents tracks

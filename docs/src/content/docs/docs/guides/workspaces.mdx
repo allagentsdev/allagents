@@ -48,11 +48,10 @@ allagents workspace init my-workspace --from myorg/templates
 
 ### Example Templates
 
-Choose a template that matches the installation boundary:
+The engineering template combines portable skills and client-specific native packages:
 
 - [Finance](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/finance): spreadsheet financial modeling from the reusable `agent-plugins` catalogue.
-- [Engineering](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/engineering): portable engineering skills for the `universal` client.
-- [Pi Engineering](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/pi-engineering): an opt-in Pi-native stack with web access, Compound Engineering, subagents, and interactive questions. Packages use reviewed version pins and Pi's own installer rather than file-copy sync. Save project trust in Pi before initialization; see the template README for prerequisites and user-owned credential configuration.
+- [Engineering](https://github.com/allagentsdev/allagents/tree/main/examples/workspaces/engineering): portable engineering skills for the `universal` client plus a pinned Pi-native stack with web access, Compound Engineering, subagents, and interactive questions. Each Pi package explicitly targets Pi's own installer; portable skills use file-copy sync. Save project trust in Pi and configure its project skill exclusions before initialization so native Compound Engineering skills take precedence; see the template README for prerequisites and user-owned configuration.
 
 ### Remote Templates
 

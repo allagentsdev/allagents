@@ -11,24 +11,23 @@ The following pinned packages install through Pi's native lifecycle:
 | Package | Purpose |
 | --- | --- |
 | [pi-web-access](https://github.com/nicobailon/pi-web-access) | Web research and source retrieval |
-| [pi-compound-engineering](https://github.com/jvm/pi-mono/tree/main/packages/pi-compound-engineering) | Brainstorm, plan, implement, review, and capture lessons |
+| [Compound Engineering](https://github.com/EveryInc/compound-engineering-plugin#pi) | Official upstream Pi package: brainstorm, plan, implement, review, and capture lessons |
 | [pi-subagents](https://github.com/nicobailon/pi-subagents) | Delegation and parallel agent work |
 | [pi-ask-user](https://github.com/edlsh/pi-ask-user) | Structured clarification and interactive decisions |
 
 Pi Compound Engineering uses subagents and interactive questions in its workflows;
-web access supplies the research tools. Each npm declaration targets only `pi`
+web access supplies the research tools. Each native declaration targets only `pi`
 with `install: native`, while the portable sources inherit `universal` file
 installation. The two Compound Engineering distributions remain separate
-resources with independent destinations and lifecycles.
+resources with independent destinations and lifecycles. Both use the reviewed
+`compound-engineering-v3.30.5` release; Pi installs the upstream Git package directly.
 
 ## Prerequisites
 
 - Pi on `PATH`; this pinned stack is verified with Pi **1.1.0**. AllAgents must
   include the minimum-only Pi compatibility fix (older AllAgents versions reject
   Pi releases after 0.85.x).
-- Node.js **22.19.0 or newer**, npm, `tar`, and network access during installation.
-  Use Linux, macOS, or WSL; the pinned Compound Engineering installer requires
-  `tar` and is not supported on native Windows.
+- Node.js **22.19.0 or newer**, npm, Git, and network access during installation.
 - Review the third-party packages before trusting the project. Pi extensions and
   package lifecycle scripts execute code with your user account's permissions.
 
@@ -93,10 +92,10 @@ pi
 From a local repository checkout, replace `--from` with the absolute path to
 `examples/workspaces/engineering`.
 
-In the new Pi session, inspect `/ce-status` and `/subagents-doctor`. Confirm the
-Compound Engineering skills are listed and the question and web tools are
-available; some tools activate on demand. Installing packages alone does not
-verify provider credentials or execute delegated work.
+In the new Pi session, inspect `/subagents-doctor` and the `/skill:ce-` command
+completions. Confirm the Compound Engineering skills are listed and the question
+and web tools are available; some tools activate on demand. Installing packages
+alone does not verify provider credentials or execute delegated work.
 
 ## Ownership and configuration
 
@@ -104,7 +103,8 @@ The template declares packages under `plugins` with `clients: [pi]` and
 `install: native`. AllAgents invokes
 Pi's native lifecycle rather than copying TypeScript extensions or running a
 second install script. Pi writes project package declarations to
-`.pi/settings.json` and installs npm packages under `.pi/npm/`. AllAgents tracks
+`.pi/settings.json`, installs npm packages under `.pi/npm/`, and checks out Git
+packages under `.pi/git/`. AllAgents tracks
 its native resources in `.allagents/sync-state.json` and preserves pre-existing,
 referenced installations when removing declarations.
 
@@ -114,13 +114,10 @@ reuse supported Pi authentication; consult its upstream README for provider
 selection and optional `~/.pi/agent/web-search.json` configuration. Keep API keys,
 OAuth state, and machine-specific settings out of the shared template.
 
-Compound Engineering generates its skills through package install scripts. In CI
-or offline mode, installation may succeed without generating those skills. If
-`/ce-status` reports missing skills, or npm blocks the package's lifecycle scripts,
-follow the upstream Compound Engineering approval/rebuild instructions for the
-**project install root `.pi/npm`**, then restart Pi. Review scripts before approving
-only that package; avoid blanket script approval. The package may also maintain
-its own Pi tool-map block in the project's `AGENTS.md` when Pi starts.
+The official Compound Engineering Git package includes its skills in the repository
+and loads them through Pi's native package manifest. It does not use the former
+`pi-compound-engineering` adaptation's skill-generation scripts or `/ce-status`
+command. After installing or updating the package, run `/reload` or restart Pi.
 
 ## Update or remove
 
@@ -132,7 +129,18 @@ allagents plugin update npm:pi-web-access --scope project
 ```
 
 Updating without changing a pin reconciles the pinned version; it does not select
-latest. To remove a declaration and safely reconcile its managed installation:
+latest. For Compound Engineering, update both the portable `ref` and the native
+Git source's `@compound-engineering-v...` suffix to the same reviewed release,
+then run `allagents plugin update --scope project`.
+
+When migrating an existing workspace from `npm:pi-compound-engineering@3.19.2`,
+run `allagents plugin uninstall npm:pi-compound-engineering --scope project` before
+replacing its declaration with the upstream Git package. This lets AllAgents
+reconcile the old managed installation. Check `pi list` for a separately installed
+user package and remove that old adaptation in Pi if present; loading both CE
+packages can leave duplicate skill names.
+
+To remove a declaration and safely reconcile its managed installation:
 
 ```sh
 allagents plugin uninstall npm:pi-web-access --scope project

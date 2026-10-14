@@ -66,15 +66,23 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-test('selecting the second same-source native declaration updates only its destination', async () => {
-  await config(join(home, '.allagents', 'workspace.yaml'), [
-    { name: 'claude', install: 'native' }, { name: 'copilot', install: 'native' },
-  ], [{ source, clients: ['claude'] }, { source, clients: ['copilot'] }]);
+test('selecting the second same-source explicit native declaration updates only its destination', async () => {
+  const file = join(root, 'file-plugin');
+  await mkdir(join(file, 'skills', 'work'), { recursive: true });
+  await writeFile(join(file, 'skills', 'work', 'SKILL.md'), '---\nname: work\ndescription: fixture\n---\nFile artifact\n');
+  await config(join(home, '.allagents', 'workspace.yaml'), ['claude', 'copilot', 'codex'], [
+    { source, clients: ['claude:native'] },
+    { source, clients: [{ name: 'copilot', install: 'native' }] },
+    { source: file, clients: ['codex:file'] },
+  ]);
   expect((await syncUserWorkspace({ offline: true })).success).toBe(true);
+  const skill = join(home, '.codex', 'skills', 'work', 'SKILL.md');
+  const before = await readFile(skill, 'utf8');
   updateSelectResponses.push(`user:${source}\0${1}`, 'update', 'back', '__back__');
   await runPlugins(context());
   expect(await readFile(liveVersion('copilot'), 'utf8')).toBe('2');
   expect(await readFile(liveVersion('claude'), 'utf8')).toBe('1');
+  expect(await readFile(skill, 'utf8')).toBe(before);
   expect(updateNoteMock).toHaveBeenCalledWith(`✓ ${source} (updated)`, 'Update');
 });
 

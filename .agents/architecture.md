@@ -31,6 +31,13 @@ Put shared formatting in `src/cli/format-sync.ts` rather than duplicating it at 
 
 ## Plugin source and destination identity
 
+Resolve plugin/client install modes through `resolveInstallMode`: plugin-wide
+override, explicit plugin client mode, then inherited workspace mode.
+Use `getPluginClients` for identities and retain `getPluginClientEntries` when
+narrowing declarations or serializing configuration. Raw YAML edits can still
+contain `client:mode` strings; preserve their modes and original representation
+when changing client targets.
+
 - Explicit npm/Git package sources are not `plugin@marketplace` declarations. Do not interpret npm versions, Git refs, or SSH transport usernames as marketplace names.
 - Keep independently configured package and file installations distinct, even when they expose the same upstream skills. UI hints should identify their configured clients, install methods, and scopes; updates/removals retain exact source and configuration-index targeting.
 - Native package availability comes from native resource inspection, not from treating the source string as a local cache path.

@@ -43,6 +43,7 @@ import {
   getClientTypes,
   getEffectivePluginSource,
   getPluginClients,
+  getPluginClientEntries,
   getPluginExclude,
   normalizeClientEntry,
   resolveInstallMode,
@@ -581,8 +582,8 @@ function selectedNativeDeclarations(
     const source = getEffectivePluginSource(plugin);
     if (!nativeSelectionMatches(selection, source, source)) return [];
     if (!destinations) return [plugin];
-    const clients = (getPluginClients(plugin) ?? getClientTypes(clientEntries))
-      .filter((client) => destinations.includes(client));
+    const clients = (getPluginClientEntries(plugin) ?? clientEntries)
+      .filter((entry) => destinations.includes(normalizeClientEntry(entry).name));
     return clients.length > 0
       ? [{ ...(typeof plugin === 'string' ? { source: plugin } : plugin), clients }]
       : [];

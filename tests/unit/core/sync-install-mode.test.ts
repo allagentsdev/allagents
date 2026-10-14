@@ -135,7 +135,7 @@ describe('syncWorkspace — install mode', () => {
     );
   });
 
-  it('plans engineering skills as universal files and pinned Pi packages as native', async () => {
+  it('plans engineering skills as universal files and pinned upstream Pi packages as native', async () => {
     const config = await parseWorkspaceConfig(
       join(import.meta.dir, '../../../examples/workspaces/engineering/.allagents/workspace.yaml'),
     );
@@ -144,13 +144,13 @@ describe('syncWorkspace — install mode', () => {
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
     expect(result.plans).toHaveLength(8);
-    const filePlans = result.plans.filter((plan) => !plan.source.startsWith('npm:'));
+    const filePlans = result.plans.filter((plan) => plan.nativeClients.length === 0);
     expect(filePlans).toHaveLength(4);
     for (const plan of filePlans) {
       expect(plan.clients).toEqual(['universal']);
       expect(plan.nativeClients).toEqual([]);
     }
-    const packagePlans = result.plans.filter((plan) => plan.source.startsWith('npm:'));
+    const packagePlans = result.plans.filter((plan) => plan.nativeClients.includes('pi'));
     const packageIdentities = packagePlans.map((plan) => {
       expect(plan.clients).toEqual([]);
       expect(plan.nativeClients).toEqual(['pi']);
@@ -160,13 +160,22 @@ describe('syncWorkspace — install mode', () => {
         nativeScope: 'project',
         root: testDir,
       });
-      expect(normalized?.kind).toBe('npm');
-      expect(normalized?.resolvedIdentity).toMatch(/@\d+\.\d+\.\d+$/);
+      expect(normalized?.resolvedIdentity).toMatch(/@(?:compound-engineering-v)?\d+\.\d+\.\d+$/);
+      if (normalized?.kind === 'git') {
+        const portableCe = config.plugins.find((plugin) =>
+          typeof plugin !== 'string' && plugin.source === 'https://github.com/EveryInc/compound-engineering-plugin',
+        );
+        expect(portableCe).toBeDefined();
+        if (!portableCe || typeof portableCe === 'string') throw new Error('Missing portable CE declaration');
+        expect(plan.source).toBe(`git:github.com/EveryInc/compound-engineering-plugin@${portableCe.ref}`);
+      } else {
+        expect(normalized?.kind).toBe('npm');
+      }
       return normalized?.packageIdentity;
     });
     expect(packageIdentities).toEqual([
       'npm:pi-web-access',
-      'npm:pi-compound-engineering',
+      'git:github.com/EveryInc/compound-engineering-plugin',
       'npm:pi-subagents',
       'npm:pi-ask-user',
     ]);

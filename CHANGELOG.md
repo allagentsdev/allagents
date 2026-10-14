@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.21.0](https://github.com/allagentsdev/allagents/compare/v1.20.0...v1.21.0) (2026-10-14)
+
+
+### Added
+
+* **plugin:** support arbitrary Git remotes for file sources ([#558](https://github.com/allagentsdev/allagents/issues/558)) ([7d3b784](https://github.com/allagentsdev/allagents/commit/7d3b7846082eb09ff81beb3ac41ae0345ce6a467))
+* **workspace:** support per-plugin client install modes ([#566](https://github.com/allagentsdev/allagents/issues/566)) ([862a5e1](https://github.com/allagentsdev/allagents/commit/862a5e14b093781aa114f7711796c54b3e5f1dcd))
+* **workspace:** support project-only declaration reconciliation ([#559](https://github.com/allagentsdev/allagents/issues/559)) ([481ddef](https://github.com/allagentsdev/allagents/commit/481ddef8e67ab414605ef1a159ce0bc1d1816862))
+
+
+### Fixed
+
+* **deps-dev:** bump the routine-updates group with 3 updates ([#563](https://github.com/allagentsdev/allagents/issues/563)) ([be4f7c9](https://github.com/allagentsdev/allagents/commit/be4f7c9c8331630bcea3ab7015036ad9fd340d7c))
+* **plugin:** refresh copied artifacts from local sources ([#555](https://github.com/allagentsdev/allagents/issues/555)) ([38354b8](https://github.com/allagentsdev/allagents/commit/38354b8deb3299a74f8764d08fb1c5a03ccfa8ac))
+* **plugin:** restore project remote marketplace updates ([#557](https://github.com/allagentsdev/allagents/issues/557)) ([4d5fca0](https://github.com/allagentsdev/allagents/commit/4d5fca0f4f11d6ec5f812ef9df33cd330605a33c))
+* **plugin:** simplify finance formulas and add an editable example ([#560](https://github.com/allagentsdev/allagents/issues/560)) ([f40533b](https://github.com/allagentsdev/allagents/commit/f40533bfc2a63d7686dc67831b87eae9afd8de06))
+
 ## [1.20.0](https://github.com/allagentsdev/allagents/compare/v1.19.1...v1.20.0) (2026-10-10)
 
 

@@ -166,7 +166,7 @@ export const ClientEntrySchema = z.union([
   }),
 ]);
 
-const UserClientEntrySchema = z.union([
+export const UserClientEntrySchema = z.union([
   UserClientTypeSchema,
   UserClientInstallShorthandSchema,
   z.object({
@@ -180,6 +180,13 @@ const UserClientEntrySchema = z.union([
 ]);
 
 export type ClientEntry = z.infer<typeof ClientEntrySchema>;
+
+const AnyScopeClientEntrySchema = z.union([ClientEntrySchema, UserClientEntrySchema]);
+
+/** Normalize raw entries after their configuration boundary validates scope. */
+export function parseClientEntry(entry: ClientEntry): ClientEntry {
+  return AnyScopeClientEntrySchema.parse(entry);
+}
 
 export function normalizeClientEntry(entry: ClientEntry): {
   name: ClientType;

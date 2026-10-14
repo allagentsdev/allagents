@@ -7,9 +7,13 @@ import {
   ClientTypeListSchema,
   InstallModeSchema,
   UserClientEntryListSchema,
+  UserClientEntrySchema,
   UserClientTypeListSchema,
   UserClientTypeSchema,
   normalizeClientEntry,
+  getClientTypes,
+  parseClientEntry,
+  deduplicateClientEntries,
   type ClientEntry,
   type ClientType,
   type InstallMode,
@@ -32,6 +36,7 @@ export {
   getClientInstallMode,
   getClientTypes,
   normalizeClientEntry,
+  parseClientEntry,
   type ClientEntry,
   type ClientType,
   type InstallMode,
@@ -160,7 +165,7 @@ export type PluginMcpServersConfig = z.infer<
 const PluginEntryObjectSchema = z
   .object({
     source: PluginSourceSchema,
-    clients: ClientTypeListSchema.optional(),
+    clients: ClientEntryListSchema.optional(),
     install: InstallModeSchema.optional(),
     exclude: z.array(z.string()).optional(),
     skills: PluginSkillsConfigSchema.optional(),
@@ -182,7 +187,7 @@ export const PluginEntrySchema = z.union([
 export const UserPluginEntrySchema = z.union([
   PluginSourceSchema,
   PluginEntryObjectSchema.extend({
-    clients: UserClientTypeListSchema.optional(),
+    clients: UserClientEntryListSchema.optional(),
   }),
 ]);
 
@@ -209,7 +214,17 @@ export function getEffectivePluginSource(plugin: PluginEntry): string {
 export function getPluginClients(
   plugin: PluginEntry,
 ): ClientType[] | undefined {
-  return typeof plugin === 'string' ? undefined : plugin.clients;
+  const entries = getPluginClientEntries(plugin);
+  return entries === undefined ? undefined : getClientTypes(entries);
+}
+
+/** Preserve install modes, including shorthand in raw configuration edits. */
+export function getPluginClientEntries(
+  plugin: PluginEntry,
+): ClientEntry[] | undefined {
+  return typeof plugin === 'string' || plugin.clients === undefined
+    ? undefined
+    : deduplicateClientEntries(plugin.clients.map(parseClientEntry));
 }
 
 /**
@@ -240,7 +255,7 @@ export function getPluginRef(plugin: PluginEntry): string | undefined {
 
 /**
  * Resolve effective install mode for a (plugin, client) pair.
- * Priority: plugin-level > client-level > 'file' default.
+ * Priority: plugin-wide > plugin client mode > workspace client mode > file.
  */
 export function resolveInstallMode(
   pluginEntry: PluginEntry,
@@ -248,6 +263,12 @@ export function resolveInstallMode(
 ): InstallMode {
   const pluginMode = getPluginInstallMode(pluginEntry);
   if (pluginMode) return pluginMode;
+  const selected = getPluginClientEntries(pluginEntry)?.find(
+    (entry) => normalizeClientEntry(entry).name === clientEntry.name,
+  );
+  if (selected !== undefined && typeof selected !== 'string') {
+    return selected.install;
+  }
   return clientEntry.install;
 }
 /** Whether any selected client requests whole-plugin native installation. */
@@ -572,7 +593,7 @@ export const ProfilePluginEntrySchema = z.union([
       source: PluginSourceSchema,
       ref: z.string().optional(),
       install: InstallModeSchema.optional(),
-      clients: z.array(UserClientTypeSchema).optional(),
+      clients: z.array(UserClientEntrySchema).optional(),
       skills: ProfilePluginSkillsConfigSchema.optional(),
     })
     .strict(),
@@ -748,7 +769,10 @@ export const ProfileDeclarationSchema = z
 
     profile.plugins.forEach((plugin, index) => {
       if (typeof plugin !== 'string') {
-        validateSelector(plugin.clients, ['plugins', index, 'clients']);
+        validateSelector(
+          plugin.clients?.map((entry) => normalizeClientEntry(entry).name),
+          ['plugins', index, 'clients'],
+        );
       }
     });
 

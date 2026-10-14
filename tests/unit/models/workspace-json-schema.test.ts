@@ -12,6 +12,29 @@ function parsedYaml(source: string): unknown {
   return load(source);
 }
 describe('published workspace JSON Schemas', () => {
+  test('matches runtime per-plugin client modes in both scope schemas', async () => {
+    const ajv = new Ajv({ strict: false });
+    for (const schema of generateWorkspaceSchemas()) {
+      const validate = ajv.compile(JSON.parse(await readFile(schema.path, 'utf8')));
+      const runtime = schema.fileName.startsWith('project') ? ProjectWorkspaceConfigSchema : UserWorkspaceConfigSchema;
+      const project = schema.fileName.startsWith('project');
+      const cases: [unknown[], boolean][] = [
+        [['pi:native', 'codex:file'], true],
+        [[{ name: 'pi', install: 'native' }, { name: 'claude-code', install: 'file' }], true],
+        [['pi', { name: 'codex' }], true],
+        [['pi:invalid'], false],
+        [['cursor:native'], false],
+        [['github-copilot:native'], !project],
+        [['eve:file'], project],
+      ];
+      for (const [clients, accepted] of cases) {
+        const config = { repositories: [], clients: [], plugins: [{ source: './package', clients }] };
+        expect(validate(config)).toBe(accepted);
+        expect(runtime.safeParse(config).success).toBe(accepted);
+      }
+    }
+  });
+
   test('validates real user and project workspace YAML by scope', async () => {
     const schemaEntries = generateWorkspaceSchemas();
     const generated = new Map(

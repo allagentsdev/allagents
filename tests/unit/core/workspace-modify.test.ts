@@ -469,6 +469,34 @@ describe('addPluginForTarget', () => {
     ]);
   });
 
+  test('preserves per-client modes and unrelated config when reinstall targets match defaults', async () => {
+    const initial = {
+      repositories: [{ path: '../keep' }],
+      clients: ['pi', 'codex'],
+      plugins: [{ source: pluginDir, clients: ['pi:native', { name: 'codex', install: 'file' }], install: 'file', ref: 'stable' }, '../keep'],
+    };
+    writeFileSync(configPath, dump(initial));
+    const result = await addPluginForTarget({ declaration: pluginDir, clients: ['pi', 'codex'] }, testDir);
+    expect(result.success).toBe(true);
+    expect(load(readFileSync(configPath, 'utf-8'))).toEqual(initial);
+  });
+
+  test('reinstall retains first-entry precedence for raw duplicate client modes', async () => {
+    for (const clients of [['pi', 'pi:native'], ['github-copilot', 'copilot:file']]) {
+      const selected = clients[0] === 'pi' ? 'pi' : 'copilot';
+      writeFileSync(configPath, dump({
+        repositories: [],
+        clients: [selected],
+        plugins: [{ source: pluginDir, clients }],
+      }));
+
+      const result = await addPluginForTarget({ declaration: pluginDir, clients: [selected] }, testDir);
+      expect(result.success).toBe(true);
+      const config = load(readFileSync(configPath, 'utf-8')) as WorkspaceConfig;
+      expect(config.plugins).toEqual([pluginDir]);
+    }
+  });
+
   test('replaces a semantic match in place and preserves its object fields', async () => {
     writeFileSync(
       configPath,

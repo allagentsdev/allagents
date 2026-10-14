@@ -135,6 +135,21 @@ describe('syncWorkspace — install mode', () => {
     );
   });
 
+  it('retains explicit native mode when an update restricts destinations', async () => {
+    await createPlugin(testDir, 'test-plugin', 'test-skill');
+    await writeFile(
+      join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
+      'repositories: []\nclients: [pi, codex]\nplugins:\n  - source: ./test-plugin\n    clients: [pi:native, codex:file]\n    skills: [test-skill]\n',
+    );
+
+    const result = await syncWorkspace(testDir, {
+      nativeSelection: { mode: 'update', targets: ['./test-plugin'], clients: ['pi'] },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('skill/exclude filters are not supported for native plugins');
+    expect(existsSync(join(testDir, '.codex', 'skills', 'test-skill'))).toBe(false);
+  });
+
   it('plans engineering skills as universal files and pinned upstream Pi packages as native', async () => {
     const config = await parseWorkspaceConfig(
       join(import.meta.dir, '../../../examples/workspaces/engineering/.allagents/workspace.yaml'),
@@ -199,6 +214,23 @@ describe('syncWorkspace — install mode', () => {
       clients: [],
       nativeClients: ['codex'],
     });
+  });
+
+  it('plans explicit plugin modes for mixed clients and rejects native filters', () => {
+    const config = UserWorkspaceConfigSchema.parse({
+      clients: ['pi', 'codex:native'],
+      plugins: [{ source: './package', clients: ['pi:native', 'codex:file'] }],
+    });
+    const planned = buildPluginSyncPlans(config.plugins, config.clients, 'user');
+    expect(planned.errors).toEqual([]);
+    expect(planned.plans[0]).toMatchObject({ clients: ['codex'], nativeClients: ['pi'] });
+    for (const filters of [{ skills: ['one'] }, { exclude: ['hooks/**'] }]) {
+      const filtered = UserWorkspaceConfigSchema.parse({
+        clients: ['pi', 'codex'],
+        plugins: [{ source: './package', clients: ['pi:native', 'codex:file'], ...filters }],
+      });
+      expect(buildPluginSyncPlans(filtered.plugins, filtered.clients, 'user').errors.join('\n')).toContain('skill/exclude filters are not supported for native plugins');
+    }
   });
 });
 

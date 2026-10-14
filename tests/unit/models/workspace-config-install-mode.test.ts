@@ -8,6 +8,9 @@ import {
   getClientInstallMode,
   getPluginInstallMode,
   resolveInstallMode,
+  getPluginClients,
+  pluginUsesNativeInstall,
+  UserWorkspaceConfigSchema,
 } from '../../../src/models/workspace-config.js';
 
 describe('InstallModeSchema', () => {
@@ -21,6 +24,59 @@ describe('InstallModeSchema', () => {
 
   it('rejects invalid value', () => {
     expect(InstallModeSchema.safeParse('symlink').success).toBe(false);
+  });
+});
+
+describe('per-plugin client install modes', () => {
+  const config = (clients: unknown[], install?: string) => WorkspaceConfigSchema.parse({
+    repositories: [],
+    clients: ['pi:native', 'codex'],
+    plugins: [{ source: './package', clients, ...(install && { install }) }],
+  });
+
+  it('normalizes shorthand and object selectors to equivalent canonical entries', () => {
+    const shorthand = config(['pi:native', 'claude-code:file']);
+    const objects = config([{ name: 'pi', install: 'native' }, { name: 'claude', install: 'file' }]);
+    expect(shorthand.plugins).toEqual(objects.plugins);
+    expect(getPluginClients(shorthand.plugins[0]!)).toEqual(['pi', 'claude']);
+  });
+
+  it('inherits for bare names and applies explicit per-client modes before workspace modes', () => {
+    const inherited = config(['pi', 'codex']);
+    expect(resolveInstallMode(inherited.plugins[0]!, { name: 'pi', install: 'native' })).toBe('native');
+    const explicit = config(['pi:file', 'codex']);
+    expect(resolveInstallMode(explicit.plugins[0]!, { name: 'pi', install: 'native' })).toBe('file');
+    expect(pluginUsesNativeInstall(explicit.plugins[0]!, explicit.clients)).toBe(false);
+    const native = config(['pi:native']);
+    expect(resolveInstallMode(native.plugins[0]!, { name: 'pi', install: 'file' })).toBe('native');
+    expect(pluginUsesNativeInstall(native.plugins[0]!, ['pi'])).toBe(true);
+  });
+
+  it('keeps plugin-wide install precedence over explicit client modes', () => {
+    for (const install of ['file', 'native'] as const) {
+      const parsed = config(['pi:native'], install);
+      expect(resolveInstallMode(parsed.plugins[0]!, { name: 'pi', install: 'file' })).toBe(install);
+      expect(pluginUsesNativeInstall(parsed.plugins[0]!, parsed.clients)).toBe(install === 'native');
+    }
+  });
+
+  it('retains first-entry mode precedence when alias-equivalent clients repeat', () => {
+    const parsed = config(['claude-code:file', 'claude:native']);
+    expect(getPluginClients(parsed.plugins[0]!)).toEqual(['claude']);
+    expect(resolveInstallMode(parsed.plugins[0]!, { name: 'claude', install: 'native' })).toBe('file');
+  });
+
+  it('preserves mode and scope capability validation', () => {
+    for (const client of ['cursor:native', 'pi:symlink', 'copilot:native']) {
+      expect(() => config([client])).toThrow();
+    }
+    expect(UserWorkspaceConfigSchema.safeParse({ plugins: [{ source: './package', clients: ['github-copilot:native'] }] }).success).toBe(true);
+    for (const client of ['copilot', 'codex'] as const) {
+      const user = UserWorkspaceConfigSchema.parse({ plugins: [{ source: 'demo@tools', clients: [`${client}:native`] }] });
+      expect(getPluginClients(user.plugins[0]!)).toEqual([client]);
+      expect(resolveInstallMode(user.plugins[0]!, { name: client, install: 'file' })).toBe('native');
+    }
+    expect(UserWorkspaceConfigSchema.safeParse({ plugins: [{ source: './package', clients: ['eve:file'] }] }).success).toBe(false);
   });
 });
 

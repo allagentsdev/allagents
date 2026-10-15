@@ -150,7 +150,7 @@ describe('syncWorkspace — install mode', () => {
     expect(existsSync(join(testDir, '.codex', 'skills', 'test-skill'))).toBe(false);
   });
 
-  it('plans engineering skills as universal files and pinned upstream Pi packages as native', async () => {
+  it('plans engineering skills as universal files and unpinned CE with pinned npm packages as Pi native', async () => {
     const config = await parseWorkspaceConfig(
       join(import.meta.dir, '../../../examples/workspaces/engineering/.allagents/workspace.yaml'),
     );
@@ -175,16 +175,18 @@ describe('syncWorkspace — install mode', () => {
         nativeScope: 'project',
         root: testDir,
       });
-      expect(normalized?.resolvedIdentity).toMatch(/@(?:compound-engineering-v)?\d+\.\d+\.\d+$/);
       if (normalized?.kind === 'git') {
         const portableCe = config.plugins.find((plugin) =>
           typeof plugin !== 'string' && plugin.source === 'https://github.com/EveryInc/compound-engineering-plugin',
         );
         expect(portableCe).toBeDefined();
         if (!portableCe || typeof portableCe === 'string') throw new Error('Missing portable CE declaration');
-        expect(plan.source).toBe(`git:github.com/EveryInc/compound-engineering-plugin@${portableCe.ref}`);
+        expect(portableCe.ref).toBeUndefined();
+        expect(plan.source).toBe('git:github.com/EveryInc/compound-engineering-plugin');
+        expect(normalized.resolvedIdentity).toBe(plan.source);
       } else {
         expect(normalized?.kind).toBe('npm');
+        expect(normalized?.resolvedIdentity).toMatch(/@\d+\.\d+\.\d+$/);
       }
       return normalized?.packageIdentity;
     });

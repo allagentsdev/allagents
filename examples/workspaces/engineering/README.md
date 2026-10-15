@@ -6,7 +6,7 @@ client: Compound Engineering, selected Matt Pocock workflows and their helpers,
 Hermes LLM Wiki, and Herdr. The workspace also retains the optional Herdr
 installation commands, which run only when you invoke `allagents workspace setup`.
 
-The following pinned packages install through Pi's native lifecycle:
+The following packages install through Pi's native lifecycle:
 
 | Package | Purpose |
 | --- | --- |
@@ -19,12 +19,13 @@ Pi Compound Engineering uses subagents and interactive questions in its workflow
 web access supplies the research tools. Each native declaration targets only `pi`
 with `install: native`, while the portable sources inherit `universal` file
 installation. The two Compound Engineering distributions remain separate
-resources with independent destinations and lifecycles. Both use the reviewed
-`compound-engineering-v3.30.5` release; Pi installs the upstream Git package directly.
+resources with independent destinations and lifecycles. Both follow the upstream
+default branch; Pi installs the upstream Git package directly. The npm packages
+remain pinned to reviewed versions.
 
 ## Prerequisites
 
-- Pi on `PATH`; this pinned stack is verified with Pi **1.1.0**. AllAgents must
+- Pi on `PATH`; this stack is verified with Pi **1.1.0**. AllAgents must
   include the minimum-only Pi compatibility fix (older AllAgents versions reject
   Pi releases after 0.85.x).
 - Node.js **22.19.0 or newer**, npm, Git, and network access during installation.
@@ -121,17 +122,17 @@ command. After installing or updating the package, run `/reload` or restart Pi.
 
 ## Update or remove
 
-The recipe pins reviewed package versions. To upgrade the shared stack, change a
-pin in `.allagents/workspace.yaml`, review that release, then run a targeted update:
+The recipe pins reviewed npm package versions. To upgrade an npm package, change
+its pin in `.allagents/workspace.yaml`, review that release, then run a targeted update:
 
 ```sh
 allagents plugin update npm:pi-web-access --scope project
 ```
 
-Updating without changing a pin reconciles the pinned version; it does not select
-latest. For Compound Engineering, update both the portable `ref` and the native
-Git source's `@compound-engineering-v...` suffix to the same reviewed release,
-then run `allagents plugin update --scope project`.
+Updating an npm package without changing its pin reconciles the pinned version;
+it does not select latest. Compound Engineering has no pinned ref in either
+declaration. Run `allagents plugin update --scope project` to fetch its latest
+default-branch revision for both the portable files and the Pi-native package.
 
 When migrating an existing workspace from `npm:pi-compound-engineering@3.19.2`,
 run `allagents plugin uninstall npm:pi-compound-engineering --scope project` before

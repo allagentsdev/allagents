@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/allagentsdev/allagents/compare/v1.21.0...v1.21.1) (2026-10-15)
+
+
+### Fixed
+
+* **workspace:** unpin Compound Engineering in engineering example ([#567](https://github.com/allagentsdev/allagents/issues/567)) ([e099795](https://github.com/allagentsdev/allagents/commit/e099795f8208438f63b09e6e8dbe68cd23625ed2))
+
 ## [1.21.0](https://github.com/allagentsdev/allagents/compare/v1.20.0...v1.21.0) (2026-10-14)
 
 

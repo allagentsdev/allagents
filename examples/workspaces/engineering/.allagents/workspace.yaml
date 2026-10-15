@@ -9,10 +9,8 @@ setup:
 repositories: []
 
 plugins:
-  # Intentionally enable the complete Compound Engineering plugin at a reviewed
-  # release ref instead of following its default branch.
+  # Enable the complete Compound Engineering plugin from its default branch.
   - source: https://github.com/EveryInc/compound-engineering-plugin
-    ref: compound-engineering-v3.30.5
 
   # Preserve Matt's upstream composition by installing the selected capabilities
   # with every helper skill they invoke. The explicit closure prevents unrelated
@@ -41,11 +39,11 @@ plugins:
   # these packages separate from the universal file-mode skills above.
   # Save project trust and select native CE skills in Pi before initialization;
   # see ../README.md. Portable CE files otherwise shadow the native skills.
-  # Reviewed pins are reconciled as declared, not upgraded to latest.
+  # npm packages retain reviewed pins; Compound Engineering follows upstream.
   - source: npm:pi-web-access@0.37.0
     clients: [pi]
     install: native
-  - source: git:github.com/EveryInc/compound-engineering-plugin@compound-engineering-v3.30.5
+  - source: git:github.com/EveryInc/compound-engineering-plugin
     clients: [pi]
     install: native
   - source: npm:pi-subagents@0.76.1

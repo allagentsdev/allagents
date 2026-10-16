@@ -83,7 +83,13 @@ Releases are automated with [Release Please](https://github.com/googleapis/relea
 
 Conventional commits drive the version: `feat` bumps the minor version, `fix` and
 `perf` bump the patch version, and `!` or a `BREAKING CHANGE:` footer bumps the
-major version. Release Please keeps a release pull request open with that
+major version. Commits that only change `examples/` and `tests/` are excluded from
+release calculations, including example changes with accompanying tests. Use
+`chore(examples)` or `docs(examples)` for example-only changes. Commits that also
+change CLI source, build scripts, or root dependencies remain eligible according
+to their conventional commit type.
+
+Release Please keeps a release pull request open with that
 version, the `package.json` bump, and the `CHANGELOG.md` entry.
 
 Merging the release pull request finalizes the release. It creates the tag and

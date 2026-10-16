@@ -65,6 +65,56 @@ unsupported rather than inferred from another client.
   </tbody>
 </table>
 
+## How global profiles choose directories
+
+An AllAgents profile selects a client's configuration and file destinations.
+The mechanism differs by client: a native flag named `--profile` does not
+necessarily select a separate skills directory. File-installed skills remain
+supported; they do not need to be converted into native plugins.
+
+| Client | What the generated launcher selects | Where profile file skills go |
+|--------|-------------------------------------|------------------------------|
+| Codex | An owned `CODEX_HOME`, plus `--profile <name>` for its named TOML configuration | `<CODEX_HOME>/skills/` |
+| Claude Code | An owned `CLAUDE_CONFIG_DIR` and separate plugin cache | `<CLAUDE_CONFIG_DIR>/skills/` |
+| Pi | An owned `PI_CODING_AGENT_DIR` | `<PI_CODING_AGENT_DIR>/skills/` |
+| OMP | The runtime's native `--profile <name>`, with consistent config and XDG roots | `~/.omp/profiles/<name>/agent/skills/` by default |
+| GitHub Copilot CLI | Owned `COPILOT_HOME` and `COPILOT_CACHE_HOME` directories | `<COPILOT_HOME>/skills/` |
+| OpenCode | Owned `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` override paths | `<OPENCODE_CONFIG_DIR>/skills/` |
+
+**Codex:** its native `--profile` overlays settings from
+`$CODEX_HOME/<name>.config.toml`; it does not choose another skills directory.
+AllAgents also changes `CODEX_HOME` so profiles can have different file-installed
+skills, user instructions, and runtime state. Copying only that TOML file into
+`~/.codex` does not reproduce the whole AllAgents profile. See the
+[Codex profile documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles).
+
+**Claude Code:** `--settings` adds settings overrides and `--agent` selects an
+agent; neither is a replacement for selecting a configuration directory.
+AllAgents uses `CLAUDE_CONFIG_DIR` so profiles can have separate personal skills
+and configuration, including when no native plugins are installed. See Claude's
+[configuration directory](https://code.claude.com/docs/en/env-vars#variables)
+and [CLI flags](https://code.claude.com/docs/en/cli-reference#cli-flags).
+
+**Pi:** `PI_CODING_AGENT_DIR` is Pi's native selector for a separate agent
+directory, including its own skills, extensions, settings and session storage.
+AllAgents chooses that directory through the generated launcher, much as it
+selects `CODEX_HOME` for Codex. This support comes from Pi itself; AllAgents
+provides the named setup and launcher. See Pi's
+[environment variables](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#pi-process-configuration).
+
+**OMP:** its native `--profile <name>` already selects a separate OMP directory,
+including skills, configuration and runtime state. It does more than Codex's
+identically named flag. OMP's `PI_CONFIG_DIR` and XDG settings can change the
+default paths shown above. See OMP's
+[profile documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/config-usage.md#profiles).
+
+These selectors do not create security sandboxes or suppress every other
+configuration source. Project discovery still applies, and OpenCode's override
+paths explicitly merge with normal global and project configuration. The client
+sections below describe the remaining boundaries and cleanup behavior. Use the
+generated launcher to retain its directory selection; typing only the underlying
+agent command may use a different setup.
+
 ## Rich Client Integrations
 
 ### OpenCode
@@ -209,8 +259,11 @@ authorize that project. Ordinary workspace update only inspects
 `npm:pi-mcp-adapter` with `install: native` and then materialize profile-scoped
 MCP configuration after the installed package is verified as usable.
 Pre-existing usable adapters are recorded as referenced and preserved.
-Pi profile launchers select an isolated `PI_CODING_AGENT_DIR` while retaining
-the caller's working directory and normal project package discovery.
+Pi profile launchers select a separate `PI_CODING_AGENT_DIR` while retaining
+the caller's working directory and normal project package discovery. This
+separates the profile's own skill directory; Pi can still load shared
+`~/.agents/skills/` and skills from trusted projects. See Pi's
+[skill discovery documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi).
 
 Pi provides lifecycle interception through extensions discovered from
 `.pi/extensions/` and `~/.pi/agent/extensions/`, not through the portable

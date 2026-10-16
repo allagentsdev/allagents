@@ -95,10 +95,18 @@ and configuration, including when no native plugins are installed. See Claude's
 [configuration directory](https://code.claude.com/docs/en/env-vars#variables)
 and [CLI flags](https://code.claude.com/docs/en/cli-reference#cli-flags).
 
-**Pi and OMP:** Pi profiles use an environment-selected agent directory. OMP's
-native named profile already selects a profile directory, so its `--profile`
-does more than Codex's identically named flag. OMP's `PI_CONFIG_DIR` and XDG
-settings can change the default paths shown above.
+**Pi:** `PI_CODING_AGENT_DIR` is Pi's native selector for a separate agent
+directory, including its own skills, extensions, settings and session storage.
+AllAgents chooses that directory through the generated launcher, much as it
+selects `CODEX_HOME` for Codex. This support comes from Pi itself; AllAgents
+provides the named setup and launcher. See Pi's
+[environment variables](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#pi-process-configuration).
+
+**OMP:** its native `--profile <name>` already selects a separate OMP directory,
+including skills, configuration and runtime state. It does more than Codex's
+identically named flag. OMP's `PI_CONFIG_DIR` and XDG settings can change the
+default paths shown above. See OMP's
+[profile documentation](https://github.com/can1357/oh-my-pi/blob/main/docs/config-usage.md#profiles).
 
 These selectors do not create security sandboxes or suppress every other
 configuration source. Project discovery still applies, and OpenCode's override
@@ -251,8 +259,11 @@ authorize that project. Ordinary workspace update only inspects
 `npm:pi-mcp-adapter` with `install: native` and then materialize profile-scoped
 MCP configuration after the installed package is verified as usable.
 Pre-existing usable adapters are recorded as referenced and preserved.
-Pi profile launchers select an isolated `PI_CODING_AGENT_DIR` while retaining
-the caller's working directory and normal project package discovery.
+Pi profile launchers select a separate `PI_CODING_AGENT_DIR` while retaining
+the caller's working directory and normal project package discovery. This
+separates the profile's own skill directory; Pi can still load shared
+`~/.agents/skills/` and skills from trusted projects. See Pi's
+[skill discovery documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md#add-it-to-pi).
 
 Pi provides lifecycle interception through extensions discovered from
 `.pi/extensions/` and `~/.pi/agent/extensions/`, not through the portable

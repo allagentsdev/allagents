@@ -182,6 +182,13 @@ Named profiles are declared only in the user workspace at
 `~/.allagents/workspace.yaml`. A project `.allagents/workspace.yaml` containing
 `profiles` is invalid.
 
+Profiles can select separate file-installed skills as well as settings. The
+launcher mechanism is client-specific: Codex's native `--profile` alone does
+not switch skills directories, whereas OMP's named profile selects a profile
+directory. Claude and Pi use environment-selected directories. See
+[how global profiles choose directories](/docs/reference/clients/#how-global-profiles-choose-directories)
+before replacing a generated launcher with a bare agent command.
+
 ```yaml
 profiles:
   compound-engineering:

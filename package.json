@@ -60,7 +60,7 @@
     "@biomejs/biome": "^2.5.13",
     "@clack/prompts": "^1.8.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@types/bun": "1.4.2",
+    "@types/bun": "1.4.3",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/picomatch": "^4.0.3",

@@ -1,9 +1,8 @@
+import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import { ensureWorkspace, type ModifyResult } from './workspace-modify.js';
 import { ensureWorkspaceRules } from './transform.js';
@@ -105,7 +104,7 @@ export async function addRepository(
     if (options.description) entry.description = options.description;
 
     config.repositories.push(entry);
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
 
     return { success: true };
   } catch (error) {
@@ -139,7 +138,7 @@ export async function removeRepository(
     }
 
     config.repositories.splice(index, 1);
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
 
     return { success: true };
   } catch (error) {

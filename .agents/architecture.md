@@ -2,6 +2,14 @@
 
 This guide expands [`AGENTS.md`](../AGENTS.md) for synchronization ownership, output formatting, and client identity rules.
 
+## Workspace YAML edits
+
+Use `src/utils/workspace-writer.ts` when persisting workspace configuration changes.
+Its serializer updates the original YAML nodes so comments and blank-line separators
+survive edits. Pass the original content for templates and staged transactions;
+file writers can use `writeWorkspaceConfig` or `serializeWorkspaceConfigFile`.
+Keep scope validation and atomic replacement safeguards in the calling operation.
+
 ## MCP server ownership
 
 MCP servers from plugins are synchronized into VS Code's `mcp.json`.

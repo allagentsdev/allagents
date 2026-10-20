@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { dump } from 'js-yaml';
+import { serializeWorkspaceConfigFile } from '../utils/workspace-writer.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import {
   type ClientType,
@@ -303,7 +303,7 @@ async function writeDestinationConfig(
     `.${basename(destination.configPath)}.${process.pid}.${randomUUID()}.tmp`,
   );
   try {
-    await writeFile(temporaryPath, dump(document, { lineWidth: -1 }), {
+    await writeFile(temporaryPath, await serializeWorkspaceConfigFile(destination.configPath, document), {
       encoding: 'utf-8',
       mode,
     });

@@ -1,8 +1,8 @@
+import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fetchPlugin } from './plugin.js';
-import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
   ClientEntry,
@@ -101,7 +101,7 @@ export async function ensureUserWorkspace(
   };
 
   await mkdir(getAllagentsDir(), { recursive: true });
-  await writeFile(configPath, dump(defaultConfig, { lineWidth: -1 }), 'utf-8');
+  await writeWorkspaceConfig(configPath, defaultConfig);
 }
 
 /**
@@ -321,7 +321,7 @@ export async function removeUserPlugin(plugin: string, configurationIndex?: numb
       pruneDisabledSkillsForPlugin(config, removedEntry);
       pruneEnabledSkillsForPlugin(config, removedEntry);
     }
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config, { removedPluginIndexes: [index] });
     return { success: true };
   } catch (error) {
     return {
@@ -367,7 +367,7 @@ export async function removeUserPluginsForMarketplace(
   if (matching.length === 0) return [];
 
   config.plugins = config.plugins.filter((entry) => !matching.includes(entry));
-  await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+  await writeWorkspaceConfig(configPath, config);
   return matching.map((entry) => getPluginSource(entry));
 }
 
@@ -452,7 +452,7 @@ async function addPluginToUserConfig(
         config.plugins.splice(adjustedSemanticIndex, 1);
       }
       config.plugins.push(plugin);
-      await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+      await writeWorkspaceConfig(configPath, config);
     }
 
     return {
@@ -500,7 +500,7 @@ export async function setUserClients(
   try {
     const config = await parseUserWorkspaceConfigForEdit(configPath);
     config.clients = clients;
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -604,7 +604,7 @@ export async function addUserDisabledSkill(
     }
 
     entry.skills = { exclude: [...existing, skillName] };
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -672,7 +672,7 @@ export async function removeUserDisabledSkill(
     const newExclude = entry.skills.exclude.filter((s) => s !== skillName);
     entry.skills = newExclude.length > 0 ? { exclude: newExclude } : undefined;
 
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -759,7 +759,7 @@ export async function addUserEnabledSkill(
     }
 
     entry.skills = [...existing, skillName];
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -827,7 +827,7 @@ export async function removeUserEnabledSkill(
     const newSkills = entry.skills.filter((s) => s !== skillName);
     entry.skills = newSkills;
 
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -875,7 +875,7 @@ export async function setUserPluginSkillsMode(
         skillNames.length > 0 ? { exclude: [...skillNames] } : undefined;
     }
 
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return { success: true };
   } catch (error) {
     return {
@@ -905,7 +905,7 @@ export async function setUserPluginMcpServersExcluded(
       configurationIndex,
     );
     if (!result.success) return result;
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return result;
   } catch (error) {
     return {
@@ -931,7 +931,7 @@ export async function upsertUserGitHubPluginSourceAllowlist(
     );
     if (!result.success) return result;
 
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
     return result;
   } catch (error) {
     return {
@@ -1110,7 +1110,7 @@ export async function migrateUserWorkspaceSkillsV1toV2(): Promise<void> {
   config.version = 2;
 
   try {
-    await writeFile(configPath, dump(config, { lineWidth: -1 }), 'utf-8');
+    await writeWorkspaceConfig(configPath, config);
   } catch (error) {
     console.warn(
       `[migrate v1→v2] Failed to write migrated user config: ${error instanceof Error ? error.message : String(error)}`,

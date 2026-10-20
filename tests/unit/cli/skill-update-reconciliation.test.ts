@@ -141,6 +141,48 @@ describe('createSkillUpdateReconciler', () => {
     ]);
   });
 
+  it('preserves comments while committing a deleted skill selector', async () => {
+    const source = 'https://github.com/acme/skills';
+    const configPath = join(tmpDir, '.allagents/workspace.yaml');
+    const original = `# Shared skill configuration
+version: 2
+repositories: []
+clients:
+  - copilot
+
+# Selected skills
+plugins:
+  - source: ${source} # Reviewed catalogue
+    skills:
+      - removed # Obsolete skill
+      - keep # Keep this skill
+`;
+    await writeFile(configPath, original, 'utf-8');
+    const entry = installation({
+      id: 'project:0',
+      scope: 'project',
+      configIndex: 0,
+      rawSource: source,
+    });
+    const prepared = await createSkillUpdateReconciler({
+      workspacePath: tmpDir,
+      userConfigPath,
+    })(unit([entry], {
+      [entry.id]: [{ name: 'removed', subpath: 'removed', selector: 'removed' }],
+    }));
+
+    expect(await readFile(configPath, 'utf-8')).toBe(original);
+    await prepared.commit();
+
+    const content = await readFile(configPath, 'utf-8');
+    expect((load(content) as WorkspaceConfig).plugins).toEqual([{ source, skills: ['keep'] }]);
+    expect(content).toStartWith('# Shared skill configuration\n');
+    expect(content).toContain('- copilot\n\n# Selected skills\nplugins:');
+    expect(content).toContain(`source: ${source} # Reviewed catalogue`);
+    expect(content).toContain('- keep # Keep this skill');
+    expect(content).not.toContain('Obsolete skill');
+  });
+
   it('expands a shared bare allowlist selector to surviving qualified paths', async () => {
     const source = 'https://github.com/acme/skills';
     const config: WorkspaceConfig = {

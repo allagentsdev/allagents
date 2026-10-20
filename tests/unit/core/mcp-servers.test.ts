@@ -146,6 +146,47 @@ profiles:
     });
   });
 
+  test('preserves profile comments and sparse user fields when adding a server', async () => {
+    writeFileSync(configPath, `# User profiles
+profiles:
+  markets:
+    # Native research client
+    clients:
+      - name: codex # Keep this client
+
+    # Existing service
+    mcpServers:
+      quotes:
+        command: quotes-mcp # Local transport
+
+  # A separate profile
+  personal:
+    clients:
+      - name: pi
+`);
+    const destination: McpDestination = { kind: 'profile', name: 'markets', configPath };
+
+    const result = await addMcpServer(destination, 'tradingview', {
+      type: 'http',
+      url: 'https://mcp.tradingview.com/mcp',
+    });
+
+    expect(result.success).toBe(true);
+    const content = readFileSync(configPath, 'utf-8');
+    expect(content).toStartWith('# User profiles\n');
+    expect(content).toContain('# Native research client\n    clients:\n      - name: codex # Keep this client\n\n    # Existing service');
+    expect(content).toContain('command: quotes-mcp # Local transport');
+    expect(content).toContain('\n\n  # A separate profile\n  personal:');
+    const updated = readWorkspace(dir);
+    expect(updated).not.toHaveProperty('repositories');
+    expect(updated).not.toHaveProperty('plugins');
+    expect(updated).not.toHaveProperty('clients');
+    expect(await listMcpServers(destination)).toEqual({
+      quotes: { command: 'quotes-mcp' },
+      tradingview: { type: 'http', url: 'https://mcp.tradingview.com/mcp' },
+    });
+  });
+
   test('serializes concurrent declaration updates without losing either server', async () => {
     const destination: McpDestination = {
       kind: 'project',

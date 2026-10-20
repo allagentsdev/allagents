@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/allagentsdev/allagents/compare/v1.21.0...v1.21.1) (2026-10-20)
+
+
+### Fixed
+
+* **deps-dev:** bump the routine-updates group with 3 updates ([#571](https://github.com/allagentsdev/allagents/issues/571)) ([5ab6109](https://github.com/allagentsdev/allagents/commit/5ab610934113e1a8e528a1783953844175273f19))
+
 ## [1.21.0](https://github.com/allagentsdev/allagents/compare/v1.20.0...v1.21.0) (2026-10-14)
 
 

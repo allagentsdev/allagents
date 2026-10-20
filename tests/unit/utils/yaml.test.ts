@@ -1,8 +1,56 @@
 import { describe, expect, test } from 'bun:test';
-import { loadYaml, stringifyYaml } from '../../../src/utils/yaml.js';
+import { loadYaml, parseYamlDocument, stringifyYaml, yamlDocumentValue, YamlError } from '../../../src/utils/yaml.js';
 import { serializeWorkspaceConfig } from '../../../src/utils/workspace-writer.js';
 
 describe('application YAML contract', () => {
+  test('reads a reused document without changing tagged nodes or caching alias values', () => {
+    const source = `item: &item { a: one } # Keep the anchor
+ordered: &ordered !!omap [*item]
+orderedCopy: *ordered
+pairs: &pairs !!pairs [*item]
+pairsCopy: *pairs
+binary: !!binary SGVsbG8=
+date: !!timestamp 2024-01-01
+set: !!set { one: null }
+`;
+    const document = parseYamlDocument(source);
+    const originalNodes = document.toString();
+    const before = yamlDocumentValue(document) as any;
+    expect(before).toEqual(loadYaml(source));
+    expect(before.orderedCopy).toBe(before.ordered);
+    expect(before.pairsCopy).toBe(before.pairs);
+    expect(document.toString()).toBe(originalNodes);
+
+    document.setIn(['item', 'a'], 'two');
+    const after = yamlDocumentValue(document) as any;
+    expect(before.item.a).toBe('one');
+    expect(before.ordered).toEqual([{ a: 'one' }]);
+    expect(before.pairs).toEqual([['a', 'one']]);
+    expect(after.ordered).toEqual([{ a: 'two' }]);
+    expect(after.pairs).toEqual([['a', 'two']]);
+    expect(after.orderedCopy).toBe(after.ordered);
+    expect(after.pairsCopy).toBe(after.pairs);
+    expect(yamlDocumentValue(document)).toEqual(after);
+
+    document.delete('item');
+    expect(() => yamlDocumentValue(document)).toThrow(YamlError);
+  });
+
+  test('wraps value-conversion failures consistently for source and parsed documents', () => {
+    for (const source of [
+      'copy: *missing',
+      '!!omap [a: one, a: two]',
+      '!!pairs [{ a: one, b: two }]',
+      '1: first\n"1": second',
+      '[a, b]: c',
+    ]) {
+      expect(() => loadYaml(source)).toThrow(YamlError);
+      const document = parseYamlDocument(source);
+      expect(() => yamlDocumentValue(document)).toThrow(YamlError);
+      expect(() => serializeWorkspaceConfig({}, source)).toThrow(YamlError);
+    }
+  });
+
   test('preserves core strings, dates, merges, aliases and tagged collection shapes', () => {
     const source = `defaults: &defaults { enabled: true }
 copy: *defaults

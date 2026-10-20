@@ -8,6 +8,20 @@ describe('workspace YAML edits', () => {
     expect(serializeWorkspaceConfig(loadYaml(original), original)).toBe(original);
   });
 
+  test('keeps exact no-op bytes and tagged alias values when reusing the parsed document', () => {
+    const original = '# Header\r\nplugins: []\r\nclients: []\r\n\r\nitem: &item { a: one } # Shared\r\npairs: &pairs !!pairs [*item]\r\ncopy: *pairs # Alias\r\nordered: !!omap [*item]\r\nbinary: !!binary SGVsbG8=\r\n';
+    const config = loadYaml(original) as any;
+    expect(serializeWorkspaceConfig(config, original)).toBe(original);
+    config.clients = ['cursor'];
+    const result = serializeWorkspaceConfig(config, original);
+    expect(loadYaml(result)).toEqual(config);
+    expect(result).toContain('# Shared');
+    expect(result).toContain('copy: *pairs # Alias');
+    expect(result).toContain('!!pairs');
+    expect(result).toContain('!!omap');
+    expect(result).toContain('!!binary');
+  });
+
   test('keeps comments on surviving entries when removing and reordering plugins', () => {
     const original = '# Header\nplugins:\n  - ./removed # obsolete\n\n  # Infra\n  - "./infra" # Terraform\n\n  # General\n  - ./general # Review\nclients: []\n';
     const result = serializeWorkspaceConfig(

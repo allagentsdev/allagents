@@ -10,8 +10,11 @@ errors. Read Markdown metadata through `src/utils/frontmatter.ts`, which uses
 that boundary and accepts YAML only.
 
 Use `src/utils/workspace-writer.ts` when persisting workspace configuration changes.
-Its serializer updates the original YAML nodes so comments and blank-line separators
-survive edits. Pass the original content for templates and staged transactions;
+Its serializer reconciles semantic edits, then retains source tokens for unchanged
+YAML and generates only new or replaced syntax. Keep token rendering inside
+`workspace-source-editor.ts` and retain the semantic round-trip check; domain
+callers should not manipulate YAML tokens. Pass the original content for
+templates and staged transactions;
 file writers can use `writeWorkspaceConfig` or `serializeWorkspaceConfigFile`.
 Keep scope validation and atomic replacement safeguards in the calling operation.
 

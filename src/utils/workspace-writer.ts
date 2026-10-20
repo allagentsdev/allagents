@@ -10,7 +10,13 @@ import {
   type Node,
   type Document,
 } from 'yaml';
-import { loadYaml, parseYamlDocument, stringifyYaml, yamlDocumentValue } from './yaml.js';
+import {
+  loadYaml,
+  parseYamlDocument,
+  stringifyYaml,
+  yamlDocumentValue,
+} from './yaml.js';
+import { workspaceSourceEditor } from './workspace-source-editor.js';
 
 interface WorkspaceWriteOptions {
   /** Disambiguate removal of declarations whose values are identical. */
@@ -41,6 +47,7 @@ export function serializeWorkspaceConfig(
   const document: Document = parseYamlDocument(original);
   const before = yamlDocumentValue(document);
   if (isDeepStrictEqual(before, config)) return original;
+  const source = workspaceSourceEditor(document, original);
 
   const aliases = new Map<Node, unknown>();
   visit(document, {
@@ -168,6 +175,7 @@ export function serializeWorkspaceConfig(
       return node;
     }
     const replacement = document.createNode(next);
+    if (isNode(node)) source.replace(node, replacement);
     if (isNode(node)) {
       replacement.commentBefore = node.commentBefore ?? null;
       replacement.spaceBefore = node.spaceBefore ?? false;
@@ -198,17 +206,13 @@ export function serializeWorkspaceConfig(
         replacement.comment = node.comment ?? null;
         replacement.commentBefore = node.commentBefore ?? null;
         replacement.spaceBefore = node.spaceBefore ?? false;
+        source.replace(node, replacement);
         return replacement;
       }
     },
   });
-  const result = document.toString({ lineWidth: 0 });
-  if (
-    !isDeepStrictEqual(
-      loadYaml(result),
-      loadYaml(stringifyYaml(config)),
-    )
-  ) {
+  const result = source.stringify();
+  if (!isDeepStrictEqual(loadYaml(result), loadYaml(stringifyYaml(config)))) {
     throw new Error(
       'Unable to preserve workspace YAML without changing configuration values',
     );

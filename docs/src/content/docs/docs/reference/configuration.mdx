@@ -12,8 +12,10 @@ notes beside plugins, repositories, clients, and MCP servers. Comments on retain
 list entries follow those entries when the list changes; comments attached to a
 removed entry are removed with it. This also applies to the user workspace and
 profile declarations in `~/.allagents/workspace.yaml`.
-YAML spacing and comment placement may be normalized when the file changes;
-an edit that leaves the configuration unchanged preserves the original file text.
+Edits preserve the original text of unchanged YAML, including indentation,
+quotes, line endings, and flow-style spacing. New syntax uses the detected
+indentation and line-ending convention. An edit that leaves the configuration
+unchanged preserves the original file text byte-for-byte.
 
 ```yaml
 setup:

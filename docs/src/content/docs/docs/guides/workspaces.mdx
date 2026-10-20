@@ -167,6 +167,13 @@ See [Managed Repositories](/docs/reference/configuration/#managed-repositories) 
 
 When `vscode` is included in the `clients` list, `allagents update` automatically generates a `.code-workspace` file. Repository paths are resolved to absolute paths.
 
+After the first sync, AllAgents also imports folder additions, removals, and
+display-name changes from an externally changed `.code-workspace` file back into
+`workspace.yaml`. This can happen during other commands that sync the project,
+including plugin installation. The change check covers the whole generated file,
+so even an unrelated settings edit can trigger reconciliation against YAML.
+`--dry-run` skips this write-back and generation stage.
+
 ```yaml
 # workspace.yaml
 clients:

@@ -5,14 +5,17 @@ Reviewed against `593fd371caa85289317b3486ca8782f586c2ad77` on 2026-10-20.
 
 ## Recommendation
 
-Keep automatic VS Code folder/name write-back as the default. Editing folders
-in VS Code and running sync is an established configuration-authoring workflow;
-requiring a separate import would change that public behavior.
+Keep one synchronization behavior, with no new mode, flag or import command:
 
-Harden reconciliation so unambiguous editor edits still update YAML, while
-conflicts, invalid data and failed writes preserve pending editor changes.
-YAML-authoritative behavior may be an explicit opt-in for users who want it;
-it is not a prerequisite for fixing the current reconciliation risks.
+- Changed VS Code folders/names update the corresponding YAML declarations.
+- If those fields have not changed, do not write YAML. Preserve its exact bytes,
+  including all formatting, comments and blank lines.
+- Settings-only or whitespace-only changes in `.code-workspace` are not folder
+  edits and must not cause a YAML rewrite.
+
+Compare the relevant values with the previous synchronization snapshot. Preserve
+the established edit-in-VS-Code, then sync workflow while detecting genuine
+conflicts, invalid data and failed writes without discarding pending edits.
 
 This review is a decision prerequisite, not an implementation of that policy.
 It covers VS Code folder/name imports. Automatic legacy YAML migrations and
@@ -79,23 +82,16 @@ Existing unit and sync integration tests establish useful path-merging behavior,
 including concurrent YAML additions. They do not establish conflict protection
 for display names, template-only folder ownership, or a malformed folder list.
 
-## Alternatives and compatibility
-
-| Approach | Benefit | Cost |
-| --- | --- | --- |
-| Keep automatic import and harden it (recommended) | Preserves the existing editor-first workflow. | Requires folder provenance, name baselines, validation, conflict handling, and clear output. |
-| Make automatic import opt-in | Existing users can deliberately retain the workflow. | Adds a persistent mode and keeps the same merge machinery; changing the default still needs migration. |
-| Explicit import; ordinary sync generates from YAML | Makes configuration changes deliberate and gives import its own review/validation boundary. | Adds an import step for existing users and needs safe handling of pending editor changes. |
+## Compatibility
 
 The existing editor workflow takes precedence over imposing a new import step.
 VS Code is another human-operated configuration editor in this workflow; its
 folder edits are not inherently unauthorized changes. The observed problems
 call for safer merging, not removal of automatic write-back.
 
-The compatibility cost of maintaining two editable representations remains.
-Changing the default would merely move that cost to users and require a
-migration. A YAML-authoritative option can serve users who prefer one-way
-generation without changing what existing sync users must do.
+The synchronization snapshot must distinguish real editor changes from stale
+generated content. That is an internal reconciliation responsibility, not a
+reason to add configuration choices or change the user workflow.
 
 ## Proposed implementation contract for review
 
@@ -109,6 +105,11 @@ generation without changing what existing sync users must do.
   competing changes require an actionable conflict instead of silently choosing
   a winner. Old state without a name/provenance baseline must be handled
   conservatively rather than assuming the editor is newer.
+- If reconciliation requires no semantic YAML change, skip the YAML writer
+  entirely. Byte-exact preservation is required, including for user-authored
+  YAML formatting edits and unrelated `.code-workspace` changes. If an actual
+  editor change requires a declaration edit, use the existing comment-preserving
+  writer rather than regenerating YAML from normalized configuration.
 - Validate the workspace and folder entries before planning changes. Invalid
   or missing folder data must never stand for a request to remove every repo;
   distinguish it from an explicit empty folder list.
@@ -124,14 +125,13 @@ generation without changing what existing sync users must do.
   This proposal does not introduce command-wide rollback.
 - Report applied changes and conflicts consistently in human and JSON output.
   Keep dry-run read-only and describe planned folder/name reconciliation.
-- Treat an optional YAML-authoritative mode as a separate opt-in decision.
-  Selecting it must not silently discard pending editor changes. No new mode
-  or explicit-import command is needed to harden the existing default.
 
 Acceptance must cover first/unchanged sync, settings-only edits, YAML-only edits,
 editor-only edits, concurrent additions/removals/renames, template folders,
 invalid folder data, path normalization, stale-plan rejection, dry-run/JSON
 contracts, failed writes, and plugin operations that trigger project sync.
+For all cases requiring no YAML declaration change, assert byte-for-byte YAML
+equality, including CRLF, indentation, quoting, comments and blank lines.
 
 The review proposes preserving the established default and fixing its unsafe
 edges. This PR documents that direction; runtime behavior is unchanged.

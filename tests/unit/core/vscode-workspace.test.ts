@@ -260,7 +260,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }, { path: '../frontend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added).toEqual([]);
@@ -278,7 +278,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }, { path: '../frontend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.removed).toEqual(['../frontend']);
@@ -296,7 +296,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added.length).toBe(1);
@@ -320,7 +320,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     ];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added.length).toBe(1);
@@ -344,7 +344,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     ];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.removed).toEqual(['../frontend']);
@@ -364,7 +364,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added).toEqual([]);
@@ -381,7 +381,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added.length).toBe(1);
@@ -399,7 +399,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added).toEqual([]);
@@ -417,7 +417,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     const currentRepos = [{ path: '../backend', name: 'API Server' }];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path, name: 'API Server' })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.added).toEqual([]);
@@ -439,7 +439,7 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     ];
 
     const result = reconcileVscodeWorkspaceFolders(
-      workspacePath, codeWorkspaceFolders, lastSyncedRepos, currentRepos,
+      workspacePath, codeWorkspaceFolders, lastSyncedRepos.map(path => ({ path })), lastSyncedRepos, currentRepos,
     );
 
     expect(result.updatedRepos).toEqual([
@@ -447,4 +447,14 @@ describe('reconcileVscodeWorkspaceFolders', () => {
     ]);
     expect(result.renamed).toEqual([]);
   });
+  test('normalized absolute workspace-root spellings cannot become repositories', () => {
+    const current = [{ path: '../backend' }];
+    const baseline = [{ path: absPath('.') }, { path: absPath('../backend') }];
+    const result = reconcileVscodeWorkspaceFolders(workspacePath,
+      [{ path: `${workspacePath}/child/..` }, { path: '../backend' }],
+      baseline, [absPath('../backend')], current);
+    expect(result.updatedRepos).toEqual(current);
+    expect(result.added).toEqual([]);
+  });
+
 });

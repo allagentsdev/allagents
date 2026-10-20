@@ -74,3 +74,16 @@ Reject HTTP(S) userinfo and SSH passwords at plugin declaration validation,
 CLI install intake and remote descriptor parsing before output or writes.
 Diagnostics must not echo rejected source strings. SSH usernames and Git-managed
 keys, agents and credential helpers remain supported.
+
+## VS Code repository write-back
+
+Preserve automatic folder/name import during project synchronization. Compare
+editor folders with the saved generated folder snapshot, including template
+folders, before changing YAML repositories. Whole-file hash changes alone do not
+prove a folder edit. Actual editor name changes retain precedence over competing
+YAML names; unrelated editor edits must preserve YAML-only changes.
+
+Validate and prepare imports before migrations or sync-state publication. Failed
+imports must preserve pending editor bytes and their baseline. Change only raw
+repository declarations through the shared YAML writer and keep dry-run read-only.
+Do not add a conflict prompt, settings import or command-wide rollback here.

@@ -26,6 +26,7 @@ export interface SyncStateData {
   nativeResources?: NativeResourceState;
   vscodeWorkspaceHash?: string;
   vscodeWorkspaceRepos?: string[];
+  vscodeWorkspaceFolders?: SyncState['vscodeWorkspaceFolders'];
   skillsIndex?: string[];
   sources?: Record<string, SyncStateSource>;
 }
@@ -118,6 +119,7 @@ export async function saveSyncState(
     'nativeResources',
     'vscodeWorkspaceHash',
     'vscodeWorkspaceRepos',
+    'vscodeWorkspaceFolders',
     'skillsIndex',
     'sources',
   ] as const) {

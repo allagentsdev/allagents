@@ -170,9 +170,27 @@ When `vscode` is included in the `clients` list, `allagents update` automaticall
 After the first sync, AllAgents also imports folder additions, removals, and
 display-name changes from an externally changed `.code-workspace` file back into
 `workspace.yaml`. This can happen during other commands that sync the project,
-including plugin installation. The change check covers the whole generated file,
-so even an unrelated settings edit can trigger reconciliation against YAML.
-`--dry-run` skips this write-back and generation stage.
+including plugin installation. Only folder paths and display names changed since the last generated snapshot
+are imported. Settings-only or whitespace-only editor changes leave YAML
+untouched, including YAML-only repository name changes. Unchanged template
+folders do not become repository declarations. If both files change a repository
+display name, the actual VS Code edit wins. This import changes only
+`repositories`; it does not import settings or change plugin, skill, client, or
+MCP declarations.
+
+Malformed workspace data or a failed import stops synchronization before
+regenerating the editor file or advancing its snapshot. Fix the reported problem
+and retry. An explicitly saved configuration change, such as a plugin declaration
+from `plugin install`, remains saved if its subsequent sync is blocked.
+`--dry-run` skips this write-back and generation stage. Projects without the
+`vscode` client skip it as well.
+
+Older sync state may lack folder names. AllAgents reconstructs that baseline
+when possible; otherwise the first update keeps legacy VS Code name precedence
+and saves the fuller snapshot for later updates. A stale editor name can therefore
+win over a simultaneous YAML rename on that first update. Template-only folders
+are generated from the template: remove them there to keep them out of future
+workspace output.
 
 ```yaml
 # workspace.yaml

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { resolve, basename, isAbsolute, relative } from 'node:path';
+import { resolve, basename, relative } from 'node:path';
 import type { Repository, VscodeConfig } from '../models/workspace-config.js';
 
 /**
@@ -14,9 +14,9 @@ export interface GenerateVscodeWorkspaceInput {
 /**
  * Folder entry in a .code-workspace file
  */
-interface WorkspaceFolder {
+export interface WorkspaceFolder {
   path: string;
-  name?: string;
+  name?: string | undefined;
 }
 
 /**
@@ -36,11 +36,11 @@ function normalizeWorkspacePath(path: string): string {
   return path.replace(/\\/g, '/');
 }
 
-function resolveFolderAbsolutePath(workspacePath: string, folderPath: string): string {
-  return (isAbsolute(folderPath)
-    ? folderPath
-    : resolve(workspacePath, folderPath)
-  ).replace(/\\/g, '/');
+function resolveFolderAbsolutePath(
+  workspacePath: string,
+  folderPath: string,
+): string {
+  return resolve(workspacePath, folderPath).replace(/\\/g, '/');
 }
 
 function resolveFolderDisplayPath(folderPath: string): string {
@@ -143,8 +143,10 @@ export function generateVscodeWorkspace(
   // 1. Repository folders (from workspace.yaml)
   for (const repo of repositories) {
     const absolutePath = resolveFolderAbsolutePath(workspacePath, repo.path);
-    const entry: WorkspaceFolder = { path: resolveFolderDisplayPath(repo.path) };
-    if (repo.name) entry.name = repo.name;
+    const entry: WorkspaceFolder = {
+      path: resolveFolderDisplayPath(repo.path),
+    };
+    if (repo.name !== undefined) entry.name = repo.name;
     folders.push(entry);
     seenPaths.add(absolutePath);
   }
@@ -155,8 +157,10 @@ export function generateVscodeWorkspace(
       const rawPath = folder.path as string;
       const normalizedPath = resolveFolderAbsolutePath(workspacePath, rawPath);
       if (!seenPaths.has(normalizedPath)) {
-        const entry: WorkspaceFolder = { path: resolveFolderDisplayPath(rawPath) };
-        if (folder.name) entry.name = folder.name;
+        const entry: WorkspaceFolder = {
+          path: resolveFolderDisplayPath(rawPath),
+        };
+        if (folder.name !== undefined) entry.name = folder.name;
         folders.push(entry);
         seenPaths.add(normalizedPath);
       }
@@ -229,97 +233,77 @@ export interface ReconcileResult {
   renamed: string[];
 }
 
-/**
- * 3-way merge of .code-workspace folders and workspace.yaml repositories.
- *
- * Uses lastSyncedRepos as the common ancestor to detect:
- * - Folders removed from .code-workspace → remove from workspace.yaml
- * - Folders added to .code-workspace → add to workspace.yaml
- * - Folders added to workspace.yaml (not in lastSyncedRepos) → keep
- *
- * @param workspacePath - Workspace root directory (for resolving relative paths)
- * @param codeWorkspaceFolders - Folders from the existing .code-workspace file
- * @param lastSyncedRepos - Absolute repo paths from sync state (common ancestor)
- * @param currentRepos - Current repositories from workspace.yaml
- */
+/** Normalize folder identity without retaining editor path spelling in sync state. */
+export function snapshotVscodeWorkspaceFolders(
+  workspacePath: string,
+  folders: WorkspaceFolder[],
+): WorkspaceFolder[] {
+  return folders.map(({ path, name }) => ({
+    path: resolveFolderAbsolutePath(workspacePath, path),
+    ...(name !== undefined && { name }),
+  }));
+}
+
+/** Merge actual editor folder/name edits, retaining independent YAML changes. */
 export function reconcileVscodeWorkspaceFolders(
   workspacePath: string,
-  codeWorkspaceFolders: { path: string; name?: string }[],
+  codeWorkspaceFolders: WorkspaceFolder[],
+  lastSyncedFolders: WorkspaceFolder[],
   lastSyncedRepos: string[],
   currentRepos: Repository[],
 ): ReconcileResult {
-  const normalizedWorkspacePath = resolve(workspacePath).replace(/\\/g, '/');
+  const root = resolveFolderAbsolutePath(workspacePath, '.');
+  const folders = new Map(
+    snapshotVscodeWorkspaceFolders(workspacePath, codeWorkspaceFolders)
+      .filter((folder) => folder.path !== root)
+      .map((folder) => [folder.path, folder]),
+  );
+  const baseline = new Map(
+    lastSyncedFolders.map((folder) => [folder.path, folder]),
+  );
+  const previousRepos = new Set(lastSyncedRepos);
+  const currentPaths = new Set(
+    currentRepos.map((repo) =>
+      resolveFolderAbsolutePath(workspacePath, repo.path),
+    ),
+  );
+  const result: ReconcileResult = {
+    updatedRepos: [],
+    added: [],
+    removed: [],
+    renamed: [],
+  };
 
-  // Build map of absolute paths → names from .code-workspace folders (exclude '.')
-  const codeWorkspaceAbsPaths = new Set<string>();
-  const codeWorkspaceNames = new Map<string, string>();
-  for (const folder of codeWorkspaceFolders) {
-    if (folder.path === '.') continue;
-    const absPath = (isAbsolute(folder.path)
-      ? folder.path
-      : resolve(workspacePath, folder.path)
-    ).replace(/\\/g, '/');
-    codeWorkspaceAbsPaths.add(absPath);
-    if (folder.name) codeWorkspaceNames.set(absPath, folder.name);
-  }
-
-  // Build set of last-synced absolute paths (common ancestor)
-  const lastSyncedSet = new Set(lastSyncedRepos.map(p => p.replace(/\\/g, '/')));
-
-  // Build map of absolute path → Repository for current workspace.yaml repos
-  const currentReposByAbsPath = new Map<string, Repository>();
   for (const repo of currentRepos) {
-    const absPath = resolve(workspacePath, repo.path).replace(/\\/g, '/');
-    currentReposByAbsPath.set(absPath, repo);
-  }
-  const currentAbsPaths = new Set(currentReposByAbsPath.keys());
-
-  const added: string[] = [];
-  const removed: string[] = [];
-  const renamed: string[] = [];
-  const updatedRepos: Repository[] = [];
-
-  // Keep repos still in .code-workspace or newly added to workspace.yaml
-  for (const [absPath, repo] of currentReposByAbsPath) {
-    const inLastSync = lastSyncedSet.has(absPath);
-    const inCodeWorkspace = codeWorkspaceAbsPaths.has(absPath);
-
-    if (inLastSync && !inCodeWorkspace) {
-      // Was in last sync, removed from .code-workspace → remove
-      removed.push(repo.path);
+    const path = resolveFolderAbsolutePath(workspacePath, repo.path);
+    const folder = folders.get(path);
+    if (previousRepos.has(path) && !folder) {
+      result.removed.push(repo.path);
+      continue;
+    }
+    if (
+      folder &&
+      folder.name !== baseline.get(path)?.name &&
+      folder.name !== repo.name
+    ) {
+      const { name: _name, ...updated } = repo;
+      result.updatedRepos.push(
+        folder.name === undefined ? updated : { ...updated, name: folder.name },
+      );
+      result.renamed.push(repo.path);
     } else {
-      const folderName = codeWorkspaceNames.get(absPath);
-      if (folderName !== repo.name) {
-        const { name: _name, ...repoWithoutName } = repo;
-        const updatedRepo: Repository = folderName === undefined
-          ? { ...repoWithoutName }
-          : { ...repo };
-        if (folderName !== undefined) {
-          updatedRepo.name = folderName;
-        }
-        updatedRepos.push(updatedRepo);
-        renamed.push(repo.path);
-      } else {
-        updatedRepos.push(repo);
-      }
+      result.updatedRepos.push(repo);
     }
   }
 
-  // Find folders added to .code-workspace that aren't in workspace.yaml
-  for (const absPath of codeWorkspaceAbsPaths) {
-    const inLastSync = lastSyncedSet.has(absPath);
-    const inCurrentRepos = currentAbsPaths.has(absPath);
-
-    if (!inLastSync && !inCurrentRepos) {
-      // New in .code-workspace, not in workspace.yaml → add
-      const relPath = relative(normalizedWorkspacePath, absPath).replace(/\\/g, '/');
-      added.push(relPath);
-      const newRepo: Repository = { path: relPath };
-      const folderName = codeWorkspaceNames.get(absPath);
-      if (folderName) newRepo.name = folderName;
-      updatedRepos.push(newRepo);
-    }
+  for (const [path, folder] of folders) {
+    if (previousRepos.has(path) || currentPaths.has(path)) continue;
+    const prior = baseline.get(path);
+    if (prior && prior.name === folder.name) continue;
+    const repo: Repository = { path: relative(root, path).replace(/\\/g, '/') };
+    if (folder.name !== undefined) repo.name = folder.name;
+    result.added.push(repo.path);
+    result.updatedRepos.push(repo);
   }
-
-  return { updatedRepos, added, removed, renamed };
+  return result;
 }

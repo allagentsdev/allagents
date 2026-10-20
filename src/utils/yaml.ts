@@ -108,6 +108,7 @@ export function parseYamlDocument(input: string) {
     const document = parseDocument(input, {
       ...options,
       customTags: [...options.customTags],
+      keepSourceTokens: true,
     });
     if (document.errors.length) throw document.errors[0];
     // yaml otherwise silently accepts unknown tags as ordinary values.

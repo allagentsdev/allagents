@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { pruneOrphanedPlugins } from '../../../src/core/prune.js';
 import { saveRegistry } from '../../../src/core/marketplace.js';
 import type { MarketplaceRegistry } from '../../../src/core/marketplace.js';

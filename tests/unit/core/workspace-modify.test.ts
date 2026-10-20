@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 import {
   checkRepositoryHealth as checkRepositoryHealthFact,

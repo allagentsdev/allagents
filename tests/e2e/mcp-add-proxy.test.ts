@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { load } from 'js-yaml';
+import { parse as load } from 'yaml';
 import {
   type DummyMcpOAuthServer,
   startDummyMcpOAuthServer,

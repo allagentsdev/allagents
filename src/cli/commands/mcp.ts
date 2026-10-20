@@ -14,7 +14,7 @@ import type {
   CompatibilityCallToolResult,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { dump } from 'js-yaml';
+import { stringifyYaml } from '../../utils/yaml.js';
 import {
   runHttpMcpStdioProxy,
   validateOAuthCallbackUrl,
@@ -1695,7 +1695,7 @@ const mcpGetCmd = command({
       return;
     }
 
-    console.log(dump({ [name]: redactedConfig }, { lineWidth: -1 }).trimEnd());
+    console.log(stringifyYaml({ [name]: redactedConfig }).trimEnd());
   },
 });
 

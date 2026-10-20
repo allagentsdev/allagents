@@ -190,3 +190,16 @@ profiles:
     }
   });
 });
+
+it('keeps workspace YAML diagnostics for syntax, tags, keys and comment-only input', async () => {
+  const testDir = createTestDir();
+  try {
+    const configPath = join(testDir, 'workspace.yaml');
+    for (const source of ['plugins: [', 'plugins: !unknown []', '[a,b]: value', '# Comment only\n']) {
+      writeFileSync(configPath, source);
+      await expect(parseWorkspaceConfig(configPath)).rejects.toThrow('Invalid YAML in .allagents/workspace.yaml:');
+    }
+  } finally {
+    rmSync(testDir, { recursive: true, force: true });
+  }
+});

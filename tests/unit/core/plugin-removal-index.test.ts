@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { removePlugin } from '../../../src/core/workspace-modify.js';
 import { removeUserPlugin } from '../../../src/core/user-workspace.js';
 import { stubHomeDir } from '../../helpers/env.js';

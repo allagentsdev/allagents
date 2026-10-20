@@ -4,6 +4,11 @@ This guide expands [`AGENTS.md`](../AGENTS.md) for synchronization ownership, ou
 
 ## Workspace YAML edits
 
+Use `src/utils/yaml.ts` for production YAML parsing, document creation, and
+serialization. It owns core-schema tags, JavaScript value shapes, and parse
+errors. Read Markdown metadata through `src/utils/frontmatter.ts`, which uses
+that boundary and accepts YAML only.
+
 Use `src/utils/workspace-writer.ts` when persisting workspace configuration changes.
 Its serializer updates the original YAML nodes so comments and blank-line separators
 survive edits. Pass the original content for templates and staged transactions;

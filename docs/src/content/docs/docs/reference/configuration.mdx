@@ -592,7 +592,7 @@ repositories:
     skills: false                        # No skill discovery
 ```
 
-Skills must have a `SKILL.md` file with YAML frontmatter containing `name` and `description` fields. The generated index uses relative paths from the workspace root so AI agents can read the full skill instructions on demand.
+Skills must have a `SKILL.md` file with YAML frontmatter containing `name` and `description` fields. Start the file with a `---` line and end the metadata with another `---` line before the Markdown body. YAML-labelled opening lines (`---yaml` or `---yml`), UTF-8 BOMs, CRLF line endings, and YAML multiline descriptions are supported. Frontmatter is parsed as YAML data; executable frontmatter languages are not evaluated. The generated index uses relative paths from the workspace root so AI agents can read the full skill instructions on demand.
 
 #### Duplicate Skill Resolution
 

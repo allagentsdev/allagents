@@ -3,9 +3,9 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { readFile } from 'node:fs/promises';
-import { load } from 'js-yaml';
+import { parse as load } from 'yaml';
 import { syncWorkspace } from '../../src/core/sync.js';
 import { getAllSkillsFromPlugins, findSkillByName } from '../../src/core/skills.js';
 import {

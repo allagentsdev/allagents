@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { resetUpdatePromptMocks, spinnerStopMock, updateNoteMock, updateSelectResponses } from '../../helpers/clack-prompts-mock.js';
 import { syncUserWorkspace } from '../../../src/core/sync.js';
 import { getWorkspaceStatus } from '../../../src/core/status.js';

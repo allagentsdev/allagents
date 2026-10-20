@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import {
   addDisabledSkill,
   removeDisabledSkill,

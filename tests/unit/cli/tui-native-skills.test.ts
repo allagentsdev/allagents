@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { resetUpdatePromptMocks, skillMultiselectMock, updateSelectMock, updateSelectResponses } from '../../helpers/clack-prompts-mock.js';
 import { TuiCache } from '../../../src/cli/tui/cache.js';
 

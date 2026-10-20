@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import {
   resetUpdatePromptMocks,
   spinnerErrorMock,

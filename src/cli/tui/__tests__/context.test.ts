@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, SYNC_STATE_FILE } from '../../../constants.js';
 import { getTuiContext } from '../context.js';
 

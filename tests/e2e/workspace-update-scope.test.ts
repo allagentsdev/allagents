@@ -19,7 +19,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 
 const repoRoot = join(import.meta.dir, '..', '..');
 const cliEntry = join(repoRoot, 'dist', 'index.js');

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import Ajv from 'ajv';
-import { load } from 'js-yaml';
+import { parse as load } from 'yaml';
 import { generateWorkspaceSchemas } from '../../../scripts/generate-workspace-schemas.js';
 import {
   ProjectWorkspaceConfigSchema,

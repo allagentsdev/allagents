@@ -10,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { removeMarketplace, saveRegistry } from '../../../src/core/marketplace.js';
 import type { MarketplaceRegistry } from '../../../src/core/marketplace.js';
 import { WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';

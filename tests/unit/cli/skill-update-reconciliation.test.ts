@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { createSkillUpdateReconciler } from '../../../src/cli/skill-update-reconciliation.js';
 import type {
   CheckoutNode,

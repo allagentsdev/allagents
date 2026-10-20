@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from 'cmd-ts';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { PiNativeClient } from '../../../src/core/native/index.js';
 import { syncUserWorkspace } from '../../../src/core/sync.js';
 import { parseRemotePluginSource, withPluginSourceRef } from '../../../src/utils/plugin-path.js';

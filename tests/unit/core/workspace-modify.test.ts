@@ -111,8 +111,50 @@ mock.module('../../../src/core/git.js', () => ({
   },
 }));
 
-const { updateRepositories, addPlugin, addPluginForTarget } =
+const { updateRepositories, addPlugin, addPluginForTarget, removePlugin } =
   await import('../../../src/core/workspace-modify.js');
+
+describe('removePlugin', () => {
+  const testDir = join(tmpdir(), `allagents-test-remove-comments-${Date.now()}`);
+
+  beforeEach(() => {
+    mkdirSync(join(testDir, '.allagents'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test('indexed plugin removal keeps comments on the surviving duplicate source declaration', async () => {
+    const configPath = join(testDir, '.allagents', 'workspace.yaml');
+    writeFileSync(configPath, `repositories: []
+plugins:
+  - source: ./shared-plugin # Remove the Claude installation
+    clients:
+      - claude
+  - source: ./shared-plugin # Keep the Copilot installation
+    clients:
+      - copilot # Preferred client
+
+# Workspace clients
+clients:
+  - claude
+  - copilot
+`);
+
+    expect((await removePlugin('./shared-plugin', testDir, 0)).success).toBe(true);
+
+    const content = readFileSync(configPath, 'utf-8');
+    expect((load(content) as WorkspaceConfig).plugins).toEqual([
+      { source: './shared-plugin', clients: ['copilot'] },
+    ]);
+    expect(content).toContain('source: ./shared-plugin # Keep the Copilot installation');
+    expect(content).toContain('- copilot # Preferred client');
+    expect(content).not.toContain('Remove the Claude installation');
+    expect(content).toContain('\n\n# Workspace clients\nclients:');
+  });
+
+});
 
 describe('updateRepositories', () => {
   const testDir = join(tmpdir(), `allagents-test-repos-${Date.now()}`);

@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve, dirname, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dump } from 'js-yaml';
+import { serializeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { syncWorkspace, type SyncResult } from './sync.js';
 import { ensureWorkspaceRules } from './transform.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, AGENT_FILES, type WorkspaceRepository } from '../constants.js';
@@ -120,7 +120,7 @@ export async function initWorkspace(
             if (parsedFromUrl) {
               const sourcePath = source === '.' ? githubBasePath : (githubBasePath ? `${githubBasePath}/${source}` : source);
               workspace.source = `https://github.com/${parsedFromUrl.owner}/${parsedFromUrl.repo}/tree/${githubBranch}/${sourcePath}`;
-              workspaceYamlContent = dump(parsed, { lineWidth: -1 });
+              workspaceYamlContent = serializeWorkspaceConfig(parsed, workspaceYamlContent);
             }
           }
         }
@@ -179,7 +179,7 @@ export async function initWorkspace(
             // Convert relative local paths to absolute (skip URLs and already-absolute paths)
             if (!isGitHubUrl(source) && !isAbsolute(source)) {
               workspace.source = resolve(sourceDir, source);
-              workspaceYamlContent = dump(parsed, { lineWidth: -1 });
+              workspaceYamlContent = serializeWorkspaceConfig(parsed, workspaceYamlContent);
             }
           }
         }
@@ -199,7 +199,7 @@ export async function initWorkspace(
     if (options.clients && options.clients.length > 0) {
       const configParsed = loadYaml(workspaceYamlContent) as Record<string, unknown>;
       configParsed.clients = options.clients;
-      workspaceYamlContent = dump(configParsed, { lineWidth: -1 });
+      workspaceYamlContent = serializeWorkspaceConfig(configParsed, workspaceYamlContent);
     }
 
     // Preserve init's historical support for sparse templates while validating

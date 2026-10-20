@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { dump } from 'js-yaml';
+import { serializeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
   PreparedUnitReconciliation,
@@ -290,7 +290,9 @@ function transformConfig(
     removePluginEntry(config, index);
   }
 
-  const replacement = dump(config, { lineWidth: -1 });
+  const replacement = serializeWorkspaceConfig(config, original, {
+    removedPluginIndexes: [...removeIndexes],
+  });
   parseConfig(replacement, path, scope);
   return replacement;
 }

@@ -1,7 +1,6 @@
-import { writeFile } from 'node:fs/promises';
+import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import { isPluginSpec, parsePluginSpec, getMarketplace } from './marketplace.js';
 import { getUserWorkspaceConfigPath, isUserConfigPath } from './user-workspace.js';
@@ -77,7 +76,7 @@ export async function pruneOrphanedPlugins(
 
     if (projectResult.removed.length > 0) {
       config.plugins = projectResult.keptEntries;
-      await writeFile(projectConfigPath, dump(config, { lineWidth: -1 }), 'utf-8');
+      await writeWorkspaceConfig(projectConfigPath, config);
     }
   }
 
@@ -96,7 +95,7 @@ export async function pruneOrphanedPlugins(
 
     if (userResult.removed.length > 0) {
       userConfig.plugins = userResult.keptEntries;
-      await writeFile(userConfigPath, dump(userConfig, { lineWidth: -1 }), 'utf-8');
+      await writeWorkspaceConfig(userConfigPath, userConfig);
     }
   }
 

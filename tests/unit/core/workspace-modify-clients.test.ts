@@ -31,6 +31,31 @@ describe('setClients', () => {
     expect(config.clients).toEqual(['cursor', 'gemini']);
   });
 
+  it('preserves comments and section spacing when clients are reordered and removed', async () => {
+    const configPath = join(testDir, '.allagents', 'workspace.yaml');
+    writeFileSync(configPath, `# Shared team configuration
+repositories: [] # No linked repositories
+
+# Portable plugins
+plugins: []
+
+clients:
+  - claude # Remove this client
+  - copilot # Keep this client
+  - cursor # Move this client first
+`);
+
+    expect((await setClients(['cursor', 'copilot'], testDir)).success).toBe(true);
+
+    const content = readFileSync(configPath, 'utf-8');
+    expect((load(content) as WorkspaceConfig).clients).toEqual(['cursor', 'copilot']);
+    expect(content).toStartWith('# Shared team configuration\n');
+    expect(content).toContain('repositories: [] # No linked repositories\n\n# Portable plugins\nplugins: []\n\nclients:');
+    expect(content).toContain('- cursor # Move this client first');
+    expect(content).toContain('- copilot # Keep this client');
+    expect(content).not.toContain('Remove this client');
+  });
+
   it('should auto-create workspace.yaml when it does not exist', async () => {
     const emptyDir = join(tmpdir(), `allagents-test-empty-${Date.now()}`);
     mkdirSync(emptyDir, { recursive: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { load } from 'js-yaml';
@@ -24,6 +24,36 @@ describe('initWorkspace with clients option', () => {
     const content = readFileSync(join(testDir, '.allagents', 'workspace.yaml'), 'utf-8');
     const config = load(content) as WorkspaceConfig;
     expect(config.clients).toEqual(['cursor', 'gemini']);
+  });
+
+  it('preserves local template comments while rewriting its source and overriding clients', async () => {
+    const templateDir = join(testDir, 'template');
+    const targetDir = join(testDir, 'project');
+    mkdirSync(join(templateDir, '.allagents'), { recursive: true });
+    writeFileSync(join(templateDir, '.allagents', 'workspace.yaml'), `# Team template
+workspace:
+  source: . # Resolve relative to this template
+  files: []
+
+# Repositories are optional
+repositories: []
+plugins: []
+
+clients:
+  - claude # Keep client preferences
+`);
+
+    await initWorkspace(targetDir, { from: templateDir, clients: ['claude', 'copilot'] });
+
+    const content = readFileSync(join(targetDir, '.allagents', 'workspace.yaml'), 'utf-8');
+    const config = load(content) as WorkspaceConfig;
+    expect(config.workspace?.source).toBe(templateDir);
+    expect(config.clients).toEqual(['claude', 'copilot']);
+    expect(content).toStartWith('# Team template\n');
+    expect(content).toContain('# Resolve relative to this template');
+    expect(content).toContain('files: []\n\n# Repositories are optional\nrepositories: []');
+    expect(content).toContain('plugins: []\n\nclients:');
+    expect(content).toContain('- claude # Keep client preferences');
   });
 
   it('should write client entry objects with install mode to workspace.yaml', async () => {

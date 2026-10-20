@@ -7,6 +7,14 @@ description: Configuration file reference.
 
 The workspace configuration file defines repositories, plugins, workspace file sync, and target clients.
 
+CLI edits preserve comments and blank-line separators in `workspace.yaml`, including
+notes beside plugins, repositories, clients, and MCP servers. Comments on retained
+list entries follow those entries when the list changes; comments attached to a
+removed entry are removed with it. This also applies to the user workspace and
+profile declarations in `~/.allagents/workspace.yaml`.
+YAML spacing and comment placement may be normalized when the file changes;
+an edit that leaves the configuration unchanged preserves the original file text.
+
 ```yaml
 setup:
   - bun install

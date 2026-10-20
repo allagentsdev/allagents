@@ -147,7 +147,7 @@ describe('user-workspace', () => {
       await mkdir(join(tempHome, '.allagents'), { recursive: true });
       await writeFile(
         configPath,
-        'profiles:\n  research:\n    clients:\n      - name: pi\n',
+        '# Global profiles\nprofiles:\n  research:\n    # Research client\n    clients:\n      - name: pi # Native profile\n',
         'utf-8',
       );
 
@@ -160,6 +160,8 @@ describe('user-workspace', () => {
       const editResult = await setUserClients(['omp']);
       expect(editResult.success).toBe(true);
       const edited = await readFile(configPath, 'utf-8');
+      expect(edited).toStartWith('# Global profiles\n');
+      expect(edited).toContain('# Research client\n    clients:\n      - name: pi # Native profile');
       expect(edited).toContain('profiles:');
       expect(edited).not.toContain('settings:');
       expect(edited).not.toContain('install:');

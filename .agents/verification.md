@@ -64,3 +64,12 @@ A branch is ready only when:
 5. TUI changes satisfy [`.agents/tui-dogfooding.md`](tui-dogfooding.md), including durable visual evidence when required.
 6. The PR description records commands, fixture setup, results, and evidence links.
 7. CI is passing or the exact external blocker is documented.
+
+## Package size failures
+
+Before raising `PACKAGE_SIZE_BUDGETS` in `scripts/check-package-size.ts`, inspect
+`dist/THIRD_PARTY_NOTICES.txt` and `bun.lock` for duplicate dependency versions.
+Routine updates can resolve a shared dependency separately for a transitive
+consumer. Align compatible versions and rebuild before deciding that growth
+requires a larger budget. Verify with `bun run package:check` and
+`bun run package:smoke`.

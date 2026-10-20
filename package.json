@@ -1,6 +1,6 @@
 {
   "name": "allagents",
-  "version": "1.21.0",
+  "version": "1.21.1",
   "packageManager": "bun@1.4.0",
   "description": "CLI tool for managing multi-repo AI agent workspaces with plugin synchronization",
   "type": "module",
@@ -60,7 +60,7 @@
     "@biomejs/biome": "^2.5.13",
     "@clack/prompts": "^1.8.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@types/bun": "1.4.2",
+    "@types/bun": "1.4.3",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/picomatch": "^4.0.3",
@@ -77,7 +77,7 @@
     "tinyglobby": "^0.2.17",
     "typescript": "^7.0.2",
     "yaml": "^2.9.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "engines": {
     "node": ">=22.0.0",

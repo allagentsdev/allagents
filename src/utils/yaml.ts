@@ -10,6 +10,7 @@ import {
   YAMLSeq,
   visit,
   type CollectionTag,
+  type Document,
   type ScalarTag,
 } from 'yaml';
 
@@ -147,8 +148,13 @@ export function parseYamlDocument(input: string) {
   });
 }
 
+/** Read an application-parsed document without reparsing or caching values. */
+export function yamlDocumentValue(document: Document): unknown {
+  return yamlOperation(() => document.toJS());
+}
+
 export function loadYaml(input: string): unknown {
-  return yamlOperation(() => parseYamlDocument(input).toJS());
+  return yamlDocumentValue(parseYamlDocument(input));
 }
 
 export function stringifyYaml(value: unknown): string {

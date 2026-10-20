@@ -10,7 +10,7 @@ import {
   type Node,
   type Document,
 } from 'yaml';
-import { loadYaml, parseYamlDocument, stringifyYaml } from './yaml.js';
+import { loadYaml, parseYamlDocument, stringifyYaml, yamlDocumentValue } from './yaml.js';
 
 interface WorkspaceWriteOptions {
   /** Disambiguate removal of declarations whose values are identical. */
@@ -38,10 +38,9 @@ export function serializeWorkspaceConfig(
   options: WorkspaceWriteOptions = {},
 ): string {
   if (original === undefined) return stringifyYaml(config);
-  const before = loadYaml(original);
-  if (isDeepStrictEqual(before, config)) return original;
-
   const document: Document = parseYamlDocument(original);
+  const before = yamlDocumentValue(document);
+  if (isDeepStrictEqual(before, config)) return original;
 
   const aliases = new Map<Node, unknown>();
   visit(document, {

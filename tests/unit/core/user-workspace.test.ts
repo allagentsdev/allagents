@@ -19,7 +19,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 import {
   addUserPlugin,
@@ -497,11 +497,11 @@ describe('user-workspace', () => {
       // Manually add a plugin with marketplace suffix
       const configPath = getUserWorkspaceConfigPath();
       const content = await readFile(configPath, 'utf-8');
-      const { load: yamlLoad } = await import('js-yaml');
+      const { parse: yamlLoad } = await import('yaml');
       const config = yamlLoad(content) as any;
       config.plugins.push('code-review@marketplace');
 
-      const { dump: yamlDump } = await import('js-yaml');
+      const { stringify: yamlDump } = await import('yaml');
       const { writeFile: fsWriteFile } = await import('node:fs/promises');
       await fsWriteFile(configPath, yamlDump(config, { lineWidth: -1 }), 'utf-8');
 
@@ -517,8 +517,8 @@ describe('user-workspace', () => {
       await ensureUserWorkspace();
 
       const configPath = getUserWorkspaceConfigPath();
-      const { load: yamlLoad } = await import('js-yaml');
-      const { dump: yamlDump } = await import('js-yaml');
+      const { parse: yamlLoad } = await import('yaml');
+      const { stringify: yamlDump } = await import('yaml');
       const { writeFile: fsWriteFile } = await import('node:fs/promises');
 
       const content = await readFile(configPath, 'utf-8');
@@ -540,8 +540,8 @@ describe('user-workspace', () => {
       await ensureUserWorkspace();
 
       const configPath = getUserWorkspaceConfigPath();
-      const { load: yamlLoad } = await import('js-yaml');
-      const { dump: yamlDump } = await import('js-yaml');
+      const { parse: yamlLoad } = await import('yaml');
+      const { stringify: yamlDump } = await import('yaml');
       const { writeFile: fsWriteFile } = await import('node:fs/promises');
 
       const content = await readFile(configPath, 'utf-8');
@@ -574,7 +574,7 @@ describe('user-workspace', () => {
     test('returns marketplace plugin', async () => {
       await ensureUserWorkspace();
       const configPath = getUserWorkspaceConfigPath();
-      const { load: yamlLoad, dump: yamlDump } = await import('js-yaml');
+      const { parse: yamlLoad, stringify: yamlDump } = await import('yaml');
       const content = await readFile(configPath, 'utf-8');
       const config = yamlLoad(content) as any;
       config.plugins.push('code-review@my-marketplace');
@@ -589,7 +589,7 @@ describe('user-workspace', () => {
     test('returns GitHub URL plugin', async () => {
       await ensureUserWorkspace();
       const configPath = getUserWorkspaceConfigPath();
-      const { load: yamlLoad, dump: yamlDump } = await import('js-yaml');
+      const { parse: yamlLoad, stringify: yamlDump } = await import('yaml');
       const content = await readFile(configPath, 'utf-8');
       const config = yamlLoad(content) as any;
       config.plugins.push('https://github.com/owner/my-repo');
@@ -608,7 +608,7 @@ describe('user-workspace', () => {
       const workspaceDir = join(tempHome, 'project');
       const configDir = join(workspaceDir, '.allagents');
       await mkdir(configDir, { recursive: true });
-      const { dump: yamlDump } = await import('js-yaml');
+      const { stringify: yamlDump } = await import('yaml');
       await writeFile(
         join(configDir, 'workspace.yaml'),
         yamlDump({
@@ -629,7 +629,7 @@ describe('user-workspace', () => {
       const workspaceDir = join(tempHome, 'project');
       const configDir = join(workspaceDir, '.allagents');
       await mkdir(configDir, { recursive: true });
-      const { dump: yamlDump } = await import('js-yaml');
+      const { stringify: yamlDump } = await import('yaml');
       await writeFile(
         join(configDir, 'workspace.yaml'),
         yamlDump({
@@ -693,7 +693,7 @@ clients:
       // Write a config directly to ~/.allagents/workspace.yaml (the user config)
       const configDir = join(tempHome, '.allagents');
       await mkdir(configDir, { recursive: true });
-      const { dump: yamlDump } = await import('js-yaml');
+      const { stringify: yamlDump } = await import('yaml');
       await writeFile(
         join(configDir, 'workspace.yaml'),
         yamlDump({

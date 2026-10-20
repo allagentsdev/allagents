@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { syncWorkspace } from '../../../src/core/sync.js';
 
 describe('sync with disabled skills', () => {

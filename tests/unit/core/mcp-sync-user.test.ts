@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import { getCopilotMcpConfigPath } from '../../../src/core/copilot-mcp.js';
 import { syncUserMcpOnly } from '../../../src/core/mcp-sync.js';

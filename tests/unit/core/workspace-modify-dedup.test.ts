@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 
 // Mock git module to avoid network calls in verifyGitHubUrlExists

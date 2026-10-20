@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { load } from 'js-yaml';
+import { parse as load } from 'yaml';
 import { setClients } from '../../../src/core/workspace-modify.js';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 

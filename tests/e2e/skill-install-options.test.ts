@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 
 const cliEntry = join(import.meta.dir, '..', '..', 'src', 'cli', 'index.ts');
 let root: string;

@@ -17,7 +17,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { dump, load } from 'js-yaml';
+import { stringify as dump, parse as load } from 'yaml';
 import { simpleGit } from 'simple-git';
 import type { WorkspaceConfig } from '../../src/models/workspace-config.js';
 

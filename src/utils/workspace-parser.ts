@@ -8,7 +8,7 @@ import {
   type WorkspaceConfig,
 } from '../models/workspace-config.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
-import { loadYaml } from './yaml.js';
+import { loadYaml, YamlError } from './yaml.js';
 import { flattenZodIssues } from './zod-issues.js';
 
 const configName = `${CONFIG_DIR}/${WORKSPACE_CONFIG_FILE}`;
@@ -70,7 +70,7 @@ async function loadConfigFile(path: string): Promise<unknown> {
           `${configName} not found at ${path}\n  Run 'allagents workspace init <path>' to create a new workspace`,
         );
       }
-      if (error.name === 'YAMLException') {
+      if (error instanceof YamlError) {
         throw new Error(`Invalid YAML in ${configName}: ${error.message}`);
       }
       throw error;

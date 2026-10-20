@@ -1,18 +1,16 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
-import { dump } from 'js-yaml';
 import {
   isAlias,
   isMap,
   isNode,
   isScalar,
   isSeq,
-  parseDocument,
   visit,
   type Node,
   type Document,
 } from 'yaml';
-import { loadYaml } from './yaml.js';
+import { loadYaml, parseYamlDocument, stringifyYaml } from './yaml.js';
 
 interface WorkspaceWriteOptions {
   /** Disambiguate removal of declarations whose values are identical. */
@@ -39,16 +37,11 @@ export function serializeWorkspaceConfig(
   original?: string,
   options: WorkspaceWriteOptions = {},
 ): string {
-  if (original === undefined) return dump(config, { lineWidth: -1 });
+  if (original === undefined) return stringifyYaml(config);
   const before = loadYaml(original);
   if (isDeepStrictEqual(before, config)) return original;
 
-  const document: Document = parseDocument(original, {
-    schema: 'core',
-    customTags: ['timestamp', 'binary', 'omap', 'pairs', 'set', 'merge'],
-    merge: true,
-  });
-  if (document.errors.length) throw document.errors[0];
+  const document: Document = parseYamlDocument(original);
 
   const aliases = new Map<Node, unknown>();
   visit(document, {
@@ -214,7 +207,7 @@ export function serializeWorkspaceConfig(
   if (
     !isDeepStrictEqual(
       loadYaml(result),
-      loadYaml(dump(config, { lineWidth: -1 })),
+      loadYaml(stringifyYaml(config)),
     )
   ) {
     throw new Error(

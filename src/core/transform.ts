@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
-import matter from 'gray-matter';
+import { readYamlFrontmatter } from '../utils/frontmatter.js';
 import picomatch from 'picomatch';
 import {
   type SkillsIndexRef,
@@ -944,7 +944,7 @@ async function readAgentLogicalName(
 
   let name: string | undefined;
   try {
-    const parsed = matter(await readFile(source, 'utf-8')).data?.name;
+    const parsed = readYamlFrontmatter(await readFile(source, 'utf-8')).name;
     if (typeof parsed === 'string' && parsed.length > 0) name = parsed;
   } catch {
     // An unreadable name cannot participate in logical-name ownership.

@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { load } from 'js-yaml';
+import { parse as load } from 'yaml';
 import { runMcpServers, type McpTuiPrompts } from '../../../src/cli/tui/actions/mcp.js';
 import { getTuiContext } from '../../../src/cli/tui/context.js';
 import { resolveMcpDestination } from '../../../src/core/mcp-servers.js';

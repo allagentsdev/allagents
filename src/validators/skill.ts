@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import matter from 'gray-matter';
+import { readYamlFrontmatter } from '../utils/frontmatter.js';
 import {
   SkillMetadataSchema,
   type SkillMetadata,
@@ -40,7 +40,7 @@ export async function validateSkill(
   try {
     // Read and parse SKILL.md
     const content = await readFile(skillMdPath, 'utf-8');
-    const { data: frontmatter } = matter(content);
+    const frontmatter = readYamlFrontmatter(content);
 
     // Check if frontmatter exists
     if (!frontmatter || Object.keys(frontmatter).length === 0) {
@@ -122,7 +122,7 @@ export async function validateAllSkills(
  */
 export function parseSkillMetadata(content: string): SkillMetadata | null {
   try {
-    const { data: frontmatter } = matter(content);
+    const frontmatter = readYamlFrontmatter(content);
     const result = SkillMetadataSchema.safeParse(frontmatter);
     return result.success ? result.data : null;
   } catch {

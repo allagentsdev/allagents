@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, test } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { stubHomeDir } from '../../helpers/env.js';
 import {
   getAllSkillsFromPlugins,

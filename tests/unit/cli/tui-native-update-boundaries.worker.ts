@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { ClaudeNativeClient, CopilotNativeClient } from '../../../src/core/native/index.js';
 import { addMarketplace } from '../../../src/core/marketplace.js';
 import { syncUserWorkspace } from '../../../src/core/sync.js';

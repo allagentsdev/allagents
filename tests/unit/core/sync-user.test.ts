@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { dump } from 'js-yaml';
+import { stringify as dump } from 'yaml';
 import { syncUserWorkspace } from '../../../src/core/sync.js';
 import { WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';

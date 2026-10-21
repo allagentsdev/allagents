@@ -86,4 +86,10 @@ YAML names; unrelated editor edits must preserve YAML-only changes.
 Validate and prepare imports before migrations or sync-state publication. Failed
 imports must preserve pending editor bytes and their baseline. Change only raw
 repository declarations through the shared YAML writer and keep dry-run read-only.
-Do not add a conflict prompt, settings import or command-wide rollback here.
+Keep confirmation limited to uncertain legacy repository imports. Core owns the
+repository-only preview and invokes an optional confirmation callback before
+publication; CLI/TUI code owns `--yes`, terminal detection, sanitized display and
+spinner suspension. A missing or declined confirmation leaves the pending import
+unchanged. Complete snapshots retain automatic editor precedence, and unrelated
+plugin edits do not create repository ambiguity. Keep settings import and
+command-wide rollback outside this boundary.

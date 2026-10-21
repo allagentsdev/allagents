@@ -43,6 +43,7 @@ export const skillsRemoveMeta: AgentCommandMeta = {
     },
   ],
   options: [
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Approve legacy VS Code repository write-back without prompting' },
     {
       flag: '--scope',
       short: '-s',

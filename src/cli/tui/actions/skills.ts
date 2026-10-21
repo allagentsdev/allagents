@@ -1,3 +1,4 @@
+import { syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
 import { getAllSkillsFromPlugins, getNativePluginSources, discoverSkillNames, type SkillInfo } from '../../../core/skills.js';
 import {
@@ -11,7 +12,7 @@ import {
   isUserConfigPath,
   hasUserPlugin,
 } from '../../../core/user-workspace.js';
-import { syncWorkspace, syncUserWorkspace } from '../../../core/sync.js';
+import { syncUserWorkspace } from '../../../core/sync.js';
 import {
   listMarketplaces,
   listMarketplacePlugins,
@@ -256,14 +257,22 @@ async function runToggleSkills(
 
   // Auto-sync affected scopes
   s.message('Updating...');
+  const errors: string[] = [];
   if (changedProject && context.workspacePath) {
-    await syncWorkspace(context.workspacePath);
+    const synced = await syncProjectWorkspace(context.workspacePath, { spinner: s });
+    if (!synced.success) errors.push(synced.error ?? 'Project update failed');
   }
   if (changedUser) {
-    await syncUserWorkspace();
+    const synced = await syncUserWorkspace();
+    if (!synced.success) errors.push(synced.error ?? 'User update failed');
+  }
+  cache?.invalidate();
+  if (errors.length > 0) {
+    s.stop('Update failed');
+    p.note(`Skill selection was saved, but update failed: ${errors.join('; ')}`, 'Error');
+    return;
   }
   s.stop('Skills updated');
-  cache?.invalidate();
 
   const changes: string[] = [];
   for (const skill of toEnable) {

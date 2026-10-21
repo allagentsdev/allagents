@@ -1,5 +1,6 @@
+import { syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
-import { syncUserWorkspace, syncWorkspace } from '../../../core/sync.js';
+import { syncUserWorkspace } from '../../../core/sync.js';
 import { formatVerboseSyncLines } from '../../format-sync.js';
 import type { TuiContext } from '../context.js';
 
@@ -12,19 +13,18 @@ export async function runSync(context: TuiContext): Promise<void> {
   try {
     const s = p.spinner();
     let projectLines: string[] | undefined;
+    let projectFailed = false;
 
     // Sync project-level plugins if workspace exists
     if (context.hasWorkspace && context.workspacePath) {
       s.start('Updating project...');
-      const result = await syncWorkspace(context.workspacePath);
+      const result = await syncProjectWorkspace(context.workspacePath, { spinner: s });
 
-      if (result.error) {
-        if (context.userPluginCount > 0) {
-          s.message('Updating user configuration...');
-        } else {
-          s.stop('Update failed');
-        }
-        p.note(result.error, 'Update Error');
+      if (!result.success) {
+        projectFailed = true;
+        s.stop('Update failed');
+        p.note(result.error ?? 'Update failed', 'Update Error');
+        if (context.userPluginCount > 0) s.start('Updating user configuration...');
       } else {
         projectLines = formatVerboseSyncLines(result);
         if (context.userPluginCount > 0) {
@@ -43,15 +43,15 @@ export async function runSync(context: TuiContext): Promise<void> {
         s.start('Updating user configuration...');
       }
       const userResult = await syncUserWorkspace();
-      s.stop('Update complete');
+      s.stop(userResult.success && !projectFailed ? 'Update complete' : 'Update failed');
 
       // Show project results first (deferred from above)
       if (projectLines) {
         p.note(projectLines.join('\n'), 'Project Update');
       }
 
-      if (userResult.error) {
-        p.note(userResult.error, 'User Update Error');
+      if (!userResult.success) {
+        p.note(userResult.error ?? 'Update failed', 'User Update Error');
       } else {
         const lines = formatVerboseSyncLines(userResult);
         p.note(lines.join('\n'), 'User Update');

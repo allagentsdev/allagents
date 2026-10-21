@@ -24,7 +24,6 @@ import {
   buildPluginSyncPlans,
   nativeIdentityMatches,
   preflightNativePluginDeclaration,
-  syncWorkspace,
   syncUserWorkspace,
   type SyncOptions,
 } from '../../core/sync.js';
@@ -61,6 +60,7 @@ import {
 } from '../../core/status.js';
 import { parseMarketplaceManifest } from '../../utils/marketplace-manifest-parser.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
+import { syncProjectWorkspace, type CliSyncOptions } from '../project-sync.js';
 import { terminalSafe } from '../terminal-output.js';
 import { settleNativePluginUpdate } from '../native-plugin-update.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
@@ -121,7 +121,7 @@ interface SyncDisplayOptions {
  * Run sync and print results. Returns true if sync succeeded.
  */
 async function runSyncAndPrint(
-  options: SyncOptions = {},
+  options: CliSyncOptions = {},
   {
     announceWorkspace = true,
     compactSuccess = false,
@@ -130,7 +130,7 @@ async function runSyncAndPrint(
   if (!isJsonMode() && announceWorkspace) {
     console.log('\nUpdating workspace...\n');
   }
-  const result = await syncWorkspace(process.cwd(), options);
+  const result = await syncProjectWorkspace(process.cwd(), options);
 
   if (!result.success && result.error && !isJsonMode()) {
     console.error(`Sync error: ${result.error}`);
@@ -207,7 +207,7 @@ async function runSyncAndPrint(
     }
   }
 
-  return { ok, syncData };
+  return { ok, syncData, error: result.error };
 }
 
 /**
@@ -294,7 +294,7 @@ async function runUserSyncAndPrint(
     }
   }
 
-  return { ok, syncData };
+  return { ok, syncData, error: result.error };
 }
 
 
@@ -1334,7 +1334,7 @@ const pluginInstallCmd = command({
         // Do an initial sync to fetch the plugin so we can discover its skills.
         const initialSync = isUser
           ? await syncUserWorkspace()
-          : await syncWorkspace(workspacePath);
+          : await syncProjectWorkspace(workspacePath, { yes });
 
         if (!initialSync.success) {
           const error = `Initial sync failed: ${initialSync.error ?? 'Unknown error'}`;
@@ -1401,9 +1401,9 @@ const pluginInstallCmd = command({
       }
 
       // Single sync pass (enabledSkills already written if --skill was used)
-      const { ok: syncOk, syncData } = isUser
+      const { ok: syncOk, syncData, error: syncError } = isUser
         ? await runUserSyncAndPrint()
-        : await runSyncAndPrint();
+        : await runSyncAndPrint({ yes });
 
       if (!isJsonMode() && syncOk) {
         console.log(`\n\u2714 Successfully installed plugin: ${displayPlugin} (scope: ${isUser ? 'user' : 'project'})`);
@@ -1421,7 +1421,7 @@ const pluginInstallCmd = command({
             replaced: result.replaced ?? false,
             syncResult: syncData,
           },
-          ...(!syncOk && { error: 'Sync completed with failures' }),
+          ...(!syncOk && { error: syncError ?? 'Update completed with failures' }),
         });
         if (!syncOk) process.exit(1);
         return;
@@ -1451,10 +1451,11 @@ const pluginUninstallCmd = command({
   description: buildDescription(pluginUninstallMeta),
   aliases: ['remove'],
   args: {
+    yes: flag({ long: 'yes', short: 'y', description: 'Approve legacy VS Code repository write-back without prompting' }),
     plugin: positional({ type: string, displayName: 'plugin' }),
     scope: option({ type: optional(string), long: 'scope', short: 's', description: 'Installation scope: "project" (default) or "user"' }),
   },
-  handler: async ({ plugin, scope }) => {
+  handler: async ({ plugin, scope, yes }) => {
     try {
       if (scope && scope !== 'user' && scope !== 'project') {
         throw new Error(
@@ -1530,7 +1531,7 @@ const pluginUninstallCmd = command({
         const sync =
           targetScope === 'user'
             ? await runUserSyncAndPrint({ nativeSelection })
-            : await runSyncAndPrint({ nativeSelection });
+            : await runSyncAndPrint({ nativeSelection, yes });
         syncResults[targetScope] = sync.syncData;
         if (!sync.ok) allOk = false;
       }
@@ -1595,10 +1596,11 @@ const pluginUpdateCmd = command({
   name: 'update',
   description: buildDescription(pluginUpdateMeta),
   args: {
+    yes: flag({ long: 'yes', short: 'y', description: 'Approve legacy VS Code repository write-back without prompting' }),
     plugin: positional({ type: optional(string), displayName: 'plugin' }),
     scope: option({ type: optional(string), long: 'scope', short: 's', description: 'Installation scope: "project" (default), "user", or "all"' }),
   },
-  handler: async ({ plugin, scope }) => {
+  handler: async ({ plugin, scope, yes }) => {
     const updateContext = new UpdateContext();
     const jsonMode = isJsonMode();
     const progressiveOutput = Boolean(process.stdout.isTTY) && !jsonMode;
@@ -1889,6 +1891,7 @@ const pluginUpdateCmd = command({
         const { ok, syncData } = await runSyncAndPrint(
           {
             skipAgentFiles: true,
+            yes,
             nativeSelection: {
               mode: 'update',
               targets: nativeTargets.project,

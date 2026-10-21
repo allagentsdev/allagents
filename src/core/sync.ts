@@ -337,10 +337,26 @@ export interface PluginSyncResult {
   scope?: 'project' | 'user';
 }
 
+/** Repository-only changes proposed when legacy state cannot prove prior folder names. */
+export interface LegacyVscodeImportPreview {
+  workspacePath: string;
+  added: readonly WorkspaceFolder[];
+  removed: readonly WorkspaceFolder[];
+  renamed: readonly {
+    path: string;
+    beforeName?: string | undefined;
+    afterName?: string | undefined;
+  }[];
+}
+
 /**
  * Options for workspace sync
  */
 export interface SyncOptions {
+  /** Approve an import whose prior folder/name baseline cannot be reconstructed. */
+  confirmLegacyVscodeImport?: (
+    preview: LegacyVscodeImportPreview,
+  ) => Promise<boolean>;
   /** Skip fetching from remote and use cached version if available */
   offline?: boolean;
   /** Simulate sync without making changes */
@@ -2746,6 +2762,7 @@ interface PreparedVscodeWorkspace {
   templateContent: string | undefined;
   state: { hash: string; repos: string[]; folders: WorkspaceFolder[] };
   repositoryImport?: { original: string; config: WorkspaceConfig };
+  legacyImport?: LegacyVscodeImportPreview;
 }
 
 function readVscodeWorkspaceFolders(content: string): WorkspaceFolder[] {
@@ -2792,6 +2809,7 @@ function prepareVscodeWorkspaceFile(
     : undefined;
   let updatedConfig = config;
   let repositoryImport: PreparedVscodeWorkspace['repositoryImport'];
+  let legacyImport: LegacyVscodeImportPreview | undefined;
   let content = renderVscodeWorkspaceFile(
     workspacePath,
     config,
@@ -2805,15 +2823,34 @@ function prepareVscodeWorkspaceFile(
     const existing = originalContent;
     const folders = readVscodeWorkspaceFolders(existing);
     if (computeWorkspaceHash(existing) !== previousState.vscodeWorkspaceHash) {
-      // Current generation reconstructs the old baseline when YAML/template
-      // are unchanged. Otherwise retain legacy editor-name precedence for
-      // this first update; subsequent updates use the complete snapshot.
-      const baseline =
-        previousState.vscodeWorkspaceFolders ??
-        snapshotVscodeWorkspaceFolders(
+      let baseline = previousState.vscodeWorkspaceFolders;
+      let unknownLegacyBaseline = false;
+      if (!baseline) {
+        let localBaseline: string | undefined;
+        try {
+          // Incoming workspace.files may replace this template later. Only the
+          // current local template can reconstruct the previously saved output.
+          localBaseline = renderVscodeWorkspaceFile(
+            workspacePath,
+            config,
+            readVscodeWorkspaceTemplate(workspacePath),
+          );
+        } catch {
+          // A valid incoming template may repair the local one. The original
+          // baseline is unknown, so require consent for uncertain imports.
+        }
+        const provenBaseline =
+          localBaseline !== undefined &&
+          computeWorkspaceHash(localBaseline) ===
+            previousState.vscodeWorkspaceHash
+            ? localBaseline
+            : undefined;
+        unknownLegacyBaseline = provenBaseline === undefined;
+        baseline = snapshotVscodeWorkspaceFolders(
           workspacePath,
-          readVscodeWorkspaceFolders(content),
+          readVscodeWorkspaceFolders(provenBaseline ?? content),
         );
+      }
       const original = readFileSync(configPath, 'utf-8');
       const raw = loadYaml(original) as WorkspaceConfig;
       validateProjectWorkspaceConfig(raw, configPath);
@@ -2829,6 +2866,34 @@ function prepareVscodeWorkspaceFile(
         reconciled.removed.length ||
         reconciled.renamed.length
       ) {
+        if (
+          unknownLegacyBaseline &&
+          (reconciled.added.length || reconciled.renamed.length)
+        ) {
+          const before = new Map(
+            (raw.repositories ?? []).map((repo) => [repo.path, repo]),
+          );
+          const after = new Map(
+            reconciled.updatedRepos.map((repo) => [repo.path, repo]),
+          );
+          const folder = (
+            path: string,
+            repos: typeof before,
+          ): WorkspaceFolder => {
+            const name = repos.get(path)?.name;
+            return { path, ...(name !== undefined && { name }) };
+          };
+          legacyImport = {
+            workspacePath,
+            added: reconciled.added.map((path) => folder(path, after)),
+            removed: reconciled.removed.map((path) => folder(path, before)),
+            renamed: reconciled.renamed.map((path) => ({
+              path,
+              beforeName: before.get(path)?.name,
+              afterName: after.get(path)?.name,
+            })),
+          };
+        }
         raw.repositories = reconciled.updatedRepos;
         updatedConfig = validateProjectWorkspaceConfig(raw, configPath);
         repositoryImport = { original, config: raw };
@@ -2858,6 +2923,7 @@ function prepareVscodeWorkspaceFile(
     originalContent,
     templateContent,
     ...(repositoryImport && { repositoryImport }),
+    ...(legacyImport && { legacyImport }),
     state: {
       hash: computeWorkspaceHash(content),
       repos: updatedConfig.repositories.map((repo) =>
@@ -3350,6 +3416,18 @@ export async function syncWorkspace(
   if (preparedVscode) {
     const prepared = preparedVscode;
     try {
+      if (prepared.legacyImport) {
+        if (!options.confirmLegacyVscodeImport) {
+          throw new Error(
+            'Legacy VS Code import confirmation required: the saved state has no provable folder/name baseline; review and approve the proposed repository changes before retrying',
+          );
+        }
+        if (!(await options.confirmLegacyVscodeImport(prepared.legacyImport))) {
+          throw new Error(
+            'Legacy VS Code import cancelled; workspace.yaml and the pending editor changes were preserved',
+          );
+        }
+      }
       assertVscodeWorkspaceUnchanged(prepared);
       if (prepared.repositoryImport) {
         await writeWorkspaceConfigAtomically(

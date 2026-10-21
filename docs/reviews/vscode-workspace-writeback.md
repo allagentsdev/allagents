@@ -6,7 +6,7 @@ Reviewed against `593fd371caa85289317b3486ca8782f586c2ad77` on 2026-10-20.
 
 ## Recommendation
 
-Keep one synchronization behavior, with no new mode, flag or import command:
+Keep one synchronization behavior, with no new synchronization mode or import command:
 
 - Changed VS Code folders/names update the corresponding YAML declarations.
 - If those fields have not changed, do not write YAML. Preserve its exact bytes,
@@ -17,7 +17,9 @@ Keep one synchronization behavior, with no new mode, flag or import command:
 Compare the relevant values with the previous synchronization snapshot. Preserve
 the established edit-in-VS-Code, then sync workflow while detecting invalid data and failed writes without discarding pending edits.
 Actual VS Code repository folder/name edits retain precedence when both files
-change the same field; there is no new conflict prompt or opt-in surface.
+change the same field; normal updates remain automatic. An older snapshot that
+cannot establish the previous repository names requires confirmation before
+uncertain overwrites.
 
 This review records the ownership and compatibility decisions for implementation.
 It covers VS Code folder/name imports. Automatic legacy YAML migrations and
@@ -99,18 +101,19 @@ reason to add configuration choices or change the user workflow.
 
 - Preserve the default sequence: edit folders/names in VS Code, then run normal
   sync; actual repository changes are written into YAML before workspace output is
-  regenerated. No new import command, flag or confirmation is required for that
-  existing path.
+  regenerated. Normal imports with a complete or reconstructable snapshot remain
+  automatic; older ambiguous imports use the narrowly scoped confirmation below.
 - Compare semantic folder/name changes against an adequate previous snapshot,
   rather than using any whole-file byte change as evidence of a folder edit.
   A change on one side is applied; matching changes on both sides coalesce.
   An actual editor display-name change takes precedence over a competing YAML
   name. An unchanged generated name must not overwrite a YAML-only rename.
   Recover an older snapshot when its saved hash proves the previous folders.
-  If recovery is impossible, retain legacy VS Code precedence for that first
-  update, then save the full snapshot. This compatibility choice can apply a
-  stale editor name over a competing YAML-only rename once; it avoids blocking
-  the established upgrade workflow.
+  If recovery is impossible and the proposed import contains uncertain names
+  or folder additions, preview those repository changes and ask before applying
+  them. `--yes` accepts VS Code precedence; non-interactive runs without consent
+  stop unchanged. Pure removals proven by saved repository paths remain automatic.
+  YAML plugin/skill/client edits do not themselves make repository edits ambiguous.
 - If reconciliation requires no semantic YAML change, skip the YAML writer
   entirely. Byte-exact preservation is required, including for user-authored
   YAML formatting edits and unrelated `.code-workspace` changes. If an actual

@@ -1,10 +1,18 @@
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeAll, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, chmodSync, statSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as load } from 'yaml';
 import { syncWorkspace } from '../../src/core/sync.js';
 import type { WorkspaceConfig } from '../../src/models/workspace-config.js';
+
+beforeAll(() => {
+  const build = Bun.spawnSync(['bun', 'run', 'build'], {
+    cwd: resolve(import.meta.dir, '../..'),
+    stdout: 'pipe', stderr: 'pipe',
+  });
+  if (build.exitCode !== 0) throw new Error(`CLI build failed: ${build.stderr.toString()}`);
+});
 
 describe('vscode workspace folder reconciliation e2e', () => {
   let testDir: string;
@@ -332,7 +340,7 @@ clients: [vscode]
         expectedName = 'Original';
         writeFileSync(files.editor, JSON.stringify(editor));
       }
-      expect((await syncWorkspace(testDir)).success).toBe(true);
+      expect((await syncWorkspace(testDir, scenario === 'legacy editor precedence' ? { confirmLegacyVscodeImport: async () => true } : {})).success).toBe(true);
       expect((load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig).repositories[0]!.name).toBe(expectedName);
       const updatedState = JSON.parse(readFileSync(files.state, 'utf-8'));
       expect(updatedState.vscodeWorkspaceFolders).toContainEqual({ path: resolve(testDir, '../myrepo'), name: expectedName });
@@ -434,6 +442,155 @@ clients: [vscode]
     expect((load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig).plugins).toContain(plugin);
     expect(readFileSync(files.editor, 'utf-8')).toBe(editor);
     expect(readFileSync(files.state, 'utf-8')).toBe(baseline);
+  });
+
+  async function ambiguousLegacyImport() {
+    const files = await initialize();
+    const state = JSON.parse(readFileSync(files.state, 'utf-8'));
+    delete state.vscodeWorkspaceFolders;
+    writeFileSync(files.state, JSON.stringify(state));
+    writeFileSync(files.yaml, configText.replace('Original', 'YAML name'));
+    const editor = JSON.parse(readFileSync(files.editor, 'utf-8'));
+    editor.folders[1].name = 'Editor name';
+    writeFileSync(files.editor, JSON.stringify(editor));
+    return files;
+  }
+
+  test.each(['missing callback', 'cancel', 'approve'] as const)(
+    'ambiguous legacy import requires explicit approval: %s', async decision => {
+      const files = await ambiguousLegacyImport();
+      const before = Object.values(files).map(file => readFileSync(file, 'utf-8'));
+      let called = false;
+      const result = await syncWorkspace(testDir, decision === 'missing callback' ? {} : {
+        confirmLegacyVscodeImport: async preview => {
+          called = true;
+          expect(preview).toEqual({
+            workspacePath: testDir, added: [], removed: [],
+            renamed: [{ path: '../myrepo', beforeName: 'YAML name', afterName: 'Editor name' }],
+          });
+          return decision === 'approve';
+        },
+      });
+      expect(called).toBe(decision !== 'missing callback');
+      expect(result.success).toBe(decision === 'approve');
+      if (decision === 'approve') {
+        expect((load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig).repositories[0]!.name).toBe('Editor name');
+        expect(JSON.parse(readFileSync(files.state, 'utf-8')).vscodeWorkspaceFolders).toBeDefined();
+      } else {
+        expect(result.error).toContain(decision === 'cancel' ? 'cancelled' : 'confirmation required');
+        expect(Object.values(files).map(file => readFileSync(file, 'utf-8'))).toEqual(before);
+      }
+    },
+  );
+
+  test('plugin-only YAML changes and an editor rename remain automatic with reconstructable legacy folders', async () => {
+    const files = await initialize();
+    const state = JSON.parse(readFileSync(files.state, 'utf-8'));
+    delete state.vscodeWorkspaceFolders;
+    writeFileSync(files.state, JSON.stringify(state));
+    const plugin = join(testDir, 'independent-plugin');
+    mkdirSync(join(plugin, 'skills', 'fixture'), { recursive: true });
+    writeFileSync(join(plugin, 'skills', 'fixture', 'SKILL.md'), '---\nname: fixture\ndescription: Independent change\n---\n# Fixture\n');
+    writeFileSync(files.yaml, configText.replace('plugins: []', `plugins: [${plugin}]`));
+    const editor = JSON.parse(readFileSync(files.editor, 'utf-8'));
+    editor.folders[1].name = 'Editor name';
+    writeFileSync(files.editor, JSON.stringify(editor));
+    expect((await syncWorkspace(testDir, { confirmLegacyVscodeImport: async () => {
+      throw new Error('independent plugin changes must not require confirmation');
+    } })).success).toBe(true);
+    const config = load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig;
+    expect(config.repositories[0]!.name).toBe('Editor name');
+    expect(config.plugins).toContain(plugin);
+  });
+
+  test.each([false, true])('legacy baseline uses the local template before incoming replacement (local malformed: %s)', async malformed => {
+    const source = join(testDir, 'source');
+    const sourceTemplate = join(source, '.allagents', 'template.code-workspace');
+    mkdirSync(join(source, '.allagents'), { recursive: true });
+    writeFileSync(sourceTemplate, '{"settings":{"template.revision":1}}');
+    writeFileSync(paths().yaml, `${configText}workspace:\n  source: ${source}\n  files: [.allagents/template.code-workspace]\n`);
+    expect((await syncWorkspace(testDir)).success).toBe(true);
+    const files = paths();
+    const state = JSON.parse(readFileSync(files.state, 'utf-8'));
+    delete state.vscodeWorkspaceFolders;
+    writeFileSync(files.state, JSON.stringify(state));
+    const editor = JSON.parse(readFileSync(files.editor, 'utf-8'));
+    editor.folders[1].name = 'Editor name';
+    writeFileSync(files.editor, JSON.stringify(editor));
+    if (malformed) writeFileSync(join(testDir, '.allagents', 'template.code-workspace'), '{ broken local');
+    writeFileSync(sourceTemplate, '{"settings":{"template.revision":2}}');
+    let confirmations = 0;
+    expect((await syncWorkspace(testDir, { confirmLegacyVscodeImport: async () => {
+      confirmations++;
+      return true;
+    } })).success).toBe(true);
+    expect(confirmations).toBe(malformed ? 1 : 0);
+    expect(JSON.parse(readFileSync(files.editor, 'utf-8')).settings['template.revision']).toBe(2);
+    expect((load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig).repositories[0]!.name).toBe('Editor name');
+  });
+
+  test.each(['proven removal', 'no repository change'] as const)('legacy %s needs no confirmation even when old names cannot be reconstructed', async scenario => {
+    const files = await initialize();
+    const state = JSON.parse(readFileSync(files.state, 'utf-8'));
+    delete state.vscodeWorkspaceFolders;
+    writeFileSync(files.state, JSON.stringify(state));
+    const editor = JSON.parse(readFileSync(files.editor, 'utf-8'));
+    writeFileSync(files.yaml, configText.replace('Original', 'YAML name'));
+    if (scenario === 'proven removal') editor.folders = [{ path: '.' }];
+    else editor.folders[1].name = 'YAML name';
+    writeFileSync(files.editor, JSON.stringify(editor));
+    const before = readFileSync(files.yaml, 'utf-8');
+    expect((await syncWorkspace(testDir, { confirmLegacyVscodeImport: async () => {
+      throw new Error('this legacy change is unambiguous');
+    } })).success).toBe(true);
+    if (scenario === 'proven removal') expect((load(readFileSync(files.yaml, 'utf-8')) as WorkspaceConfig).repositories).toEqual([]);
+    else expect(readFileSync(files.yaml, 'utf-8')).toBe(before);
+  });
+
+  test('malformed incoming template fails before ambiguous legacy confirmation', async () => {
+    const files = await ambiguousLegacyImport();
+    writeFileSync(join(testDir, '.allagents', 'template.code-workspace'), '{ malformed template');
+    const before = Object.values(files).map(file => readFileSync(file, 'utf-8'));
+    const result = await syncWorkspace(testDir, { confirmLegacyVscodeImport: async () => {
+      throw new Error('confirmation must not run for invalid input');
+    } });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to parse');
+    expect(Object.values(files).map(file => readFileSync(file, 'utf-8'))).toEqual(before);
+  });
+
+  test.each(['YAML', 'editor'] as const)('approval cannot overwrite a concurrent %s edit made while awaiting confirmation', async location => {
+    const files = await ambiguousLegacyImport();
+    const before = Object.values(files).map(file => readFileSync(file, 'utf-8'));
+    let concurrent = '';
+    const result = await syncWorkspace(testDir, { confirmLegacyVscodeImport: async () => {
+      const file = location === 'YAML' ? files.yaml : files.editor;
+      concurrent = `${readFileSync(file, 'utf-8')}\n${location === 'YAML' ? '# concurrent plugin change' : '// concurrent editor change'}\n`;
+      writeFileSync(file, concurrent);
+      return true;
+    } });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('changed during');
+    expect(readFileSync(files.yaml, 'utf-8')).toBe(location === 'YAML' ? concurrent : before[0]);
+    expect(readFileSync(files.editor, 'utf-8')).toBe(location === 'editor' ? concurrent : before[1]);
+    expect(readFileSync(files.state, 'utf-8')).toBe(before[2]);
+  });
+
+  test('unknown legacy additions require approval with both proposed additions and proven removals visible', async () => {
+    const files = await ambiguousLegacyImport();
+    writeFileSync(files.editor, '{folders:[{path:"."},{path:"../new",name:"New folder"}]}');
+    const before = Object.values(files).map(file => readFileSync(file, 'utf-8'));
+    let prompted = false;
+    const result = await syncWorkspace(testDir, { confirmLegacyVscodeImport: async preview => {
+      prompted = true;
+      expect(preview.added).toEqual([{ path: '../new', name: 'New folder' }]);
+      expect(preview.removed).toEqual([{ path: '../myrepo', name: 'YAML name' }]);
+      expect(preview.renamed).toEqual([]);
+      return false;
+    } });
+    expect(prompted).toBe(true);
+    expect(result.success).toBe(false);
+    expect(Object.values(files).map(file => readFileSync(file, 'utf-8'))).toEqual(before);
   });
 
 });

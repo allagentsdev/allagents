@@ -1,3 +1,4 @@
+import { syncProjectWorkspace } from '../project-sync.js';
 import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -48,7 +49,6 @@ import { upsertSyncStateSource } from '../../core/sync-state.js';
 import {
   mergeSyncResults,
   syncUserWorkspace,
-  syncWorkspace,
 } from '../../core/sync.js';
 import type { SyncResult } from '../../core/sync.js';
 import {
@@ -305,13 +305,14 @@ function installLocations(
 async function syncSkillInstallScopes(
   scopes: ReadonlySet<InstallScope>,
   projectWorkspacePath: string,
+  yes?: boolean,
 ): Promise<SyncResult> {
   const results: SyncResult[] = [];
   if (scopes.has('user')) {
     results.push(await syncUserWorkspace());
   }
   if (scopes.has('project')) {
-    results.push(await syncWorkspace(projectWorkspacePath));
+    results.push(await syncProjectWorkspace(projectWorkspacePath, { yes }));
   }
   const [first, ...rest] = results;
   if (!first) {
@@ -688,6 +689,7 @@ const removeCmd = command({
   name: 'remove',
   description: buildDescription(skillsRemoveMeta),
   args: {
+    yes: flag({ long: 'yes', short: 'y', description: 'Approve legacy VS Code repository write-back without prompting' }),
     skill: positional({ type: string, displayName: 'skill' }),
     scope: option({
       type: optional(string),
@@ -702,7 +704,7 @@ const removeCmd = command({
       description: 'Plugin name (required if skill exists in multiple plugins)',
     }),
   },
-  handler: async ({ skill, scope, plugin }) => {
+  handler: async ({ skill, scope, plugin, yes }) => {
     try {
       const isUser =
         scope === 'user' || (!scope && resolveScope(process.cwd()) === 'user');
@@ -803,11 +805,12 @@ const removeCmd = command({
 
       const syncResult = isUser
         ? await syncUserWorkspace()
-        : await syncWorkspace(workspacePath);
+        : await syncProjectWorkspace(workspacePath, { yes });
 
       if (isJsonMode()) {
         jsonOutput({
           success: syncResult.success,
+          ...(!syncResult.success && { error: syncResult.error ?? 'Update failed' }),
           command: 'skill remove',
           data: {
             skill,
@@ -820,6 +823,10 @@ const removeCmd = command({
         });
         if (!syncResult.success) process.exit(1);
         return;
+      }
+      if (!syncResult.success) {
+        console.error(`Error: ${syncResult.error ?? 'Update failed'}`);
+        process.exit(1);
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -1227,6 +1234,7 @@ async function installSkillViaMarketplace(opts: {
       registration?.scope === 'user' ? undefined : projectWorkspacePath,
     );
     return applySkillAllowlist({
+      yes: targetContext?.options.yes,
       skill,
       pluginName: targetPluginName,
       isUser,
@@ -1268,6 +1276,7 @@ async function installSkillViaMarketplace(opts: {
     isUser = installResult.scope === 'user';
     workspacePath = isUser ? getHomeDir() : projectWorkspacePath;
     return finishSkillEnable({
+      yes: targetContext?.options.yes,
       skill,
       pluginName: targetPluginName,
       isUser,
@@ -1423,6 +1432,7 @@ async function installSkillDirect(opts: {
           };
         }
         return finishSkillEnable({
+          yes: targetContext?.options.yes,
           skill: canonicalSkill,
           pluginName: extractPrimaryPluginName(
             updateResult.normalizedPlugin ?? from,
@@ -1432,6 +1442,7 @@ async function installSkillDirect(opts: {
         });
       }
       return applySkillAllowlist({
+        yes: targetContext?.options.yes,
         skill: canonicalSkill,
         pluginName,
         isUser,
@@ -1457,6 +1468,7 @@ async function installSkillDirect(opts: {
     isUser = installResult.scope === 'user';
     workspacePath = isUser ? getHomeDir() : targetContext.workspacePath;
     return finishSkillEnable({
+      yes: targetContext?.options.yes,
       skill: canonicalSkill,
       pluginName: extractPrimaryPluginName(
         installResult.normalizedPlugin ?? pluginName,
@@ -1561,6 +1573,7 @@ async function getEnabledSkillsForRemoteSource(
  * Set or extend the plugin's skill allowlist with the requested skill, then sync.
  */
 async function applySkillAllowlist(opts: {
+  yes?: boolean | undefined;
   skill: string;
   pluginName: string;
   isUser: boolean;
@@ -1608,10 +1621,11 @@ async function applySkillAllowlist(opts: {
     }
   }
 
-  return finishSkillEnable({ skill, pluginName, isUser, workspacePath });
+  return finishSkillEnable({ skill, pluginName, isUser, workspacePath, yes: opts.yes });
 }
 
 async function finishSkillEnable(opts: {
+  yes?: boolean | undefined;
   skill: string;
   pluginName: string;
   isUser: boolean;
@@ -1625,9 +1639,9 @@ async function finishSkillEnable(opts: {
 
   const syncResult = isUser
     ? await syncUserWorkspace()
-    : await syncWorkspace(workspacePath);
+    : await syncProjectWorkspace(workspacePath, { yes: opts.yes });
   if (!syncResult.success) {
-    return { success: false, error: 'Sync failed' };
+    return { success: false, error: syncResult.error ?? 'Update failed' };
   }
 
   return {
@@ -1920,8 +1934,9 @@ async function selectAndInstallSkillsFromSource(opts: {
     const syncResult = await syncSkillInstallScopes(
       changedScopes,
       projectWorkspacePath,
+      targetContext?.options.yes,
     );
-    if (!syncResult.success) return { success: false, error: 'Sync failed' };
+    if (!syncResult.success) return { success: false, error: syncResult.error ?? 'Update failed' };
 
     return {
       success: true,
@@ -2029,8 +2044,8 @@ async function selectAndInstallSkillsFromSource(opts: {
 
   const syncResult = isUser
     ? await syncUserWorkspace()
-    : await syncWorkspace(workspacePath);
-  if (!syncResult.success) return { success: false, error: 'Sync failed' };
+    : await syncProjectWorkspace(workspacePath, { yes: targetContext?.options.yes });
+  if (!syncResult.success) return { success: false, error: syncResult.error ?? 'Update failed' };
 
   return {
     success: true,
@@ -2129,9 +2144,9 @@ async function installAllSkillsFromSource(opts: {
       }
       const syncResult = isUser
         ? await syncUserWorkspace()
-        : await syncWorkspace(workspacePath);
+        : await syncProjectWorkspace(workspacePath, { yes: targetContext?.options.yes });
       if (!syncResult.success) {
-        return { success: false, error: 'Sync failed' };
+        return { success: false, error: syncResult.error ?? 'Update failed' };
       }
       return {
         success: true,
@@ -2181,9 +2196,9 @@ async function installAllSkillsFromSource(opts: {
 
     const syncResult = isUser
       ? await syncUserWorkspace()
-      : await syncWorkspace(workspacePath);
+      : await syncProjectWorkspace(workspacePath, { yes: targetContext?.options.yes });
     if (!syncResult.success) {
-      return { success: false, error: 'Sync failed' };
+      return { success: false, error: syncResult.error ?? 'Update failed' };
     }
 
     return {
@@ -2240,9 +2255,9 @@ async function installAllSkillsFromSource(opts: {
 
   const syncResult = isUser
     ? await syncUserWorkspace()
-    : await syncWorkspace(workspacePath);
+    : await syncProjectWorkspace(workspacePath, { yes: targetContext?.options.yes });
   if (!syncResult.success) {
-    return { success: false, error: 'Sync failed' };
+    return { success: false, error: syncResult.error ?? 'Update failed' };
   }
 
   return {
@@ -2378,9 +2393,10 @@ async function installAllViaMarketplace(opts: {
   const syncResult = await syncSkillInstallScopes(
     changedScopes,
     projectWorkspacePath,
+    targetContext?.options.yes,
   );
   if (!syncResult.success) {
-    return { success: false, error: 'Sync failed' };
+    return { success: false, error: syncResult.error ?? 'Update failed' };
   }
 
   return {
@@ -3021,11 +3037,12 @@ const addCmd = command({
 
       const syncResult = isUser
         ? await syncUserWorkspace()
-        : await syncWorkspace(workspacePath);
+        : await syncProjectWorkspace(workspacePath, { yes });
 
       if (isJsonMode()) {
         jsonOutput({
           success: syncResult.success,
+          ...(!syncResult.success && { error: syncResult.error ?? 'Update failed' }),
           command: 'skill add',
           data: {
             skill,
@@ -3038,6 +3055,10 @@ const addCmd = command({
         });
         if (!syncResult.success) process.exit(1);
         return;
+      }
+      if (!syncResult.success) {
+        console.error(`Error: ${syncResult.error ?? 'Update failed'}`);
+        process.exit(1);
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -3204,9 +3225,14 @@ async function installFromSearch(
     s.message('Syncing...');
     const syncResult =
       target.scope === 'project'
-        ? await syncWorkspace(workspacePath)
+        ? await syncProjectWorkspace(workspacePath, { spinner: s })
         : await syncUserWorkspace();
 
+    if (!syncResult.success) {
+      s.stop('Update failed');
+      p.note(syncResult.error ?? 'Update failed', 'Error');
+      return false;
+    }
     s.stop(
       installedRepos.length === 1
         ? 'Installed and synced'

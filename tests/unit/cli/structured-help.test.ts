@@ -94,7 +94,7 @@ describe('agent command metadata', () => {
   test('update has expected options', () => {
     const syncCmd = allCommands.find((c) => c.command === 'update')!;
     expect(syncCmd.options).toBeInstanceOf(Array);
-    expect(syncCmd.options!.length).toBe(5);
+    expect(syncCmd.options!.length).toBe(6);
 
     const scope = syncCmd.options!.find((o) => o.flag === '--scope');
     expect(scope).toBeDefined();

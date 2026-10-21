@@ -9,6 +9,7 @@ import {
   installConfirmationResponses as confirmationResponses,
   installConfirmMock as confirmMock,
   installNoteMock as noteMock,
+  updateNoteMock as errorNoteMock,
   installScopeResponses as scopeResponses,
   resetInstallPromptMocks,
 } from '../../helpers/clack-prompts-mock.js';
@@ -161,4 +162,43 @@ describe('installSelectedPlugin', () => {
     expect(config.clients).toEqual(['codex', 'cursor']);
     expect(config.plugins).toEqual([plugin]);
   });
+});
+
+test('a blocked legacy repository import reports failure after saving the explicit plugin declaration', async () => {
+  errorNoteMock.mockClear();
+  const configPath = join(workspace, '.allagents', 'workspace.yaml');
+  await writeFile(configPath, 'repositories:\n  - path: ../repo\n    name: Original\nplugins: []\nclients: [vscode]\n');
+  const { syncWorkspace } = await import('../../../src/core/sync.js');
+  expect((await syncWorkspace(workspace)).success).toBe(true);
+  const statePath = join(workspace, '.allagents', 'sync-state.json');
+  const editorPath = join(workspace, 'workspace.code-workspace');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  delete state.vscodeWorkspaceFolders;
+  await writeFile(statePath, JSON.stringify(state));
+  await writeFile(configPath, (await readFile(configPath, 'utf8')).replace('Original', 'YAML name'));
+  const editor = JSON.parse(await readFile(editorPath, 'utf8'));
+  editor.folders[1].name = 'Editor name';
+  await writeFile(editorPath, JSON.stringify(editor));
+  const pending = await readFile(editorPath, 'utf8');
+  const baseline = await readFile(statePath, 'utf8');
+  scopeResponses.push('project');
+  clientResponses.push(['vscode']);
+  confirmationResponses.push(true);
+  const result = await installSelectedPlugin(plugin, {
+    hasWorkspace: true,
+    workspacePath: workspace,
+    projectPluginCount: 0,
+    userPluginCount: 0,
+    needsSync: false,
+    hasUserConfig: false,
+    marketplaceCount: 0,
+  });
+  expect(result).toEqual({ status: 'failed' });
+  expect(await readFile(editorPath, 'utf8')).toBe(pending);
+  expect(await readFile(statePath, 'utf8')).toBe(baseline);
+  const config = load(await readFile(configPath, 'utf8')) as { repositories: { name: string }[]; plugins: unknown[] };
+  expect(config.repositories[0]!.name).toBe('YAML name');
+  expect(config.plugins).toHaveLength(1);
+  expect(errorNoteMock.mock.calls.flat().join('\n')).toContain('--yes');
+  expect(noteMock.mock.calls.some(call => String(call[1]).startsWith('Installed:'))).toBe(false);
 });

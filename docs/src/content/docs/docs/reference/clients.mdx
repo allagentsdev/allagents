@@ -237,7 +237,29 @@ state. Ambient `~/.codex`, project files, and operating-system keyrings remain
 outside the cleanup boundary.
 
 :::note
-Skills are the cross-client way to share reusable prompts. GitHub overrides (`.github/prompts/`, `.github/agents/`, `.github/hooks/`, `copilot-instructions.md`) are copied to the workspace's `.github/` folder for Copilot/VSCode; package-only `.github/plugin/` metadata is omitted. Root `agents/` and `hooks/` also map to `.github/agents/` and `.github/hooks/` for Copilot. At project scope, plugin hook declarations from `hooks.json` or `hooks/hooks.json` are combined in `.github/hooks/allagents.json`. This translation does not require marketplace registration or `plugin.json`; a missing or disabled declaration adds no managed entries. AllAgents warns and omits a declaration that cannot be read or parsed, lacks the version-1 `hooks` object envelope, or—unless disabled—has a non-array event value. Skipping a declaration does not itself suppress other eligible plugin artifacts or valid declarations from other plugins. At user scope, root `hooks/` maps to `~/.copilot/hooks/`, while repository `.github/hooks/` remains project-scoped.
+Skills let you share reusable prompts across clients. For Copilot and VSCode,
+AllAgents copies `.github/prompts/`, `.github/agents/`, `.github/hooks/`, and
+`copilot-instructions.md` into the workspace's `.github/` folder. Package metadata
+under `.github/plugin/` is omitted. For Copilot, a plugin's root `agents/` and
+`hooks/` directories also map to `.github/agents/` and `.github/hooks/`.
+
+When you install a plugin for Copilot in a project, AllAgents reads its
+`hooks.json` or `hooks/hooks.json` and writes the hooks to
+`.github/hooks/allagents.json`. Hooks from multiple plugins share this file.
+[Copilot reads `.github/hooks/*.json`](https://docs.github.com/en/copilot/reference/hooks-reference)
+to run commands during agent sessions. Git hooks normally live in `.git/hooks/`.
+The generated file uses local plugin paths and is not portable to Copilot cloud
+agent or another checkout.
+
+No marketplace registration or `plugin.json` is required. Missing or disabled
+hook configurations add no hooks to the generated file. AllAgents warns and
+skips a configuration it cannot read or parse, or one without `version: 1` and a
+`hooks` object. Unless hooks are disabled, each event's value must be an array.
+Other eligible plugin files and valid hooks from other plugins still sync. See
+[Plugin Structure](/docs/guides/plugins/#plugin-structure) for details.
+
+For user installations, a plugin's root `hooks/` directory maps to
+`~/.copilot/hooks/`. Files under `.github/hooks/` apply only to the project.
 :::
 
 ### Pi

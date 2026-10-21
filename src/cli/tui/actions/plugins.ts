@@ -1,3 +1,4 @@
+import { syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
 import {
   addPluginForTarget,
@@ -24,7 +25,6 @@ import {
 import {
   buildPluginSyncPlans,
   preflightNativePluginDeclaration,
-  syncWorkspace,
   syncUserWorkspace,
   validateAllPlugins,
   type SyncResult,
@@ -267,11 +267,15 @@ export async function installSelectedPlugin(
   s.message('Updating...');
   const syncResult: SyncResult =
     target.scope === 'project'
-      ? await syncWorkspace(workspacePath)
+      ? await syncProjectWorkspace(workspacePath, { spinner: s })
       : await syncUserWorkspace();
-  s.stop('Installed');
-
   cache?.invalidate();
+  if (!syncResult.success) {
+    s.stop('Update failed');
+    p.note(syncResult.error ?? 'Update failed. The plugin declaration was saved.', 'Error');
+    return { status: 'failed' };
+  }
+  s.stop('Installed');
   const source = result.normalizedPlugin ?? pluginRef;
   const lines = formatVerboseSyncLines(syncResult);
   p.note(lines.join('\n'), `Installed: ${source}`);
@@ -319,7 +323,7 @@ async function runUpdatePlugin(
       nativeSelection: { mode: 'update' as const, targets: native ? [plan.source] : [], clients: plan?.nativeClients ?? [] },
     };
     const synced = scope === 'project'
-      ? await syncWorkspace(workspacePath, options)
+      ? await syncProjectWorkspace(workspacePath, { ...options, spinner: s })
       : await syncUserWorkspace(options);
     cache?.invalidate();
     if (native) {
@@ -544,6 +548,7 @@ async function runUpdateAllPluginsWithContext(
       resolveNonInteractiveSkillUpdateDecisions(standalonePlan),
       workspacePath,
       {
+        syncOptions: { spinner: s },
         onUnitResult: (result) => {
           // Scope-sync failures are synthetic results, not standalone units.
           const currentUnit = executionUnits[currentExecutionUnitIndex];
@@ -596,7 +601,8 @@ async function runUpdateAllPluginsWithContext(
       ((needsProjectSync && !standaloneSyncedScopes.has('project')) || nativeTargets.project.length > 0) &&
       context.workspacePath
     ) {
-      nativeSyncResults.set('project', await syncWorkspace(context.workspacePath, {
+      nativeSyncResults.set('project', await syncProjectWorkspace(context.workspacePath, {
+        spinner: s,
         offline: true, skipAgentFiles: true,
         nativeSelection: { mode: 'update', targets: nativeTargets.project },
       }));
@@ -998,13 +1004,16 @@ async function runPluginDetail(
 
       // Sync
       s.message('Updating...');
-      if (scope === 'project' && context.workspacePath) {
-        await syncWorkspace(context.workspacePath);
-      } else {
-        await syncUserWorkspace();
+      const synced = scope === 'project' && context.workspacePath
+        ? await syncProjectWorkspace(context.workspacePath, { spinner: s })
+        : await syncUserWorkspace();
+      cache?.invalidate();
+      if (!synced.success) {
+        s.stop('Update failed');
+        p.note(synced.error ?? 'Update failed', 'Error');
+        continue;
       }
       s.stop('Updated');
-      cache?.invalidate();
 
       const newMode = currentMode === 'allowlist' ? 'ON' : 'OFF';
       p.note(`Auto-enable new skills: ${newMode}`, 'Updated');
@@ -1040,7 +1049,7 @@ async function runPluginDetail(
       s.message('Updating...');
       try {
         const synced = scope === 'project'
-          ? await syncWorkspace(workspacePath)
+          ? await syncProjectWorkspace(workspacePath, { spinner: s })
           : await syncUserWorkspace();
         if (!synced.success) throw new Error(synced.error ?? ((synced.warnings ?? []).join('; ') || 'Cleanup failed'));
         s.stop('Removed');
@@ -1147,13 +1156,16 @@ export async function runBrowsePluginSkills(
 
     // Auto-sync
     s.message('Updating...');
-    if (scope === 'project' && context.workspacePath) {
-      await syncWorkspace(context.workspacePath);
-    } else if (scope === 'user') {
-      await syncUserWorkspace();
+    const synced = scope === 'project' && context.workspacePath
+      ? await syncProjectWorkspace(context.workspacePath, { spinner: s })
+      : await syncUserWorkspace();
+    cache?.invalidate();
+    if (!synced.success) {
+      s.stop('Update failed');
+      p.note(synced.error ?? 'Update failed', 'Error');
+      return;
     }
     s.stop('Updated');
-    cache?.invalidate();
 
     const changes: string[] = [];
     for (const skill of toEnable) {

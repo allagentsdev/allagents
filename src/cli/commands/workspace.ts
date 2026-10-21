@@ -16,8 +16,8 @@ import { getWorkspaceStatus } from '../../core/status.js';
 import {
   mergeSyncResults,
   syncUserWorkspace,
-  syncWorkspace,
 } from '../../core/sync.js';
+import { syncProjectWorkspace, createLegacyVscodeImportConfirmation } from '../project-sync.js';
 import type { SyncResult } from '../../core/sync.js';
 import { updateInstalledProfiles } from '../../core/profile/index.js';
 import type { ProfileApplyResult } from '../../core/profile/index.js';
@@ -117,6 +117,7 @@ const initCmd = command({
   name: 'init',
   description: buildDescription(initMeta),
   args: {
+    yes: flag({ long: 'yes', short: 'y', description: 'Approve legacy VS Code repository write-back without prompting' }),
     path: positional({ type: optional(string), displayName: 'path' }),
     from: option({
       type: optional(string),
@@ -136,7 +137,7 @@ const initCmd = command({
       description: 'Overwrite existing workspace.yaml',
     }),
   },
-  handler: async ({ path, from, client, force }) => {
+  handler: async ({ path, from, client, force, yes }) => {
     try {
       const targetPath = path ?? '.';
       let clients = client ? parseClientEntries(client) : undefined;
@@ -162,6 +163,7 @@ const initCmd = command({
       }
 
       const result = await initWorkspace(targetPath, {
+        confirmLegacyVscodeImport: createLegacyVscodeImportConfirmation({ yes }),
         ...(templateSelection ? { from: templateSelection.source } : {}),
         ...(templateSelection?.prefetchedGitHub && { prefetchedGitHub: templateSelection.prefetchedGitHub }),
         ...(clients ? { clients } : {}),
@@ -293,6 +295,7 @@ const setupCmd = command({
 // =============================================================================
 
 export interface WorkspaceSyncCommandOptions {
+  readonly yes?: boolean;
   readonly offline: boolean;
   readonly dryRun: boolean;
   readonly force: boolean;
@@ -308,7 +311,7 @@ export interface WorkspaceSyncCommandDependencies {
   readonly ensureUserWorkspace: typeof ensureUserWorkspace;
   readonly resetFetchCache: () => void | Promise<void>;
   readonly syncUserWorkspace: typeof syncUserWorkspace;
-  readonly syncWorkspace: typeof syncWorkspace;
+  readonly syncWorkspace: typeof syncProjectWorkspace;
   readonly updateInstalledProfiles: typeof updateInstalledProfiles;
   readonly exit: (code: number) => void;
 }
@@ -321,7 +324,7 @@ const workspaceSyncCommandDependencies: WorkspaceSyncCommandDependencies = {
   ensureUserWorkspace,
   resetFetchCache,
   syncUserWorkspace,
-  syncWorkspace,
+  syncWorkspace: syncProjectWorkspace,
   updateInstalledProfiles,
   exit: (code) => {
     process.exit(code);
@@ -566,6 +569,7 @@ export async function executeWorkspaceSyncCommand(
           offline: options.offline,
           dryRun: options.dryRun,
           skipManaged: options.noManaged,
+          yes: options.yes,
         });
         combined = combined
           ? mergeSyncResults(combined, projectResult)
@@ -653,6 +657,7 @@ const syncCmd = command({
   aliases: ['sync'],
   description: buildDescription(syncMeta),
   args: {
+    yes: flag({ long: 'yes', short: 'y', description: 'Approve legacy VS Code repository write-back without prompting' }),
     offline: flag({
       long: 'offline',
       description: 'Use cached plugins without fetching latest from remote',

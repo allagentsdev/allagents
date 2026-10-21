@@ -211,6 +211,7 @@ export const pluginUninstallMeta: AgentCommandMeta = {
     { name: 'plugin', type: 'string', required: true, description: 'Plugin identifier to uninstall' },
   ],
   options: [
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Approve legacy VS Code repository write-back without prompting' },
     { flag: '--scope', short: '-s', type: 'string', description: 'Installation scope: "project" (default) or "user"' },
   ],
   outputSchema: {
@@ -245,6 +246,7 @@ export const pluginUpdateMeta: AgentCommandMeta = {
     { name: 'plugin', type: 'string', required: false, description: 'Specific plugin to update (updates all if omitted)' },
   ],
   options: [
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Approve legacy VS Code repository write-back without prompting' },
     { flag: '--scope', short: '-s', type: 'string', description: 'Installation scope: "project" (default), "user", or "all"' },
   ],
   outputSchema: {

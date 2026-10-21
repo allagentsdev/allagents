@@ -1,3 +1,4 @@
+import { syncProjectWorkspace, type CliSyncOptions } from './project-sync.js';
 import { execFile } from 'node:child_process';
 import { constants, existsSync } from 'node:fs';
 import { access, mkdtemp, rm } from 'node:fs/promises';
@@ -46,7 +47,7 @@ import {
   type DiscoveredSkillEntry,
   discoverSkillEntriesFromPluginRoot,
 } from '../core/skills.js';
-import { buildPluginSyncPlans, syncUserWorkspace, syncWorkspace } from '../core/sync.js';
+import { buildPluginSyncPlans, syncUserWorkspace } from '../core/sync.js';
 import { getUserWorkspaceConfigPath } from '../core/user-workspace.js';
 import type {
   PluginEntry,
@@ -192,6 +193,7 @@ export interface PreparedSkillUpdate {
 }
 
 export interface ExecutePreparedSkillUpdateOptions {
+  syncOptions?: Pick<CliSyncOptions, 'yes' | 'spinner'>;
   onUnitApplyStart?: (unit: SkillUpdateUnit) => void;
   onUnitResult?: (result: SkillUpdateUnitExecution) => void;
 }
@@ -214,7 +216,7 @@ export function normalizeSkillUpdateScopes(
   }
 }
 
-/** --yes suppresses questions; it intentionally never authorizes deletion. */
+/** Non-interactive skill decisions retain deleted-upstream skills, including with --yes. */
 export function resolveNonInteractiveSkillUpdateDecisions(
   plan: SkillUpdatePreflight,
 ): Record<string, SkillUpdateDecision> {
@@ -1098,11 +1100,11 @@ export async function executePreparedSkillUpdate(
       resetFetchCache();
       const syncResult =
         scope === 'project'
-          ? await syncWorkspace(workspacePath, { offline: true })
+          ? await syncProjectWorkspace(workspacePath, { offline: true, ...options.syncOptions })
           : await syncUserWorkspace({ offline: true });
       return syncResult.success
         ? { success: true }
-        : { success: false, error: `Offline ${scope} sync failed` };
+        : { success: false, error: syncResult.error ?? `Offline ${scope} update failed` };
     },
     ...(options.onUnitApplyStart && {
       onUnitApplyStart: options.onUnitApplyStart,

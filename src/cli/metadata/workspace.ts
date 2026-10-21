@@ -24,6 +24,7 @@ export const initMeta: AgentCommandMeta = {
     },
   ],
   options: [
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Approve legacy VS Code repository write-back without prompting' },
     {
       flag: '--from',
       type: 'string',
@@ -95,6 +96,7 @@ export const syncMeta: AgentCommandMeta = {
   expectedOutput:
     'By default attempts user workspace, installed declared profiles, and project workspace in order without stopping later passes after a failure. --scope project selects only the current project; --scope user selects user workspace and installed profiles. With --profile, validates and updates only selected profiles that are both installed and declared; cannot combine with --scope. Exit 1 after all applicable passes if any pass fails.',
   options: [
+    { flag: '--yes', short: '-y', type: 'boolean', description: 'Approve legacy VS Code repository write-back without prompting' },
     {
       flag: '--offline',
       type: 'boolean',

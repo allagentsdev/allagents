@@ -1,7 +1,20 @@
-import { serializeWorkspaceConfigFile, writeWorkspaceConfig } from '../utils/workspace-writer.js';
+import {
+  serializeWorkspaceConfig,
+  serializeWorkspaceConfigFile,
+  writeWorkspaceConfig,
+} from '../utils/workspace-writer.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join, posix } from 'node:path';
 import { fetchPlugin } from './plugin.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
@@ -119,7 +132,9 @@ export async function writeWorkspaceConfigAtomically(
   configPath: string,
   config: WorkspaceConfig,
   scope: 'project' | 'user',
-  dependencies: TargetedPluginWriteDependencies = {},
+  dependencies: TargetedPluginWriteDependencies & {
+    expectedOriginal?: string;
+  } = {},
 ): Promise<void> {
   if (scope === 'project') {
     validateProjectWorkspaceConfig(config, configPath);
@@ -127,6 +142,23 @@ export async function writeWorkspaceConfigAtomically(
     validateUserWorkspaceConfig(config, configPath);
   }
 
+  const assertOriginal = async () => {
+    if (dependencies.expectedOriginal === undefined) return;
+    const entry = await lstat(configPath);
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      throw new Error(
+        `Cannot import repositories into a symlink or non-file: ${configPath}`,
+      );
+    }
+    if (
+      (await readFile(configPath, 'utf-8')) !== dependencies.expectedOriginal
+    ) {
+      throw new Error(
+        'workspace.yaml changed during VS Code import; retry update',
+      );
+    }
+  };
+  await assertOriginal();
   const directory = dirname(configPath);
   let mode: number | undefined;
   try {
@@ -141,13 +173,20 @@ export async function writeWorkspaceConfigAtomically(
   );
   try {
     await mkdir(directory, { recursive: true });
-    await writeFile(temporaryPath, await serializeWorkspaceConfigFile(configPath, config), {
-      encoding: 'utf-8',
-      flag: 'wx',
-      ...(mode !== undefined && { mode }),
-    });
+    await writeFile(
+      temporaryPath,
+      dependencies.expectedOriginal === undefined
+        ? await serializeWorkspaceConfigFile(configPath, config)
+        : serializeWorkspaceConfig(config, dependencies.expectedOriginal),
+      {
+        encoding: 'utf-8',
+        flag: 'wx',
+        ...(mode !== undefined && { mode }),
+      },
+    );
     if (mode !== undefined) await chmod(temporaryPath, mode);
     await dependencies.beforeRename?.(temporaryPath, configPath);
+    await assertOriginal();
     await rename(temporaryPath, configPath);
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => {});

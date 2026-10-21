@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve, dirname, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serializeWorkspaceConfig } from '../utils/workspace-writer.js';
-import { syncWorkspace, type SyncResult } from './sync.js';
+import { syncWorkspace, type SyncResult, type SyncOptions } from './sync.js';
 import { ensureWorkspaceRules } from './transform.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE, AGENT_FILES, type WorkspaceRepository } from '../constants.js';
 import { getClientTypes, type ClientEntry } from '../models/workspace-config.js';
@@ -19,6 +19,7 @@ import { ensureConfigGitignore } from './config-gitignore.js';
  * Options for workspace initialization
  */
 export interface InitOptions {
+  confirmLegacyVscodeImport?: SyncOptions['confirmLegacyVscodeImport'];
   /** Path to existing workspace.yaml or directory containing one to copy from */
   from?: string;
   /** Override which clients to include in workspace.yaml */
@@ -355,6 +356,9 @@ export async function initWorkspace(
     console.log('\nUpdating plugins...');
     const syncResult = await syncWorkspace(absoluteTarget, {
       ...(sourceDir && { workspaceSourceBase: sourceDir }),
+      ...(options.confirmLegacyVscodeImport && {
+        confirmLegacyVscodeImport: options.confirmLegacyVscodeImport,
+      }),
     });
 
     if (!syncResult.success && syncResult.error) {

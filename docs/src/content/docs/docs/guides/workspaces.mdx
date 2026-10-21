@@ -170,9 +170,37 @@ When `vscode` is included in the `clients` list, `allagents update` automaticall
 After the first sync, AllAgents also imports folder additions, removals, and
 display-name changes from an externally changed `.code-workspace` file back into
 `workspace.yaml`. This can happen during other commands that sync the project,
-including plugin installation. The change check covers the whole generated file,
-so even an unrelated settings edit can trigger reconciliation against YAML.
-`--dry-run` skips this write-back and generation stage.
+including plugin installation. Only folder paths and display names changed since the last generated snapshot
+are imported. Settings-only or whitespace-only editor changes leave YAML
+untouched, including YAML-only repository name changes. Unchanged template
+folders do not become repository declarations. If both files change a repository
+display name, the actual VS Code edit wins. This import changes only
+`repositories`; it does not import settings or change plugin, skill, client, or
+MCP declarations.
+
+Malformed workspace data or a failed import stops synchronization before
+regenerating the editor file or advancing its snapshot. Fix the reported problem
+and retry. An explicitly saved configuration change, such as a plugin declaration
+from `plugin install`, remains saved if its subsequent sync is blocked.
+`--dry-run` skips this write-back and generation stage. Projects without the
+`vscode` client skip it as well.
+
+Older sync state may lack folder names. AllAgents reconstructs the previous
+repository values when possible. If those values cannot be established and an
+import would change uncertain names or add folders, an interactive update shows
+the proposed repository changes and asks before replacing YAML entries. The
+default is to keep the files unchanged. `allagents update --yes` (or `-y`) accepts
+the overwrite without prompting; JSON and non-interactive runs require that
+explicit consent. After a successful update, the complete snapshot supports
+normal automatic write-back.
+
+Plugin-only YAML edits and repository edits in VS Code are independent; plugin
+changes do not make an otherwise provable repository import ambiguous. Removals
+proven by the saved repository paths also remain automatic. A complete snapshot
+continues to give actual editor name changes precedence over competing YAML names.
+
+Template-only folders are generated from the template: remove them there to keep
+them out of future workspace output.
 
 ```yaml
 # workspace.yaml

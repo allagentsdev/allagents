@@ -1,8 +1,9 @@
+import { syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
 import { getClientTypes, type ClientType } from '../../../models/workspace-config.js';
 import { setClients } from '../../../core/workspace-modify.js';
 import { setUserClients, getUserWorkspaceConfig } from '../../../core/user-workspace.js';
-import { syncWorkspace, syncUserWorkspace } from '../../../core/sync.js';
+import { syncUserWorkspace } from '../../../core/sync.js';
 import type { TuiContext } from '../context.js';
 import type { TuiCache } from '../cache.js';
 import { getWorkspaceStatus } from '../../../core/status.js';
@@ -84,7 +85,13 @@ export async function runManageClients(context: TuiContext, cache?: TuiCache): P
         p.note(result.error ?? 'Unknown error', 'Error');
         return;
       }
-      await syncWorkspace(workspacePath);
+      const synced = await syncProjectWorkspace(workspacePath, { spinner: s });
+      cache?.invalidate();
+      if (!synced.success) {
+        s.stop('Update failed');
+        p.note(synced.error ?? 'Update failed. Client selection was saved.', 'Error');
+        return;
+      }
     } else {
       const result = await setUserClients(selectedClients);
       if (!result.success) {

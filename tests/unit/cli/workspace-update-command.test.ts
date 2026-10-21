@@ -336,6 +336,7 @@ describe('workspace update command', () => {
       _tag: 'ok',
       value: {
         ...defaultOptions,
+        yes: false,
         profile: ['work', 'review', 'work'],
       },
     });
@@ -353,7 +354,7 @@ describe('workspace update command', () => {
       const result = await parse(syncCmd, ['--scope', scope]);
       expect(result).toEqual({
         _tag: 'ok',
-        value: { ...defaultOptions, scope },
+        value: { ...defaultOptions, yes: false, scope },
       });
     }
   });

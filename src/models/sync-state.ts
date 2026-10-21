@@ -83,6 +83,10 @@ export const SyncStateSchema = z
     vscodeWorkspaceHash: z.string().optional(),
     // Repository paths at last sync (for detecting added/removed repos)
     vscodeWorkspaceRepos: z.array(z.string()).optional(),
+    /** Last generated folders, including template folders and display names. */
+    vscodeWorkspaceFolders: z
+      .array(z.object({ path: z.string(), name: z.string().optional() }))
+      .optional(),
     // Skills-index files tracked for cleanup (relative to .allagents/)
     skillsIndex: z.array(z.string()).optional(),
     // Per-source resolved ref + SHA + optional requested ref.

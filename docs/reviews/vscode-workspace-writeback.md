@@ -1,11 +1,12 @@
 # Review: VS Code workspace write-back
 
-Status: proposed direction; runtime behavior is unchanged by this review.
+Status: implementation contract updated after the design review. The baseline
+observations below describe the earlier implementation.
 Reviewed against `593fd371caa85289317b3486ca8782f586c2ad77` on 2026-10-20.
 
 ## Recommendation
 
-Keep one synchronization behavior, with no new mode, flag or import command:
+Keep one synchronization behavior, with no new synchronization mode or import command:
 
 - Changed VS Code folders/names update the corresponding YAML declarations.
 - If those fields have not changed, do not write YAML. Preserve its exact bytes,
@@ -14,10 +15,13 @@ Keep one synchronization behavior, with no new mode, flag or import command:
   edits and must not cause a YAML rewrite.
 
 Compare the relevant values with the previous synchronization snapshot. Preserve
-the established edit-in-VS-Code, then sync workflow while detecting genuine
-conflicts, invalid data and failed writes without discarding pending edits.
+the established edit-in-VS-Code, then sync workflow while detecting invalid data and failed writes without discarding pending edits.
+Actual VS Code repository folder/name edits retain precedence when both files
+change the same field; normal updates remain automatic. An older snapshot that
+cannot establish the previous repository names requires confirmation before
+uncertain overwrites.
 
-This review is a decision prerequisite, not an implementation of that policy.
+This review records the ownership and compatibility decisions for implementation.
 It covers VS Code folder/name imports. Automatic legacy YAML migrations and
 explicit plugin/configuration edits are separate ownership questions.
 
@@ -34,7 +38,7 @@ Comment loss was a separate serialization bug affecting every workspace writer.
 Preserving comments remains necessary for deliberate CLI configuration edits,
 regardless of the decision about automatic VS Code import.
 
-## Current behavior and ownership
+## Baseline behavior and ownership
 
 The relevant paths are
 [`syncVscodeWorkspaceFile`](../../src/core/sync.ts),
@@ -93,18 +97,23 @@ The synchronization snapshot must distinguish real editor changes from stale
 generated content. That is an internal reconciliation responsibility, not a
 reason to add configuration choices or change the user workflow.
 
-## Proposed implementation contract for review
+## Implementation contract
 
 - Preserve the default sequence: edit folders/names in VS Code, then run normal
-  sync; unambiguous changes are written into YAML before workspace output is
-  regenerated. No new import command, flag or confirmation is required for that
-  existing path.
+  sync; actual repository changes are written into YAML before workspace output is
+  regenerated. Normal imports with a complete or reconstructable snapshot remain
+  automatic; older ambiguous imports use the narrowly scoped confirmation below.
 - Compare semantic folder/name changes against an adequate previous snapshot,
   rather than using any whole-file byte change as evidence of a folder edit.
-  A change on one side is applied; matching changes on both sides coalesce;
-  competing changes require an actionable conflict instead of silently choosing
-  a winner. Old state without a name/provenance baseline must be handled
-  conservatively rather than assuming the editor is newer.
+  A change on one side is applied; matching changes on both sides coalesce.
+  An actual editor display-name change takes precedence over a competing YAML
+  name. An unchanged generated name must not overwrite a YAML-only rename.
+  Recover an older snapshot when its saved hash proves the previous folders.
+  If recovery is impossible and the proposed import contains uncertain names
+  or folder additions, preview those repository changes and ask before applying
+  them. `--yes` accepts VS Code precedence; non-interactive runs without consent
+  stop unchanged. Pure removals proven by saved repository paths remain automatic.
+  YAML plugin/skill/client edits do not themselves make repository edits ambiguous.
 - If reconciliation requires no semantic YAML change, skip the YAML writer
   entirely. Byte-exact preservation is required, including for user-authored
   YAML formatting edits and unrelated `.code-workspace` changes. If an actual
@@ -117,14 +126,14 @@ reason to add configuration choices or change the user workflow.
   generated template folders from repositories; do not promote an unchanged
   template-only folder into YAML because unrelated output bytes changed.
 - Reconcile at sync preflight, before publishing workspace-derived outputs, so
-  those outputs use the resulting repository configuration. On a conflict,
+  those outputs use the resulting repository configuration. On an import
   validation failure or failed YAML write, preserve pending editor content and
   do not advance its synchronization baseline or regenerate over it. An explicit
   configuration edit already saved by the invoking command, such as a plugin
   declaration, remains saved; report that separately from the blocked sync.
   This proposal does not introduce command-wide rollback.
-- Report applied changes and conflicts consistently in human and JSON output.
-  Keep dry-run read-only and describe planned folder/name reconciliation.
+- Report applied changes and failures consistently in human and JSON output.
+  Keep the existing dry-run behavior read-only: skip import and generation.
 
 Acceptance must cover first/unchanged sync, settings-only edits, YAML-only edits,
 editor-only edits, concurrent additions/removals/renames, template folders,
@@ -133,5 +142,6 @@ contracts, failed writes, and plugin operations that trigger project sync.
 For all cases requiring no YAML declaration change, assert byte-for-byte YAML
 equality, including CRLF, indentation, quoting, comments and blank lines.
 
-The review proposes preserving the established default and fixing its unsafe
-edges. This PR documents that direction; runtime behavior is unchanged.
+The implementation preserves the established default and fixes its unsafe
+edges. General settings import, template-folder exclusions and command-wide
+rollback remain outside this contract.

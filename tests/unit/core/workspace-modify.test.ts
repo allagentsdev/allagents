@@ -111,7 +111,7 @@ mock.module('../../../src/core/git.js', () => ({
   },
 }));
 
-const { updateRepositories, addPlugin, addPluginForTarget, removePlugin } =
+const { updateRepositories, addPlugin, addPluginForTarget, removePlugin, writeWorkspaceConfigAtomically } =
   await import('../../../src/core/workspace-modify.js');
 
 describe('removePlugin', () => {
@@ -628,5 +628,42 @@ describe('addPlugin rejects filesystem-root local paths', () => {
 
     const updated = load(readFileSync(configPath, 'utf-8')) as any;
     expect(updated.plugins).toEqual([]);
+  });
+});
+
+
+describe('optimistic atomic workspace edits', () => {
+  let testDir: string;
+  let configPath: string;
+  const original = 'version: 2\nrepositories: []\nplugins: []\nclients: [vscode]\n';
+  const changed: WorkspaceConfig = { version: 2, repositories: [{ path: '../new' }], plugins: [], clients: ['vscode'] };
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `allagents-atomic-repositories-${Date.now()}-${Math.random()}`);
+    mkdirSync(testDir);
+    configPath = join(testDir, 'workspace.yaml');
+    writeFileSync(configPath, original);
+  });
+  afterEach(() => rmSync(testDir, { recursive: true, force: true }));
+
+  test('a staging failure leaves original bytes and permissions and removes the temporary file', async () => {
+    chmodSync(configPath, 0o640);
+    await expect(writeWorkspaceConfigAtomically(configPath, changed, 'project', {
+      expectedOriginal: original,
+      beforeRename() { throw new Error('staging rejected'); },
+    })).rejects.toThrow('staging rejected');
+    expect(readFileSync(configPath, 'utf-8')).toBe(original);
+    expect(statSync(configPath).mode & 0o777).toBe(0o640);
+    expect(readdirSync(testDir)).toEqual(['workspace.yaml']);
+  });
+
+  test('a concurrent YAML edit before publication is preserved and the temporary file is removed', async () => {
+    const concurrent = `${original}# written while staging\n`;
+    await expect(writeWorkspaceConfigAtomically(configPath, changed, 'project', {
+      expectedOriginal: original,
+      beforeRename() { writeFileSync(configPath, concurrent); },
+    })).rejects.toThrow('changed during VS Code import');
+    expect(readFileSync(configPath, 'utf-8')).toBe(concurrent);
+    expect(readdirSync(testDir)).toEqual(['workspace.yaml']);
   });
 });

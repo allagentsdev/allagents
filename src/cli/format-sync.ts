@@ -395,6 +395,7 @@ export function formatVerboseSyncLines(result: SyncResult): string[] {
  */
 export function buildSyncData(result: SyncResult) {
   return {
+    ...(result.error && { error: result.error }),
     copied: result.totalCopied,
     generated: result.totalGenerated,
     failed: result.totalFailed,

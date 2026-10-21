@@ -304,18 +304,21 @@ export const skillUpdateCmd = command({
         prepared,
         decisions,
         workspacePath,
-        progressiveOutput
-          ? {
-              onUnitApplyStart: (unit) =>
-                renderSkillApplyStart(unit, skillLabels),
-              onUnitResult: (unitResult) =>
-                renderProgressiveSkillUpdateResult(
-                  unitResult,
-                  planById.get(unitResult.id),
-                  skillLabels,
-                ),
-            }
-          : {},
+        {
+          syncOptions: { yes },
+          ...(progressiveOutput
+            ? {
+                onUnitApplyStart: (unit) =>
+                  renderSkillApplyStart(unit, skillLabels),
+                onUnitResult: (unitResult) =>
+                  renderProgressiveSkillUpdateResult(
+                    unitResult,
+                    planById.get(unitResult.id),
+                    skillLabels,
+                  ),
+              }
+            : {}),
+        },
       );
       const summary = skillUpdateSummary(result);
       const results = progressiveOutput

@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.21.2](https://github.com/allagentsdev/allagents/compare/v1.21.1...v1.21.2) (2026-10-21)
+
+
+### Fixed
+
+* **deps:** patch transitive Hono audit vulnerability ([#583](https://github.com/allagentsdev/allagents/issues/583)) ([bb6e803](https://github.com/allagentsdev/allagents/commit/bb6e803be5eb98c03e5a950b842a9a62da3b22f4))
+* **sync:** preserve VS Code repository edits safely ([#582](https://github.com/allagentsdev/allagents/issues/582)) ([69d14dc](https://github.com/allagentsdev/allagents/commit/69d14dc49fa33e2886801ee561c2db1bf8ac1f0a))
+* **workspace:** preserve untouched YAML formatting during edits ([#580](https://github.com/allagentsdev/allagents/issues/580)) ([188034d](https://github.com/allagentsdev/allagents/commit/188034d925d4939a9972a031aac99f2a98dadfbd))
+* **workspace:** preserve YAML comments when editing configuration ([#575](https://github.com/allagentsdev/allagents/issues/575)) ([e0c3702](https://github.com/allagentsdev/allagents/commit/e0c3702d69256ff7a6f467d6477fc71d185b2a3f))
+
+
+### Performance
+
+* **workspace:** reuse parsed YAML during writes ([#578](https://github.com/allagentsdev/allagents/issues/578)) ([593fd37](https://github.com/allagentsdev/allagents/commit/593fd371caa85289317b3486ca8782f586c2ad77))
+
 ## [1.21.1](https://github.com/allagentsdev/allagents/compare/v1.21.0...v1.21.1) (2026-10-20)
 
 

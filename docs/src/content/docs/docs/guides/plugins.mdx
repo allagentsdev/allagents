@@ -12,44 +12,49 @@ my-plugin/
 ├── skills/          # Cross-client skills
 ├── agents/          # Agent definitions (Claude, Copilot, Factory)
 ├── hooks/           # Hook definitions (Claude, Copilot, Factory)
-├── hooks.json       # Copilot plugin hook declaration (optional)
+├── hooks.json       # Copilot hook configuration (optional)
 ├── commands/        # Commands (Claude, OpenCode)
 ├── .github/         # Project-scoped GitHub overrides (Copilot, VSCode)
 │   ├── copilot-instructions.md
 │   ├── instructions/    # Pattern-based instructions
 │   ├── prompts/         # Prompt files
 │   ├── agents/          # GitHub agent overrides
-│   └── hooks/           # GitHub hook overrides
+│   └── hooks/           # Project Copilot hooks
 └── AGENTS.md
 ```
 
-:::note
-At project scope, Copilot plugin hook declarations from `hooks.json` or
-`hooks/hooks.json` are combined in the AllAgents-owned
-`.github/hooks/allagents.json` file. Each entry receives its plugin-specific
-`COPILOT_PLUGIN_ROOT`, so declarations continue to resolve files from the
-plugin package. The generated file is tracked independently from other
-repository hook files. Package metadata under `.github/plugin/` is not copied
-into the project overlay.
+## Copilot hooks
+When you install a plugin for Copilot in a project, AllAgents reads its
+`hooks.json` or `hooks/hooks.json` and writes the hooks to
+`.github/hooks/allagents.json`. Hooks from multiple plugins share this file.
+[Copilot reads JSON files in `.github/hooks/`](https://docs.github.com/en/copilot/reference/hooks-reference)
+to run commands during agent sessions, such as when a session starts or before
+a tool runs. [Git hooks](https://git-scm.com/docs/githooks), such as `pre-commit`,
+normally live in `.git/hooks/`.
 
-This does not require a marketplace manifest or `plugin.json`. Direct local and
-GitHub plugin sources continue to use conventional directory discovery. If a
-plugin has no supported hook declaration, its other artifacts still sync and it
-adds no entries to `allagents.json`. AllAgents warns and omits a declaration
-that cannot be read or parsed as JSON or lacks the version-1 `hooks` object
-envelope. A declaration with `disableAllHooks: true` adds no entries; otherwise,
-a non-array event value also warns and omits the declaration. AllAgents does not
-fully validate each hook entry. Skipping a declaration does not reject the
-plugin or itself suppress other eligible artifacts—including repository hook
-files—or valid declarations from other plugins. Ordinary client selection and
-exclusion settings still apply.
+AllAgents manages the generated file separately from your other hook files.
+It sets `COPILOT_PLUGIN_ROOT` for each hook so commands can find files in their
+plugin's installation directory. These paths are local to your machine; the
+generated file is not portable to Copilot cloud agent or another checkout.
+AllAgents leaves package metadata under `.github/plugin/` out of the project.
+
+No marketplace manifest or `plugin.json` is required. AllAgents also finds hooks
+in the usual directories of plugins installed directly from local paths or
+GitHub. A missing hook configuration or one with `disableAllHooks: true` adds no
+hooks to the generated file.
+
+AllAgents warns and skips a hook configuration if it cannot read or parse the
+JSON, or if the file does not contain `version: 1` and a `hooks` object. Unless
+hooks are disabled, each event's value must also be an array. AllAgents does not
+fully validate individual hook entries. Skipping one plugin's hook configuration
+still allows its other eligible files, including files under `.github/hooks/`,
+and valid hooks from other plugins to sync. Client selection and file exclusions
+still apply.
 
 At user scope, root `hooks/` entries sync to the client's user hook directory.
 Repository hooks under `.github/hooks/` stay project-scoped and are not copied
 to `~/.copilot/hooks/`. Potential copies from older versions are left untouched
 and reported for manual review because their ownership was not tracked.
-:::
-
 ## Marketplace Component Boundaries
 
 AllAgents recognizes marketplace manifests at both

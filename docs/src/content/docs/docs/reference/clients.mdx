@@ -140,6 +140,22 @@ unknown content.
 
 ### GitHub Copilot CLI
 
+#### Plugin files and hooks
+
+Skills let you share reusable prompts across clients. For Copilot and VSCode,
+AllAgents copies `.github/prompts/`, `.github/agents/`, `.github/hooks/`, and
+`copilot-instructions.md` into the workspace's `.github/` folder. Package metadata
+under `.github/plugin/` is omitted. For Copilot, a plugin's root `agents/` and
+`hooks/` directories also map to `.github/agents/` and `.github/hooks/`.
+
+For project installations, AllAgents writes plugin hooks to
+`.github/hooks/allagents.json`. For user installations, a plugin's root `hooks/`
+directory maps to `~/.copilot/hooks/`. Files under `.github/hooks/` apply only to
+the project. See [Copilot hooks](/docs/guides/plugins/#copilot-hooks) for how
+AllAgents generates and checks hook configuration.
+
+#### Global profiles
+
 Copilot global profiles require GitHub Copilot CLI 1.0.74 or newer. AllAgents
 sets `COPILOT_HOME` to an owned configuration root and
 `COPILOT_CACHE_HOME` to a sibling owned cache directory. The generated launcher
@@ -235,10 +251,6 @@ Recursive cleanup is limited to a client root AllAgents created for this
 profile; removing that profile intentionally removes its isolated runtime
 state. Ambient `~/.codex`, project files, and operating-system keyrings remain
 outside the cleanup boundary.
-
-:::note
-Skills are the cross-client way to share reusable prompts. GitHub overrides (`.github/prompts/`, `.github/agents/`, `.github/hooks/`, `copilot-instructions.md`) are copied to the workspace's `.github/` folder for Copilot/VSCode; package-only `.github/plugin/` metadata is omitted. Root `agents/` and `hooks/` also map to `.github/agents/` and `.github/hooks/` for Copilot. At project scope, plugin hook declarations from `hooks.json` or `hooks/hooks.json` are combined in `.github/hooks/allagents.json`. This translation does not require marketplace registration or `plugin.json`; a missing or disabled declaration adds no managed entries. AllAgents warns and omits a declaration that cannot be read or parsed, lacks the version-1 `hooks` object envelope, or—unless disabled—has a non-array event value. Skipping a declaration does not itself suppress other eligible plugin artifacts or valid declarations from other plugins. At user scope, root `hooks/` maps to `~/.copilot/hooks/`, while repository `.github/hooks/` remains project-scoped.
-:::
 
 ### Pi
 

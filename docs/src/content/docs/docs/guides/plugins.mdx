@@ -194,6 +194,55 @@ client targeting.
 
 See the [CLI reference](/docs/reference/cli/#skill-add) for all source formats.
 
+## Updates and Local Customizations
+
+For ordinary file installations, the declared plugin or skill source is the
+source of truth. Client directories such as `.agents/skills/`,
+`.claude/skills/`, and `.codex/skills/` contain installed copies. An update can
+replace edits made directly to those copies without a local-edit confirmation;
+uninstall can remove modified copies that AllAgents previously installed.
+
+Keep lasting customizations in a local source directory or a fork, then point
+the plugin declaration at that source. Edit the source files and run
+`allagents update` to sync them to the selected clients. See
+[Git remotes for file installations](#git-remotes-for-file-installations) for
+remote source formats. Native installs use the selected client's own plugin
+lifecycle; named profiles have separate
+[modified-resource protections](/docs/reference/cli/#profile).
+
+### Track configuration and optional snapshots in Git
+
+Commit `.allagents/workspace.yaml` in the project's Git repository so the team
+shares source declarations and client selections. AllAgents keeps its local
+`.allagents/sync-state.json` out of Git.
+
+You can also commit snapshots of installed project skills for review and
+recovery. Use the directory for your selected client; `.agents/skills/` is one
+possible destination, not the destination for every client. For a project that
+uses `.agents/skills/`:
+
+```bash
+git add .allagents/workspace.yaml .agents/skills/
+git commit -m "Track agent setup and installed skills"
+```
+
+Use the project's existing repository; a separate repository inside `.agents/`
+is not required. If the installed directory is ignored, keep that policy and
+version the source instead. A symlink committed to Git records its link target,
+not a snapshot of the linked files.
+
+Git can recover committed, tracked content after an update. For example, to
+inspect changes and restore the last committed project skill snapshot:
+
+```bash
+git diff -- .agents/skills/
+git restore --source=HEAD -- .agents/skills/
+```
+
+Restoring returns those files to the committed snapshot. Git does not prevent
+AllAgents from replacing working files, and it cannot recover edits that were
+never committed or files outside the repository, such as user-global installs.
+
 ## Disabling Individual Skills
 
 You can disable specific skills from a plugin without uninstalling the entire plugin:

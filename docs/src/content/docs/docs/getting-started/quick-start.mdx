@@ -38,6 +38,13 @@ scripts, provide the target explicitly:
 
 ```bash
 allagents plugin install code-review@claude-plugins-official \
+  --scope project --client claude --yes
+```
+
+To install the same plugin for both Claude Code and Codex, run:
+
+```bash
+allagents plugin install code-review@claude-plugins-official \
   --scope project --client claude,codex --yes
 ```
 
@@ -46,6 +53,20 @@ allagents plugin install code-review@claude-plugins-official \
 ```bash
 allagents update
 ```
+
+Installed file copies follow their declared source. Updates can overwrite edits
+made directly to those copies without asking. Keep lasting customizations in a
+source directory or fork; see [Updates and Local Customizations](/docs/guides/plugins/#updates-and-local-customizations)
+for Git snapshots and recovery.
+
+## Remove a Plugin
+
+```bash
+allagents plugin uninstall code-review@claude-plugins-official --scope project
+```
+
+This removes the project declaration and its managed installed artifacts. Make
+any customizations in the source before removing an installed copy you edited.
 
 ## Add Individual Skills
 

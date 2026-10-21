@@ -19,11 +19,11 @@ my-plugin/
 │   ├── instructions/    # Pattern-based instructions
 │   ├── prompts/         # Prompt files
 │   ├── agents/          # GitHub agent overrides
-│   └── hooks/           # Copilot hooks for this project
+│   └── hooks/           # Project Copilot hooks
 └── AGENTS.md
 ```
 
-:::note
+## Copilot hooks
 When you install a plugin for Copilot in a project, AllAgents reads its
 `hooks.json` or `hooks/hooks.json` and writes the hooks to
 `.github/hooks/allagents.json`. Hooks from multiple plugins share this file.
@@ -55,8 +55,6 @@ At user scope, root `hooks/` entries sync to the client's user hook directory.
 Repository hooks under `.github/hooks/` stay project-scoped and are not copied
 to `~/.copilot/hooks/`. Potential copies from older versions are left untouched
 and reported for manual review because their ownership was not tracked.
-:::
-
 ## Marketplace Component Boundaries
 
 AllAgents recognizes marketplace manifests at both

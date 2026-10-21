@@ -140,6 +140,22 @@ unknown content.
 
 ### GitHub Copilot CLI
 
+#### Plugin files and hooks
+
+Skills let you share reusable prompts across clients. For Copilot and VSCode,
+AllAgents copies `.github/prompts/`, `.github/agents/`, `.github/hooks/`, and
+`copilot-instructions.md` into the workspace's `.github/` folder. Package metadata
+under `.github/plugin/` is omitted. For Copilot, a plugin's root `agents/` and
+`hooks/` directories also map to `.github/agents/` and `.github/hooks/`.
+
+For project installations, AllAgents writes plugin hooks to
+`.github/hooks/allagents.json`. For user installations, a plugin's root `hooks/`
+directory maps to `~/.copilot/hooks/`. Files under `.github/hooks/` apply only to
+the project. See [Copilot hooks](/docs/guides/plugins/#copilot-hooks) for how
+AllAgents generates and checks hook configuration.
+
+#### Global profiles
+
 Copilot global profiles require GitHub Copilot CLI 1.0.74 or newer. AllAgents
 sets `COPILOT_HOME` to an owned configuration root and
 `COPILOT_CACHE_HOME` to a sibling owned cache directory. The generated launcher
@@ -235,32 +251,6 @@ Recursive cleanup is limited to a client root AllAgents created for this
 profile; removing that profile intentionally removes its isolated runtime
 state. Ambient `~/.codex`, project files, and operating-system keyrings remain
 outside the cleanup boundary.
-
-:::note
-Skills let you share reusable prompts across clients. For Copilot and VSCode,
-AllAgents copies `.github/prompts/`, `.github/agents/`, `.github/hooks/`, and
-`copilot-instructions.md` into the workspace's `.github/` folder. Package metadata
-under `.github/plugin/` is omitted. For Copilot, a plugin's root `agents/` and
-`hooks/` directories also map to `.github/agents/` and `.github/hooks/`.
-
-When you install a plugin for Copilot in a project, AllAgents reads its
-`hooks.json` or `hooks/hooks.json` and writes the hooks to
-`.github/hooks/allagents.json`. Hooks from multiple plugins share this file.
-[Copilot reads `.github/hooks/*.json`](https://docs.github.com/en/copilot/reference/hooks-reference)
-to run commands during agent sessions. Git hooks normally live in `.git/hooks/`.
-The generated file uses local plugin paths and is not portable to Copilot cloud
-agent or another checkout.
-
-No marketplace registration or `plugin.json` is required. Missing or disabled
-hook configurations add no hooks to the generated file. AllAgents warns and
-skips a configuration it cannot read or parse, or one without `version: 1` and a
-`hooks` object. Unless hooks are disabled, each event's value must be an array.
-Other eligible plugin files and valid hooks from other plugins still sync. See
-[Plugin Structure](/docs/guides/plugins/#plugin-structure) for details.
-
-For user installations, a plugin's root `hooks/` directory maps to
-`~/.copilot/hooks/`. Files under `.github/hooks/` apply only to the project.
-:::
 
 ### Pi
 

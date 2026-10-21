@@ -5,16 +5,17 @@ This example demonstrates the file-level source sync feature in AllAgents.
 ## Directory Structure
 
 ```
-workspaces/
-├── file-source-sync/           # The workspace
-│   ├── .allagents/
-│   │   └── workspace.yaml
-│   ├── shared-config/          # Default source (workspace.source)
-│   │   ├── AGENTS.md
-│   │   └── config/
-│   │       └── settings.json
-│   └── README.md
-└── team-config/                # Sibling directory for file-level override
+examples/
+├── workspaces/
+│   └── file-source-sync/       # The workspace
+│       ├── .allagents/
+│       │   └── workspace.yaml
+│       ├── shared-config/      # Default source (workspace.source)
+│       │   ├── AGENTS.md
+│       │   └── config/
+│       │       └── settings.json
+│       └── README.md
+└── team-config/                # Shared fixture, outside the workspace templates
     └── rules.md
 ```
 
@@ -24,7 +25,7 @@ The `workspace.yaml` demonstrates three source patterns:
 
 1. **String shorthand** - `AGENTS.md` resolves to `shared-config/AGENTS.md`
 2. **Relative source** - `source: config/settings.json` resolves to `shared-config/config/settings.json`
-3. **File-level override** - `source: ../team-config/rules.md` uses a different directory
+3. **File-level override** - `source: ../../team-config/rules.md` uses a shared fixture outside `workspaces/`, resolved from the workspace root
 
 ## Running the Example
 

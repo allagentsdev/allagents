@@ -15,10 +15,10 @@ workspace:
     - source: config/settings.json
       dest: settings.json
 
-    # File-level source override (sibling directory)
+    # File-level source override (outside the workspace templates directory)
     # Paths starting with ../ are resolved from workspace root, not workspace.source
     - dest: TEAM-RULES.md
-      source: ../team-config/rules.md
+      source: ../../team-config/rules.md
 
     # GitHub source (always fetched fresh)
     # - dest: CONTRIB.md

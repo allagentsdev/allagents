@@ -28,6 +28,9 @@ Use the narrowest command that proves the changed contract while developing. Run
 - Avoid assertions on helper calls, field forwarding, source text, or other implementation details.
 - Prefer real interfaces over mocks that can drift from production behavior.
 - Keep tests deterministic, isolated, and safe in the complete suite.
+- Run integration fixtures that replace shared modules with `mock.module` in a
+  separate worker process. Bun module replacements survive between test files;
+  restoring mock functions alone does not restore the original module exports.
 - Preserve a regression test for a bug when a plausible future regression would fail it. Use a throwaway smoke script instead when a permanent test would only pin plumbing.
 
 ## Manual E2E

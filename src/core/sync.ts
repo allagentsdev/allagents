@@ -3797,9 +3797,13 @@ export async function syncWorkspace(
       (effect) => effect.action === 'failed' || effect.action === 'unknown',
     ).length ?? 0;
   const totalFailed = fileFailures + nativeFailures;
+  const failedMcpResults = Object.values(mcpResults).filter(
+    (result) => result.authoritative === false,
+  );
   const hasFailures =
     pluginResults.some((result) => !result.success) ||
     totalFailed > 0 ||
+    failedMcpResults.length > 0 ||
     nativeResult?.success === false;
 
   const newStatePaths = collectSyncedPaths(
@@ -3847,6 +3851,9 @@ export async function syncWorkspace(
   const uniqueWarnings = [...new Set(warnings)];
   return {
     success: !hasFailures,
+    ...(failedMcpResults.length > 0 && {
+      error: failedMcpResults.flatMap((result) => result.warnings).join('\n'),
+    }),
     pluginResults,
     totalCopied,
     totalFailed,
@@ -4268,8 +4275,14 @@ export async function syncUserWorkspace(
   return {
     success:
       totalFailed === 0 &&
+      userMcpSyncResult.complete &&
       pluginResults.every((result) => result.success) &&
       nativeResult?.success !== false,
+    ...(!userMcpSyncResult.complete && {
+      error: Object.values(mcpResults)
+        .filter((result) => result.authoritative === false)
+        .flatMap((result) => result.warnings).join('\n'),
+    }),
     pluginResults,
     totalCopied,
     totalFailed,

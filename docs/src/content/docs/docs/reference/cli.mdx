@@ -851,4 +851,10 @@ AllAgents only tracks MCP servers it added:
 - `mcp remove` only removes servers from client MCP configs that AllAgents originally added. User-managed servers are never touched.
 - If a same-name client entry existed before AllAgents managed it, the entry remains user-owned and is skipped with a warning.
 
+For Claude, VS Code, and Copilot JSON MCP files, an unreadable or malformed configuration,
+or a server map that is not an object, stops reconciliation for that destination.
+AllAgents preserves the file and its previous ownership records, and the command
+exits with a failure. Repair the file, then rerun `allagents mcp update` or
+`allagents update`. `--force` does not replace an invalid configuration file.
+
 See [CLAUDE.md — MCP Server Sync](https://github.com/allagentsdev/allagents/blob/main/CLAUDE.md) for the full ownership rule.

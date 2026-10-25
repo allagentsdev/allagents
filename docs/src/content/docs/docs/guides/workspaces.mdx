@@ -151,6 +151,11 @@ When using `--from` during init, relative paths are automatically converted to a
 
 A `repositories[]` entry is a reference by default. AllAgents reads it to build the skills index and propagate agent files, but it never runs git against the directory — whoever created that directory owns it.
 
+`allagents workspace repo add <path>` detects the source and repository from the
+directory's Git remote. Detection supports GitHub, GitLab (including nested
+groups), Bitbucket, and Azure DevOps over HTTPS or SSH, retaining dots in repository
+names. Other hosts are added as path references without inferred source metadata.
+
 Set `managed` when AllAgents should materialize the repository too:
 
 | Value | Behavior |

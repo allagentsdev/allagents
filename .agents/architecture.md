@@ -28,6 +28,11 @@ MCP servers from plugins are synchronized into VS Code's `mcp.json`.
 
 `trackedServers` means “servers AllAgents owns and is responsible for updating or removing.”
 
+Keep Claude and VS Code JSON file merging in `src/core/json-mcp-config.ts`.
+Unreadable, malformed, or non-object configurations and server maps retain their
+bytes and prior tracking, return `authoritative: false`, and fail reconciliation.
+Force permits individual server replacement only after the container is valid.
+
 ## Pi native compatibility
 
 Use a minimum Pi version requirement rather than a moving upper bound. Keep

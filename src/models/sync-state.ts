@@ -71,7 +71,7 @@ export const SyncStateSchema = z
         hooks: z.record(z.string(), z.array(z.unknown())),
       })
       .optional(),
-    // MCP servers tracked per scope (e.g., "vscode" for user-level mcp.json)
+    // MCP servers tracked per client (e.g., "vscode" for project .vscode/mcp.json)
     mcpServers: z.record(z.string(), z.array(z.string())).optional(),
     // Legacy native plugin tracking. Loaded for conservative migration only;
     // string identities never authorize cleanup on their own.

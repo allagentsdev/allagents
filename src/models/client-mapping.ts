@@ -188,7 +188,7 @@ const AGENT_HOST_DEFINITIONS = [
     name: 'VS Code',
     project: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
     user: { skillsPath: '.agents/skills/', agentFile: 'AGENTS.md' },
-    mcp: { project: true, user: true },
+    mcp: { project: true },
   },
   {
     id: 'openclaw',

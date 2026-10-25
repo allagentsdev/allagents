@@ -207,6 +207,22 @@ describe('installed plugin MCP selection', () => {
     expect(await readFile(path, 'utf8')).toBe(before);
   });
 
+  test('does not offer a user MCP picker for the project-only vscode target', async () => {
+    const path = await configAt('user', [{ source: first, install: 'file' }], ['vscode']);
+    const before = await readFile(path, 'utf8');
+    updateSelectResponses.push(`user:${first}`, 'back', '__back__');
+
+    await runPlugins(context(), statusCache('user', first));
+
+    const detail = updateSelectMock.mock.calls.find(
+      ([input]) => input.message.startsWith(`Plugin: ${first} [user]`),
+    )?.[0];
+    expect(detail).toBeDefined();
+    expect(detail?.options.some(({ value }) => value === 'mcp_servers')).toBe(false);
+    expect(updateMultiselectMock).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe(before);
+  });
+
   test('offers file servers for mixed native/file installs without changing config on cancellation', async () => {
     const path = await configAt(
       'project',
@@ -233,7 +249,7 @@ describe('installed plugin MCP selection', () => {
   });
 
   test('user scope updates its own declaration without changing project config', async () => {
-    const userPath = await configAt('user', [{ source: first, install: 'file', mcpServers: { exclude: ['alpha'] } }]);
+    const userPath = await configAt('user', [{ source: first, install: 'file', mcpServers: { exclude: ['alpha'] } }], ['copilot']);
     const projectPath = await configAt('project', [{ source: first, install: 'file' }]);
     const beforeProject = await readFile(projectPath, 'utf8');
     updateSelectResponses.push(`user:${first}`, 'mcp_servers', 'back', '__back__');
@@ -248,7 +264,7 @@ describe('installed plugin MCP selection', () => {
   });
 
   test('cancel returns to detail without changing user configuration', async () => {
-    const path = await configAt('user', [{ source: first, install: 'file', mcpServers: { exclude: ['alpha'] } }]);
+    const path = await configAt('user', [{ source: first, install: 'file', mcpServers: { exclude: ['alpha'] } }], ['copilot']);
     const before = await readFile(path, 'utf8');
     updateSelectResponses.push(`user:${first}`, 'mcp_servers', 'back', '__back__');
     updateMultiselectResponses.push(CLACK_CANCEL);

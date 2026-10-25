@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
-  getVscodeMcpConfigPath,
   readPluginMcpConfig,
   collectMcpServers,
   syncVscodeMcpConfig,
@@ -21,14 +20,6 @@ function makeTempDir(): string {
 function makePlugin(resolved: string, plugin = 'test-plugin'): ValidatedPlugin {
   return { plugin, resolved, success: true, clients: ['vscode'], nativeClients: [] };
 }
-
-describe('getVscodeMcpConfigPath', () => {
-  test('returns a valid path for current platform', () => {
-    const path = getVscodeMcpConfigPath();
-    expect(path).toContain('mcp.json');
-    expect(path).toContain('Code');
-  });
-});
 
 describe('readPluginMcpConfig', () => {
   let tempDir: string;

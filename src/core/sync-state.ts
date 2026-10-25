@@ -11,7 +11,7 @@ import {
 import type { ClientType } from '../models/workspace-config.js';
 import { ensureConfigGitignore } from './config-gitignore.js';
 
-/** MCP scope identifier (e.g., "vscode" for user-level mcp.json) */
+/** MCP client identifier (e.g., "vscode" for project .vscode/mcp.json) */
 export type McpScope = 'vscode' | 'codex' | 'claude' | 'copilot';
 
 /**

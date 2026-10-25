@@ -192,6 +192,28 @@ describe('detectRemote', () => {
     expect(result).toBeUndefined();
   });
 
+  it.each([
+    ['https://github.com/Owner/Repo.With.Dots.git', 'github', 'Owner/Repo.With.Dots'],
+    ['git@gitlab.com:team/subgroup/repo.name.git', 'gitlab', 'team/subgroup/repo.name'],
+    ['ssh://git@bitbucket.org/team/repo.name.git', 'bitbucket', 'team/repo.name'],
+    ['https://dev.azure.com/org/project/_git/repo.name', 'azure-devops', 'org/project/repo.name'],
+    ['git@vs-ssh.visualstudio.com:v3/org/project/repo.name', 'azure-devops', 'org/project/repo.name'],
+  ])('detects the complete repository identity from %s', async (remote, source, repo) => {
+    gitSync(['git', 'init', tmpDir]);
+    gitSync(['git', '-C', tmpDir, 'remote', 'add', 'origin', remote]);
+    expect(await detectRemote(tmpDir)).toEqual({ source, repo });
+  });
+
+  it.each([
+    'https://notgithub.com/owner/repo.git',
+    'https://gitlab.com.example.org/gitlab.com/owner/repo.git',
+    'ssh://constructor/owner/repo.git',
+  ])('does not infer a platform from a host suffix or path: %s', async (remote) => {
+    gitSync(['git', 'init', tmpDir]);
+    gitSync(['git', '-C', tmpDir, 'remote', 'add', 'origin', remote]);
+    expect(await detectRemote(tmpDir)).toBeUndefined();
+  });
+
   it('should return undefined for non-git directory', async () => {
     const result = await detectRemote(tmpDir);
     expect(result).toBeUndefined();

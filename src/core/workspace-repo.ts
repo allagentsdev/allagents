@@ -37,25 +37,32 @@ export async function detectRemote(repoPath: string): Promise<{ source: string; 
     );
     const url = stdout.trim();
 
-    // GitHub SSH: git@github.com:owner/repo.git
-    // GitHub HTTPS: https://github.com/owner/repo.git
-    const githubMatch = url.match(/github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
-    if (githubMatch) return { source: 'github', repo: `${githubMatch[1]}/${githubMatch[2]}` };
+    // Convert scp-style SSH remotes before parsing host and path separately.
+    const scp = /^(?:[^/@:]+@)?([^/:]+):(.+)$/.exec(url);
+    const remote = new URL(!url.includes('://') && scp
+      ? `ssh://${scp[1]}/${scp[2]}`
+      : url);
+    const path = remote.pathname.replace(/^\//, '').replace(/\.git$/, '');
+    const parts = path.split('/');
+    if (parts.some((part) => !part)) return undefined;
 
-    // GitLab
-    const gitlabMatch = url.match(/gitlab\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
-    if (gitlabMatch) return { source: 'gitlab', repo: `${gitlabMatch[1]}/${gitlabMatch[2]}` };
-
-    // Bitbucket
-    const bitbucketMatch = url.match(/bitbucket\.org[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
-    if (bitbucketMatch) return { source: 'bitbucket', repo: `${bitbucketMatch[1]}/${bitbucketMatch[2]}` };
-
-    // Azure DevOps: https://dev.azure.com/org/project/_git/repo or org@vs-ssh.visualstudio.com:v3/org/project/repo
-    const azureHttpsMatch = url.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/.]+?)(?:\.git)?$/);
-    if (azureHttpsMatch) return { source: 'azure-devops', repo: `${azureHttpsMatch[1]}/${azureHttpsMatch[2]}/${azureHttpsMatch[3]}` };
-
-    const azureSshMatch = url.match(/vs-ssh\.visualstudio\.com:v3\/([^/]+)\/([^/]+)\/([^/.]+?)(?:\.git)?$/);
-    if (azureSshMatch) return { source: 'azure-devops', repo: `${azureSshMatch[1]}/${azureSshMatch[2]}/${azureSshMatch[3]}` };
+    const platforms: Record<string, string> = {
+      'github.com': 'github',
+      'gitlab.com': 'gitlab',
+      'bitbucket.org': 'bitbucket',
+    };
+    const source = Object.hasOwn(platforms, remote.hostname)
+      ? platforms[remote.hostname]
+      : undefined;
+    if (source && (parts.length === 2 || (source === 'gitlab' && parts.length > 2))) {
+      return { source, repo: path };
+    }
+    if (remote.hostname === 'dev.azure.com' && parts.length === 4 && parts[2] === '_git') {
+      return { source: 'azure-devops', repo: `${parts[0]}/${parts[1]}/${parts[3]}` };
+    }
+    if (remote.hostname === 'vs-ssh.visualstudio.com' && parts.length === 4 && parts[0] === 'v3') {
+      return { source: 'azure-devops', repo: parts.slice(1).join('/') };
+    }
 
     return undefined;
   } catch {

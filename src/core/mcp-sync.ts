@@ -318,8 +318,14 @@ export async function syncMcpOnly(
     }
   }
 
+  const failedResults = Object.values(syncResult.mcpResults).filter(
+    (result) => result.authoritative === false,
+  );
   return {
-    success: true,
+    success: failedResults.length === 0,
+    ...(failedResults.length > 0 && {
+      error: failedResults.flatMap((result) => result.warnings).join('\n'),
+    }),
     mcpResults: syncResult.mcpResults,
     warnings,
   };
@@ -403,7 +409,10 @@ export async function syncUserMcpOnly(
     mcpResults: syncResult.mcpResults,
     warnings,
     ...(!syncResult.complete && {
-      error: 'MCP sync was incomplete; retained ownership for failed clients',
+      error: Object.values(syncResult.mcpResults)
+        .filter((result) => result.authoritative === false)
+        .flatMap((result) => result.warnings).join('\n') ||
+        'MCP sync was incomplete; retained ownership for failed clients',
     }),
   };
 }

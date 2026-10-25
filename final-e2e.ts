@@ -1,0 +1,38 @@
+import { strict as assert } from 'node:assert';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+const root = await mkdtemp('/tmp/allagents-588-full-');
+const home = join(root, 'home');
+const project = join(root, 'project');
+const cli = join(process.cwd(), 'dist/index.js');
+await mkdir(join(home, '.allagents'), { recursive: true });
+await mkdir(project);
+const configPath = join(home, '.allagents/workspace.yaml');
+const legacy = join(home, '.config/Code/User/mcp.json');
+await mkdir(join(home, '.config/Code/User'), { recursive: true });
+const legacyBytes = '{\n // User file\n "servers": {"old": {"command": "original"}}\n}\n';
+await writeFile(legacy, legacyBytes);
+await writeFile(join(home, '.allagents/sync-state.json'), JSON.stringify({version: 1, lastSync: '2026-01-01T00:00:00Z', files: {}, mcpServers: {vscode: ['old']}}));
+await writeFile(configPath, 'repositories: []\nplugins: []\nclients: [vscode]\nmcpServers:\n  local:\n    command: echo\n');
+async function run(args: string[], json = true) {
+ const proc = Bun.spawn(['bun', cli, ...(json ? ['--json'] : []), ...args], { cwd: project, env: {...process.env, HOME: home, ALLAGENTS_TEST_HOME: home, COPILOT_HOME: undefined}, stdout:'pipe',stderr:'pipe' });
+ const [code, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+ console.log(JSON.stringify({args,json,code,stdout: json ? JSON.parse(stdout) : stdout,stderr}));
+ assert.equal(code,0);
+ return stdout;
+}
+await run(['update','--scope','user','--offline']);
+assert.equal(await readFile(legacy,'utf8'),legacyBytes);
+assert.equal(existsSync(join(home,'.copilot/mcp-config.json')), false);
+const human = await run(['update','--scope','user','--offline'], false);
+assert.ok(human.includes('configure the copilot client'));
+const stateBytes = await readFile(join(home,'.allagents/sync-state.json'),'utf8');
+await writeFile(configPath, 'repositories: []\nplugins: []\nclients: [vscode, copilot]\nmcpServers:\n  local:\n    command: echo\n');
+await run(['update','--scope','user','--offline','--dry-run']);
+assert.equal(existsSync(join(home,'.copilot/mcp-config.json')), false);
+assert.equal(await readFile(join(home,'.allagents/sync-state.json'),'utf8'),stateBytes);
+await run(['update','--scope','user','--offline']);
+assert.equal(JSON.parse(await readFile(join(home,'.copilot/mcp-config.json'),'utf8')).mcpServers.local.command,'echo');
+assert.equal(await readFile(legacy,'utf8'),legacyBytes);
+console.log(JSON.stringify({result:'passed',root,checks:['full user sync JSON','redirected human diagnostics','dry-run preserves config and state','copilot target writes correctly','deprecated file bytes unchanged']}));

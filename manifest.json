@@ -1,0 +1,33 @@
+{
+  "issue": 588,
+  "repository": "allagentsdev/allagents",
+  "branch": "evidence/588-copilot-mcp-location",
+  "retention": "Keep this evidence branch after the implementation branch is merged or deleted.",
+  "file": "issue-588.mp4",
+  "bytes": 1008304,
+  "sha256": "783210b236bf3280b17b5d5ef8f999b9cfb8e8eb2dc9e786c06d11ce6bc0818a",
+  "codec": "h264",
+  "pixelFormat": "yuv420p",
+  "durationSeconds": 73.45,
+  "dimensions": [
+    1480,
+    880
+  ],
+  "source": "Real agent-tui v0.1.1 snapshots from built AllAgents CLI, chronological order; terminal text unchanged; captions and readable frame durations added. Upstream record-stop emitted only its initial frame.",
+  "buildBase": "2debf73095a62a334f03f5dc545ba17f6101f6d0 plus issue 588 working diff",
+  "checks": {
+    "result": "passed",
+    "root": "/tmp/allagents-588-tui-zuzhNL",
+    "checks": [
+      "legacy bytes unchanged",
+      "Copilot-only beta materialized",
+      "project vscode selected server materialized",
+      "cancelled user declaration absent",
+      "vscode user plugin omits MCP action",
+      "user selector omits vscode",
+      "project selector retains vscode",
+      "EISDIR and successful retry",
+      "Back and Ctrl+C scope preservation"
+    ]
+  }
+}

@@ -19,7 +19,7 @@ const clientChoices=await readScreen('16-user-client-choices');
 assert.ok(clientChoices.includes('◻ copilot'));
 assert.ok(!clientChoices.includes('◻ vscode'));
 assert.ok((await readScreen('20-project-add')).includes('◻ vscode'));
-assert.ok((await readScreen('07-write-failure')).includes('Reopen MCP servers and confirm to retry'));
+assert.ok((await readScreen('07-write-failure')).replace(/│/g, '').replace(/\s+/g, ' ').includes('Reopen MCP servers and confirm to retry'));
 assert.ok((await readScreen('09-recovered')).includes('Saved selection applied.'));
 const output={result:'passed',root,checks:['legacy bytes unchanged','Copilot-only beta materialized','project vscode selected server materialized','cancelled user declaration absent','vscode user plugin omits MCP action','user selector omits vscode','project selector retains vscode','EISDIR and successful retry','Back and Ctrl+C scope preservation']};
 console.log(JSON.stringify(output));

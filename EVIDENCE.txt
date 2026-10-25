@@ -4,6 +4,6 @@ Keep branch evidence/588-copilot-mcp-location permanently; it is independent of 
 
 issue-588.mp4 contains actual agent-tui snapshots from the built CLI in an isolated HOME and project. Terminal bodies are unchanged. Captions identify chronological steps. Readable frame durations replace idle waiting. The upstream 0.1.1 recording API emitted one initial frame; snapshots.cast carries all real captured screens.
 
-Coverage: main menu to Plugins, vscode user plugin has no MCP action, Back to list, copilot user server picker, Ctrl+C cancellation, EISDIR failure, reopen and successful retry, user client selector excludes vscode, project selector retains vscode, successful project mutation, Back and Ctrl+C return to stable menus. verify-tui.ts checks authoritative files, cancelled declarations and legacy byte preservation.
+Coverage: main menu to Plugins, vscode user plugin has no MCP action, Back to list, copilot user server picker, Ctrl+C cancellation, blocked destination failure, reopen and successful retry, user client selector excludes vscode, project selector retains vscode, successful project mutation, Back and Ctrl+C return to stable menus. verify-tui.ts checks authoritative files, cancelled declarations and legacy byte preservation.
 
 Video verified with ffmpeg decoding from start to finish and final-frame inspection. Manifest contains exact byte size and SHA256.

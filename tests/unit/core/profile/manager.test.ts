@@ -571,6 +571,38 @@ describe('profile lifecycle manager', () => {
     await expect(planProfileOperation('invalid', 'install', test.options, dependencies(pi))).rejects.toThrow("not declared by this profile");
   });
 
+  it('installs and updates supporting root skill files without repository metadata', async () => {
+    const test = await fixture();
+    const local = join(test.workspaceDirectory, 'root-skill');
+    await mkdir(join(local, 'assets'), { recursive: true });
+    await writeFile(join(local, 'SKILL.md'), '---\nname: demo\ndescription: Demo\n---\n');
+    await writeFile(join(local, 'assets', 'page.html'), '<p>demo</p>');
+    for (const metadata of ['.git', '.github', '.allagents']) {
+      await mkdir(join(local, metadata));
+      await writeFile(join(local, metadata, 'private.txt'), 'repository metadata');
+    }
+    await writeWorkspace(test.userConfigPath, {
+      work: {
+        clients: [{ name: 'pi', install: 'file' }],
+        plugins: [{ source: local, install: 'file', skills: ['demo'] }],
+      },
+    });
+    const deps = dependencies(new MemoryProfileAdapter('pi', test.home));
+    const destination = join(test.home, '.allagents', 'profiles', 'work', 'clients', 'pi', 'agent', 'skills', 'demo');
+    for (const operation of ['install', 'update'] as const) {
+      await writeFile(join(local, 'server.mjs'), `console.log("${operation}")`);
+      const plan = await planProfileOperation('work', operation, test.options, deps);
+      expect(plan.steps.filter((step) => step.kind === 'file')).toHaveLength(3);
+      const result = await applyProfilePlan(plan, test.options, deps);
+      expect(result.success).toBe(true);
+      expect(await readFile(join(destination, 'server.mjs'), 'utf8')).toContain(operation);
+      expect(await readFile(join(destination, 'assets', 'page.html'), 'utf8')).toBe('<p>demo</p>');
+      for (const metadata of ['.git', '.github', '.allagents']) {
+        await expect(stat(join(destination, metadata))).rejects.toThrow();
+      }
+    }
+  });
+
   it('checks adapter runtime support for file-only plans and status', async () => {
     const test = await fixture();
     const local = await pluginFixture(test.workspaceDirectory);

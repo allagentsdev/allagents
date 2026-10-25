@@ -60,6 +60,14 @@ when changing client targets.
 - Ordinary file Git sources use the shared remote descriptor for transport, requested ref, cache path and provenance. Keep generic host/port/path/ref identities distinct; interpret `ref` and `subdir` metadata before Git transport, and resolve subdirectories inside the checkout. Determine native versus file status from the declaration's effective install modes.
 - The Plugins menu selects individual resources. Bulk updates remain under Workspace → Status → Update all.
 
+## Root skill resources
+
+Keep root skill copying and profile plan expansion aligned with the
+[single-skill repository contract](../docs/src/content/docs/docs/guides/plugins.mdx#single-skill-repositories).
+Share metadata exclusions between those paths. Resolve source aliases before
+checking recursive copy overlap. Verify supporting resources through direct
+copies, canonical copies exposed through client symlinks, and profile installs.
+
 ## VS Code and Copilot identity
 
 `vscode` is a display alias for `copilot` only when reporting artifact counts.

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile, lstat, readlink } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, lstat, readlink } from 'node:fs/promises';
 import { existsSync, lstatSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,47 @@ description: Test skill
     );
     return pluginDir;
   }
+
+  it.each(['copy', 'symlink'])('syncs root skill resources and excludes in %s mode', async (syncMode) => {
+    const pluginDir = join(testDir, 'root-plugin');
+    await mkdir(join(pluginDir, 'assets'), { recursive: true });
+    await writeFile(join(pluginDir, 'SKILL.md'), '---\nname: demo\ndescription: Demo\n---\n');
+    await writeFile(join(pluginDir, 'server.mjs'), 'console.log("v1")');
+    await writeFile(join(pluginDir, 'assets', 'page.html'), '<p>demo</p>');
+    await writeFile(join(pluginDir, 'assets', 'draft.html'), 'private draft');
+    await mkdir(join(pluginDir, '.git'));
+    await writeFile(join(pluginDir, '.git', 'config'), 'repository config');
+    await mkdir(join(pluginDir, '.github'));
+    await writeFile(join(pluginDir, '.github', 'ci.yml'), 'workflow');
+
+    await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
+    await writeFile(join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE), `
+version: 2
+repositories: []
+plugins:
+  - source: ${pluginDir}
+    install: file
+    skills: [demo]
+    exclude: [assets/draft.html]
+clients: [universal, claude, copilot]
+syncMode: ${syncMode}
+`);
+
+    for (const version of ['v1', 'v2']) {
+      await writeFile(join(pluginDir, 'server.mjs'), `console.log("${version}")`);
+      const result = await syncWorkspace(testDir);
+      expect(result.success).toBe(true);
+      for (const clientDir of ['.agents', '.claude', '.github']) {
+        const destination = join(testDir, clientDir, 'skills', 'demo');
+        expect(await readFile(join(destination, 'server.mjs'), 'utf8')).toContain(version);
+        expect(await readFile(join(destination, 'assets', 'page.html'), 'utf8')).toBe('<p>demo</p>');
+        expect(existsSync(join(destination, 'assets', 'draft.html'))).toBe(false);
+        expect(existsSync(join(destination, '.git'))).toBe(false);
+        expect(existsSync(join(destination, '.github'))).toBe(false);
+        expect((await lstat(destination)).isSymbolicLink()).toBe(syncMode === 'symlink' && clientDir !== '.agents');
+      }
+    }
+  });
 
   it('creates symlink from non-universal client to canonical location', async () => {
     const pluginDir = await createPlugin('my-plugin', 'my-skill');

@@ -16,7 +16,6 @@ import { getPreviouslySyncedMcpServers, type McpScope } from './sync-state.js';
 import {
   collectMcpServers,
   type McpMergeResult,
-  syncVscodeMcpConfig,
 } from './vscode-mcp.js';
 
 const USER_MCP_CLIENTS: ReadonlySet<ClientType> = new Set(
@@ -71,18 +70,6 @@ export async function syncUserMcpAdapters({
       : servers;
   }
 
-  if (syncClients.includes('vscode')) {
-    const result = syncVscodeMcpConfig(validPlugins, {
-      dryRun,
-      force,
-      trackedServers: getPreviouslySyncedMcpServers(previousState, 'vscode'),
-      serverOverrides: getServersForClient('vscode'),
-    });
-    warnings.push(...result.warnings);
-    mcpResults.vscode = result;
-    trackedServers.vscode = result.trackedServers;
-  }
-
   if (syncClients.includes('codex')) {
     const result = await syncCodexMcpServers(validPlugins, {
       dryRun,
@@ -123,7 +110,9 @@ export async function syncUserMcpAdapters({
     for (const client of syncClients) {
       if (!USER_MCP_CLIENTS.has(client)) {
         warnings.push(
-          `MCP servers not synced for ${client} (not supported at user scope)`,
+          client === 'vscode'
+            ? 'MCP servers not synced for vscode (not supported at user scope); configure the copilot client for ~/.copilot/mcp-config.json instead'
+            : `MCP servers not synced for ${client} (not supported at user scope)`,
         );
       }
     }

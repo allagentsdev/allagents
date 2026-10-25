@@ -2,7 +2,6 @@ import { syncJsonMcpConfig } from './json-mcp-config.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import JSON5 from 'json5';
-import { getHomeDir } from '../constants.js';
 import type {
   ClientType,
   McpServerConfig,
@@ -28,33 +27,6 @@ export interface McpMergeResult {
   authoritative?: boolean;
   /** Path to the config file that was modified (set when changes are written) */
   configPath?: string;
-}
-
-/**
- * Get the cross-platform path to VS Code's user-level mcp.json
- */
-export function getVscodeMcpConfigPath(): string {
-  const platform = process.platform;
-  if (platform === 'win32') {
-    const appData = process.env.APPDATA;
-    if (!appData) {
-      throw new Error('APPDATA environment variable not set');
-    }
-    return join(appData, 'Code', 'User', 'mcp.json');
-  }
-  const home = getHomeDir();
-  if (platform === 'darwin') {
-    return join(
-      home,
-      'Library',
-      'Application Support',
-      'Code',
-      'User',
-      'mcp.json',
-    );
-  }
-  // Linux
-  return join(home, '.config', 'Code', 'User', 'mcp.json');
 }
 
 /**
@@ -158,7 +130,7 @@ export function collectMcpServers(
 }
 
 /**
- * Sync MCP server configs from plugins into VS Code's user-level mcp.json.
+ * Sync MCP server configs from plugins into project-scoped .vscode/mcp.json.
  *
  * With tracking enabled:
  * - Tracked servers with changed configs are updated (not skipped)
@@ -170,9 +142,9 @@ export function collectMcpServers(
  */
 export function syncVscodeMcpConfig(
   validatedPlugins: ValidatedPlugin[],
-  options?: {
+  options: {
     dryRun?: boolean;
-    configPath?: string;
+    configPath: string;
     force?: boolean;
     /** Previously tracked server names (enables update/remove behavior) */
     trackedServers?: string[];
@@ -180,10 +152,10 @@ export function syncVscodeMcpConfig(
     serverOverrides?: Map<string, unknown>;
   },
 ): McpMergeResult {
-  const configPath = options?.configPath ?? getVscodeMcpConfigPath();
+  const configPath = options.configPath;
 
   // Collect servers from all plugins
-  const { servers: pluginServers, warnings } = options?.serverOverrides
+  const { servers: pluginServers, warnings } = options.serverOverrides
     ? { servers: options.serverOverrides, warnings: [] as string[] }
     : collectMcpServers(validatedPlugins);
 

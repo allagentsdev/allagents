@@ -53,7 +53,7 @@ interface McpSyncSpec {
     validatedPlugins: ValidatedPlugin[],
     options: {
       dryRun?: boolean;
-      configPath?: string;
+      configPath: string;
       force?: boolean;
       trackedServers?: string[];
       serverOverrides?: Map<string, unknown>;

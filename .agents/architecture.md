@@ -79,7 +79,11 @@ copies, canonical copies exposed through client symlinks, and profile installs.
 
 - Keep raw client names in MCP output because VS Code and Copilot have separate MCP support.
 - Keep `vscode` and `copilot` as distinct internal client types with separate path mappings.
-
+- Keep VS Code MCP writes project-scoped at `.vscode/mcp.json`. User MCP uses
+  the `copilot` target at `~/.copilot/mcp-config.json`; VS Code's user-profile
+  `mcp.json` is deprecated. Leave existing deprecated files untouched, including
+  entries tracked by older AllAgents versions. Ownership at the old destination
+  grants no ownership at the Copilot destination.
 
 ## Git source credentials
 

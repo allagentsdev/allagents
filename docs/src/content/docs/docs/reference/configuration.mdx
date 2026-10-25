@@ -652,6 +652,11 @@ silently ignored; rename the key to `ref`.
 
 The optional top-level `mcpServers` field defines MCP servers managed directly by a project or ordinary user workspace. Project servers sync to configured project MCP clients; user servers sync to the corresponding user destinations.
 
+For MCP servers shared with the Copilot harness in VS Code at user scope,
+configure `copilot` as a client to write `~/.copilot/mcp-config.json`.
+The `vscode` MCP target is project-only; AllAgents leaves deprecated VS Code
+user-profile `mcp.json` files untouched. See [VSCode client support](/docs/reference/clients/#vscode).
+
 In the interactive MCP Servers menu, choose **Project** to add a server to the
 current directory. This option is available before a project workspace exists;
 adding the first server creates `.allagents/workspace.yaml`. Configure project

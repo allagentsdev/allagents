@@ -254,7 +254,6 @@ describe('capability-aware mappings', () => {
       'claude',
       'copilot',
       'codex',
-      'vscode',
       'universal',
     ]);
   });

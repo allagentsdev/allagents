@@ -309,4 +309,16 @@ when this profile introduced it and no installed plugin still references it.
 
 ### VSCode
 
-VSCode syncs the same skills, agent file, and GitHub overrides as Copilot. Additionally, adding `vscode` to `clients` triggers automatic `.code-workspace` file generation and MCP config syncing during `allagents update`. See the [Workspaces guide](/docs/guides/workspaces/#vscode-workspace-generation) for details.
+VSCode syncs the same skills, agent file, and GitHub overrides as Copilot. Additionally, adding `vscode` to project `clients` triggers automatic `.code-workspace` file generation and MCP config syncing to `.vscode/mcp.json` during `allagents update`. See the [Workspaces guide](/docs/guides/workspaces/#vscode-workspace-generation) for details.
+
+For user-level MCP servers, configure `copilot` in
+`~/.allagents/workspace.yaml`. AllAgents writes those servers to
+`~/.copilot/mcp-config.json` using the `mcpServers` format, which the Copilot
+harness in VS Code also reads. The `vscode` client supports MCP sync only at
+project scope.
+
+AllAgents leaves existing VS Code user-profile `mcp.json` files untouched,
+including entries it tracked in older versions. Review existing entries with
+[VS Code's MCP migration workflow](https://code.visualstudio.com/docs/agent-customization/migrate-customizations#migrate-mcp-servers)
+before retiring them. AllAgents preserves pre-existing servers in the Copilot
+destination; old VS Code tracking does not transfer ownership there.

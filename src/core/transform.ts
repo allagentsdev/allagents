@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -38,6 +39,7 @@ import { parseSkillMetadata } from '../validators/skill.js';
 import { discoverNestedSkillEntries } from './skills.js';
 import {
   assertSafeDestination,
+  pathIsWithin,
   resolveMappedPath,
 } from './client-context.js';
 
@@ -45,6 +47,13 @@ import {
  * Agent instruction files that receive WORKSPACE-RULES injection
  */
 const AGENT_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+
+/** Repository metadata omitted when the repository itself is a skill. */
+export const ROOT_SKILL_EXCLUDED_ENTRIES = [
+  '.git',
+  '.github',
+  '.allagents',
+] as const;
 
 /**
  * Ensure WORKSPACE-RULES exist in a file (creates file if needed)
@@ -517,11 +526,23 @@ export async function copySkills(
 
     try {
       if (skill.isRootLevel) {
-        // Root-level: copy only the SKILL.md into a new skill directory
-        await mkdir(skillDestPath, { recursive: true });
-        await cp(
-          join(skill.sourcePath, 'SKILL.md'),
-          join(skillDestPath, 'SKILL.md'),
+        // Resolve aliases before checking overlap: recursive copying must never
+        // consume its own output or overwrite the source repository.
+        const sourceRoot = await realpath(skill.sourcePath);
+        const destination = join(await realpath(destDir), resolvedName);
+        if (
+          pathIsWithin(sourceRoot, destination) ||
+          pathIsWithin(destination, sourceRoot)
+        ) {
+          throw new Error(
+            'Root skill source and destination overlap; use a separate source directory',
+          );
+        }
+        await copyDirectoryWithExclusions(
+          skill.sourcePath,
+          skillDestPath,
+          pluginPath,
+          [...ROOT_SKILL_EXCLUDED_ENTRIES, ...(options.exclude ?? [])],
         );
       } else if (options.exclude && options.exclude.length > 0) {
         await copyDirectoryWithExclusions(

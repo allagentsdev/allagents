@@ -25,7 +25,11 @@ import type {
   NativeResource,
 } from '../native/types.js';
 import { sanitizeNativeProvenance } from '../native/types.js';
-import { collectPluginSkills, copyPluginToWorkspace } from '../transform.js';
+import {
+  collectPluginSkills,
+  copyPluginToWorkspace,
+  ROOT_SKILL_EXCLUDED_ENTRIES,
+} from '../transform.js';
 import { serializeProfileMcpServers } from './adapters/mcp.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
@@ -313,6 +317,7 @@ function previousResource(
 async function expandCopyResult(
   source: string,
   destination: string,
+  excludedRootEntries: readonly string[] = [],
 ): Promise<
   Array<{
     source: string;
@@ -347,6 +352,7 @@ async function expandCopyResult(
   )) {
     const sourcePath = join(source, entry.name);
     const destinationPath = join(destination, entry.name);
+    if (excludedRootEntries.includes(entry.name)) continue;
     if (entry.isSymbolicLink())
       throw new Error(`Profile plugin contains a symbolic link: ${sourcePath}`);
     if (entry.isDirectory())
@@ -1223,6 +1229,9 @@ export async function planProfileOperation(
             for (const file of await expandCopyResult(
               copy.source,
               copy.destination,
+              copy.artifactType === 'skill' && copy.source === resolvedSource.path
+                ? ROOT_SKILL_EXCLUDED_ENTRIES
+                : [],
             )) {
               const planned = await planManagedFile({
                 client,

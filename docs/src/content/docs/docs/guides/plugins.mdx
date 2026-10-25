@@ -23,6 +23,33 @@ my-plugin/
 └── AGENTS.md
 ```
 
+### Single-skill repositories
+
+A repository with `SKILL.md` at its root can be installed as a single skill when
+it has no `skills/` directory or nested skill directories. The skill name comes
+from the frontmatter `name`, falling back to the repository directory name.
+
+File installation copies the skill directory, including supporting scripts,
+assets, and other files referenced by relative paths. Root `.git` entries
+(directories or worktree pointer files), `.github/`, and `.allagents/` are omitted
+from the skill copy. The same content is available in both copy and symlink sync
+modes. Plugin `exclude` patterns apply relative to the repository root:
+
+```yaml
+plugins:
+  - source: /path/to/my-skill
+    install: file
+    exclude:
+      - test
+      - docs/**
+      - design
+```
+
+Other repository content is included unless excluded; `.gitignore` does not
+filter the copy. Keep the source separate from its installation destination:
+AllAgents reports an error when a root skill's recursive copy would overlap its
+source directory.
+
 ## Copilot hooks
 When you install a plugin for Copilot in a project, AllAgents reads its
 `hooks.json` or `hooks/hooks.json` and writes the hooks to

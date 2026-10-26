@@ -1,0 +1,164 @@
+[
+  {
+    "frame": "ui-01-menu",
+    "caption": "Cold cache: Update from the main menu",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-02-download",
+    "caption": "Cold cache: source and ref are visible before cloning",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◒  Downloading plugin source: fixture/refresh (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-03-complete",
+    "caption": "Both Codex and Pi receive the skill; main menu returns",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Update complete\r\n│\r\n◇  Project Update ──────────────────────────────────────────────────────────────────────────╮\r\n│                                                                                           │\r\n│  ✓ Plugin: https://github.com/fixture/refresh/tree/main/skills/selected (scope: project)  │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│  ✓ Plugin: ./local (scope: project)                                                       │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│                                                                                           │\r\n├───────────────────────────────────────────────────────────────────────────────────────────╯\r\n│\r\n●  Workspace: 2 project, 0 user, 0 marketplaces\r\n│\r\n◆  What would you like to do?\r\n│  ● Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-04-cancel-menu",
+    "caption": "Warm cache: enter Update",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-05-checking",
+    "caption": "The upstream check shows elapsed time; Ctrl+C cancels",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◑  Checking upstream: fixture/refresh (main) (1s).\u001b[0m"
+  },
+  {
+    "frame": "ui-06-cancelled",
+    "caption": "Cancellation during the read-only check preserves the cache",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Canceled\u001b[0m"
+  },
+  {
+    "frame": "ui-07-retry-menu",
+    "caption": "Retry from the main menu",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-08-retry-check",
+    "caption": "Unchanged source: check the advertised revision",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◒  Checking upstream: fixture/refresh (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-09-current-complete",
+    "caption": "Unchanged source: no pull or object fetch; copies remain intact",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Update complete\r\n│\r\n◇  Project Update ──────────────────────────────────────────────────────────────────────────╮\r\n│                                                                                           │\r\n│  ✓ Plugin: https://github.com/fixture/refresh/tree/main/skills/selected (scope: project)  │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│  ✓ Plugin: ./local (scope: project)                                                       │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│                                                                                           │\r\n├───────────────────────────────────────────────────────────────────────────────────────────╯\r\n│\r\n●  Workspace: 2 project, 0 user, 0 marketplaces\r\n│\r\n◆  What would you like to do?\r\n│  ● Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-10-changed-menu",
+    "caption": "Upstream advanced: enter Update",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-11-changed-check",
+    "caption": "Check the declared source and main ref",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◒  Checking upstream: fixture/refresh (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-12-updating",
+    "caption": "Changed source: refresh remains online and shows elapsed time",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◒  Updating plugin source: fixture/refresh (main) (5s)...\u001b[0m"
+  },
+  {
+    "frame": "ui-13-updated",
+    "caption": "New content arrives in Codex and Pi",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Update complete\r\n│\r\n◇  Project Update ──────────────────────────────────────────────────────────────────────────╮\r\n│                                                                                           │\r\n│  ✓ Plugin: https://github.com/fixture/refresh/tree/main/skills/selected (scope: project)  │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│  ✓ Plugin: ./local (scope: project)                                                       │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│                                                                                           │\r\n├───────────────────────────────────────────────────────────────────────────────────────────╯\r\n│\r\n●  Workspace: 2 project, 0 user, 0 marketplaces\r\n│\r\n◆  What would you like to do?\r\n│  ● Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-14-failed-menu",
+    "caption": "Remote unavailable: enter Update",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-15-failed-check",
+    "caption": "Attempt the advertised revision check",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◒  Checking upstream: fixture/refresh (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-16-failed-refresh",
+    "caption": "Unverifiable source: attempt the established refresh",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◓  Updating plugin source: fixture/refresh (main) (4s)..\u001b[0m"
+  },
+  {
+    "frame": "ui-17-fallback",
+    "caption": "Cached fallback remains visible after successful reconciliation",
+    "durationSeconds": 4,
+    "terminal": "\u001b[0m│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Plugin sources ready; using cached content for 1 source(s) (remote refresh failed)\r\n│\r\n◇  Update complete\r\n│\r\n◇  Project Update ──────────────────────────────────────────────────────────────────────────╮\r\n│                                                                                           │\r\n│  ✓ Plugin: https://github.com/fixture/refresh/tree/main/skills/selected (scope: project)  │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│  ✓ Plugin: ./local (scope: project)                                                       │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│                                                                                           │\r\n├───────────────────────────────────────────────────────────────────────────────────────────╯\r\n│\r\n●  Workspace: 2 project, 0 user, 0 marketplaces\r\n│\r\n◆  What would you like to do?\r\n│  ● Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-18-recovered-menu",
+    "caption": "Restore remote, advance upstream, and retry",
+    "durationSeconds": 2,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◆  What would you like to do?\r\n│  ● Update (update needed)\r\n│  ○ Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-19-recovered-update",
+    "caption": "Recovery downloads the new upstream change",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m┌  \u001b[0m\u001b[38;5;6mallagents\u001b[0m v1.21.3\r\n│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◓  Updating plugin source: fixture/refresh (main) (4s)..\u001b[0m"
+  },
+  {
+    "frame": "ui-20-recovered",
+    "caption": "Both copies updated; next stable main menu",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Workspace ──────────╮\r\n│                      │\r\n│  Workspace: .        │\r\n│  Project plugins: 2  │\r\n│  User plugins: 0     │\r\n│  Marketplaces: 0     │\r\n│  Update: \u001b[0m\u001b[38;5;3mneeded\u001b[0m      │\r\n│                      │\r\n├──────────────────────╯\r\n│\r\n◇  What would you like to do?\r\n│  Update\r\n│\r\n◇  Update complete\r\n│\r\n◇  Project Update ──────────────────────────────────────────────────────────────────────────╮\r\n│                                                                                           │\r\n│  ✓ Plugin: https://github.com/fixture/refresh/tree/main/skills/selected (scope: project)  │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│  ✓ Plugin: ./local (scope: project)                                                       │\r\n│    codex: 1 skill                                                                         │\r\n│    pi: 1 skill                                                                            │\r\n│                                                                                           │\r\n├───────────────────────────────────────────────────────────────────────────────────────────╯\r\n│\r\n●  Workspace: 2 project, 0 user, 0 marketplaces\r\n│\r\n◆  What would you like to do?\r\n│  ● Workspace\r\n│  ○ Plugins\r\n│  ○ Skills\r\n│  ○ Clients\r\n│  ○ MCP Servers\r\n│  ○ Marketplaces\r\n│  ○ Exit\r\n│  ↑/↓ to navigate • Enter: confirm\r\n└\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-project-download",
+    "caption": "CLI project install: initial validation shows the first remote clone",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◐  Downloading plugin source: skills (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-after-project-complete",
+    "caption": "Project install: source validated before config write; both clients ready",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Plugin sources ready\r\nInstalling plugin \"https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main\"...\r\n\r\n\r\nUpdating workspace...\r\n\r\n✓ Plugin: https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main (scope: project)\r\n  codex: 1 skill\r\n  pi: 1 skill\r\n\r\n✔ Successfully installed plugin: https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main (scope: pro\r\nject)\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-user-download",
+    "caption": "CLI user install: initial validation shows the first remote clone",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◒  Downloading plugin source: skills (main) (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-after-user-complete",
+    "caption": "User install: both client copies verified in their user destinations",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Plugin sources ready\r\nInstalling plugin \"https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main\"...\r\n\r\n✓ Plugin: https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main (scope: user)\r\n  codex: 1 skill\r\n  pi: 1 skill\r\n\r\n✔ Successfully installed plugin: https://git.example.invalid/team/skills.git#subdir=skills/selected&ref=main (scope: use\r\nr)\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-github-check",
+    "caption": "GitHub install: initial validation reports its upstream check",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◐  Checking upstream: fixture/refresh (0s)\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-github-download",
+    "caption": "GitHub install: path validation reports its disposable clone",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◓  Downloading plugin source: fixture/refresh (4s)..\u001b[0m"
+  },
+  {
+    "frame": "ui-direct-github-complete",
+    "caption": "GitHub install: validation and reconciliation complete",
+    "durationSeconds": 3,
+    "terminal": "\u001b[0m│\r\n◇  Plugin sources ready\r\nInstalling plugin \"https://github.com/fixture/refresh/blob/main/skills/selected\"...\r\n\r\n\r\nUpdating workspace...\r\n\r\n│\r\n◇  Plugin sources ready\r\n✓ Plugin: https://github.com/fixture/refresh/blob/main/skills/selected (scope: project)\r\n  codex: 1 skill\r\n  pi: 1 skill\r\n\r\n✔ Successfully installed plugin: https://github.com/fixture/refresh/blob/main/skills/selected (scope: project)\u001b[0m"
+  }
+]

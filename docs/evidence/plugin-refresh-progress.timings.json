@@ -1,0 +1,418 @@
+{
+  "measured_at": "2026-10-26T04:49:55.485526+00:00",
+  "baseline_commit": "2dca7ee8a517f22dd00fdb2c1657cd7ef1b8b3b5",
+  "candidate_branch": "perf/plugin-refresh-progress",
+  "candidate_bundle_sha256": "329b157bb46d09c30005d5e7defdb556070056b02e53dc22b15cdb48200b61d0",
+  "runtime": "1.4.3",
+  "profiles": {
+    "local": "local bare remote, no injected latency",
+    "delayed": "600ms before pull; 100ms before ls-remote; controlled cost, not network fidelity"
+  },
+  "baseline": [
+    {
+      "name": "cold",
+      "ms": 348.46,
+      "counts": {
+        "clone": 1,
+        "upload-pack": 1,
+        "pack-objects": 1,
+        "index-pack": 1,
+        "rev-list": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-0",
+      "ms": 340.78,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-1",
+      "ms": 337.98,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-2",
+      "ms": 358.49,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-3",
+      "ms": 340.53,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-4",
+      "ms": 343.81,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-0",
+      "ms": 993.22,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-1",
+      "ms": 952.58,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-2",
+      "ms": 995.43,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-3",
+      "ms": 998.99,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-4",
+      "ms": 998.11,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-list": 1,
+        "maintenance": 1,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "changed",
+      "ms": 351.29,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "pack-objects": 1,
+        "unpack-objects": 1,
+        "rev-list": 1,
+        "maintenance": 2,
+        "merge": 1,
+        "rev-parse": 1
+      },
+      "version": "two",
+      "stderr": ""
+    },
+    {
+      "name": "offline",
+      "ms": 300,
+      "counts": {
+        "rev-parse": 1
+      },
+      "version": "two",
+      "stderr": ""
+    },
+    {
+      "name": "failed",
+      "ms": 336.04,
+      "counts": {
+        "pull": 1,
+        "fetch": 1,
+        "upload-pack": 1,
+        "rev-parse": 1
+      },
+      "version": "two",
+      "stderr": ""
+    }
+  ],
+  "candidate": [
+    {
+      "name": "cold",
+      "ms": 338.7,
+      "counts": {
+        "clone": 1,
+        "upload-pack": 1,
+        "pack-objects": 1,
+        "index-pack": 1,
+        "rev-list": 1,
+        "rev-parse": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-0",
+      "ms": 411.99,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-1",
+      "ms": 414.1,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-2",
+      "ms": 414,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-3",
+      "ms": 403.04,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "local-4",
+      "ms": 396.28,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-0",
+      "ms": 542.93,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-1",
+      "ms": 597.39,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-2",
+      "ms": 516.45,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-3",
+      "ms": 571.79,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "delayed-4",
+      "ms": 572.67,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 1,
+        "rev-parse": 2,
+        "config": 1,
+        "symbolic-ref": 1,
+        "status": 1
+      },
+      "version": "one",
+      "stderr": ""
+    },
+    {
+      "name": "changed",
+      "ms": 363.24,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 2,
+        "rev-parse": 3,
+        "config": 1,
+        "pull": 1,
+        "fetch": 1,
+        "pack-objects": 1,
+        "unpack-objects": 1,
+        "rev-list": 1,
+        "maintenance": 2,
+        "merge": 1
+      },
+      "version": "two",
+      "stderr": ""
+    },
+    {
+      "name": "offline",
+      "ms": 349.84,
+      "counts": {
+        "rev-parse": 1
+      },
+      "version": "two",
+      "stderr": ""
+    },
+    {
+      "name": "failed",
+      "ms": 402.41,
+      "counts": {
+        "ls-remote": 1,
+        "upload-pack": 2,
+        "pull": 1,
+        "fetch": 1,
+        "rev-parse": 1
+      },
+      "version": "two",
+      "stderr": ""
+    }
+  ],
+  "output_contracts": {
+    "redirected_human_exact_match": true,
+    "redirected_json_exact_match": true,
+    "tty_json_single_document": true,
+    "stderr_empty": true
+  }
+}

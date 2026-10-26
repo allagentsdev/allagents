@@ -104,7 +104,7 @@ import {
   type NativeSyncResult,
   sanitizeNativeProvenance,
 } from './native/index.js';
-import { fetchPlugin, getPluginName, seedFetchCache } from './plugin.js';
+import { fetchPlugin, getPluginName, seedFetchCache, type FetchOptions } from './plugin.js';
 import {
   cleanupSkillsIndex,
   discoverWorkspaceSkills,
@@ -353,6 +353,8 @@ export interface LegacyVscodeImportPreview {
  * Options for workspace sync
  */
 export interface SyncOptions {
+  /** Report physical plugin source checks and transfers without writing output. */
+  onPluginProgress?: FetchOptions['onProgress'];
   /** Approve an import whose prior folder/name baseline cannot be reconstructed. */
   confirmLegacyVscodeImport?: (
     preview: LegacyVscodeImportPreview,
@@ -1540,6 +1542,7 @@ async function validatePlugin(
   pluginSource: string,
   workspacePath: string,
   offline: boolean,
+  onProgress?: FetchOptions['onProgress'],
 ): Promise<ValidatedPlugin> {
   // Check for plugin@marketplace format first
   if (isPluginSpec(pluginSource)) {
@@ -1581,6 +1584,7 @@ async function validatePlugin(
     // Fetch remote plugin (with offline option and branch if specified)
     const fetchResult = await fetchPlugin(pluginSource, {
       offline,
+      ...(onProgress && { onProgress }),
       ...(parsed?.branch && { branch: parsed.branch }),
     });
     if (!fetchResult.success) {
@@ -1746,6 +1750,7 @@ export async function validateAllPlugins(
   plans: PluginSyncPlan[],
   workspacePath: string,
   offline: boolean,
+  onProgress?: FetchOptions['onProgress'],
 ): Promise<ValidatedPlugin[]> {
   return Promise.all(
     plans.map(
@@ -1785,7 +1790,7 @@ export async function validateAllPlugins(
                 : {}),
           };
         } else {
-          validated = await validatePlugin(source, workspacePath, offline);
+          validated = await validatePlugin(source, workspacePath, offline, onProgress);
         }
         const result: ValidatedPlugin = {
           ...validated,
@@ -3254,7 +3259,7 @@ export async function syncWorkspace(
   // Step 1: Validate all plugins before any destructive action
   const validatedPlugins = await sw.measure(
     'plugin-validation',
-    () => validateAllPlugins(filteredPlans, workspacePath, offline),
+    () => validateAllPlugins(filteredPlans, workspacePath, offline, options.onPluginProgress),
     `${filteredPlans.length} plugin(s)`,
   );
 
@@ -3270,6 +3275,7 @@ export async function syncWorkspace(
       config.workspace.source,
       sourceBasePath,
       offline,
+      options.onPluginProgress,
     );
     if (wsSourceResult.success) {
       validatedWorkspaceSource = wsSourceResult;
@@ -4009,7 +4015,7 @@ export async function syncUserWorkspace(
 
   const validatedPlugins = await sw.measure(
     'plugin-validation',
-    () => validateAllPlugins(pluginPlans, homeDir, offline),
+    () => validateAllPlugins(pluginPlans, homeDir, offline, options.onPluginProgress),
     `${pluginPlans.length} plugin(s)`,
   );
   const failedValidations = validatedPlugins.filter(

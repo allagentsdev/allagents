@@ -1,4 +1,5 @@
-import { syncProjectWorkspace } from '../../project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace } from '../../project-sync.js';
+import { withPluginProgress } from '../../plugin-progress.js';
 import * as p from '@clack/prompts';
 import {
   addPluginForTarget,
@@ -25,7 +26,6 @@ import {
 import {
   buildPluginSyncPlans,
   preflightNativePluginDeclaration,
-  syncUserWorkspace,
   validateAllPlugins,
   type SyncResult,
 } from '../../../core/sync.js';
@@ -254,10 +254,12 @@ export async function installSelectedPlugin(
 
   const s = p.spinner();
   s.start('Installing plugin...');
-  const result =
-    target.scope === 'project'
-      ? await addPluginForTarget(installTarget, workspacePath)
-      : await addUserPluginForTarget(installTarget);
+  const result = await withPluginProgress((onProgress) => {
+    const install = { ...installTarget, ...(onProgress && { onProgress }) };
+    return target.scope === 'project'
+      ? addPluginForTarget(install, workspacePath)
+      : addUserPluginForTarget(install);
+  }, { spinner: s });
   if (!result.success) {
     s.stop('Installation failed');
     p.note(result.error ?? 'Unknown error', 'Error');
@@ -268,7 +270,7 @@ export async function installSelectedPlugin(
   const syncResult: SyncResult =
     target.scope === 'project'
       ? await syncProjectWorkspace(workspacePath, { spinner: s })
-      : await syncUserWorkspace();
+      : await syncUserWorkspace({ spinner: s });
   cache?.invalidate();
   if (!syncResult.success) {
     s.stop('Update failed');
@@ -324,7 +326,7 @@ async function runUpdatePlugin(
     };
     const synced = scope === 'project'
       ? await syncProjectWorkspace(workspacePath, { ...options, spinner: s })
-      : await syncUserWorkspace(options);
+      : await syncUserWorkspace({ ...options, spinner: s });
     cache?.invalidate();
     if (native) {
       const settled = settleNativePluginUpdate(plan.source, (synced.nativeResult?.effects ?? []).map(toNativeEffectData), plan.nativeClients);
@@ -1006,7 +1008,7 @@ async function runPluginDetail(
       s.message('Updating...');
       const synced = scope === 'project' && context.workspacePath
         ? await syncProjectWorkspace(context.workspacePath, { spinner: s })
-        : await syncUserWorkspace();
+        : await syncUserWorkspace({ spinner: s });
       cache?.invalidate();
       if (!synced.success) {
         s.stop('Update failed');
@@ -1050,7 +1052,7 @@ async function runPluginDetail(
       try {
         const synced = scope === 'project'
           ? await syncProjectWorkspace(workspacePath, { spinner: s })
-          : await syncUserWorkspace();
+          : await syncUserWorkspace({ spinner: s });
         if (!synced.success) throw new Error(synced.error ?? ((synced.warnings ?? []).join('; ') || 'Cleanup failed'));
         s.stop('Removed');
         p.note(`Removed: ${pluginSource} [${scope}]`, 'Success');
@@ -1158,7 +1160,7 @@ export async function runBrowsePluginSkills(
     s.message('Updating...');
     const synced = scope === 'project' && context.workspacePath
       ? await syncProjectWorkspace(context.workspacePath, { spinner: s })
-      : await syncUserWorkspace();
+      : await syncUserWorkspace({ spinner: s });
     cache?.invalidate();
     if (!synced.success) {
       s.stop('Update failed');

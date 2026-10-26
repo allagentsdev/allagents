@@ -2,7 +2,7 @@ import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { fetchPlugin } from './plugin.js';
+import { fetchPlugin, type FetchOptions } from './plugin.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
   ClientEntry,
@@ -21,6 +21,7 @@ import {
   isFilesystemRoot,
   isGitHubUrl,
   isRemotePluginSource,
+  parseRemotePluginSource,
   resolveRemotePluginPath,
   validatePluginSource,
   verifyGitHubUrlExists,
@@ -144,6 +145,7 @@ export async function addUserPluginForTarget(
     target.clients,
     target.sourceValidation,
     dependencies,
+    target.onProgress,
   );
 }
 
@@ -153,6 +155,7 @@ async function addValidatedUserPlugin(
   initialClients?: readonly ClientType[],
   sourceValidation: 'standard' | 'declaration' = 'standard',
   dependencies?: TargetedPluginWriteDependencies,
+  onProgress?: FetchOptions['onProgress'],
 ): Promise<ModifyResult> {
   const plugin = getPluginSource(declaration);
   const configPath = getUserWorkspaceConfigPath();
@@ -196,7 +199,7 @@ async function addValidatedUserPlugin(
   const effectiveSource = getEffectivePluginSource(declaration);
   if (isRemotePluginSource(effectiveSource) && !isGitHubUrl(plugin)) {
     try {
-      const fetched = await fetchPlugin(effectiveSource);
+      const fetched = await fetchPlugin(effectiveSource, onProgress ? { onProgress } : {});
       if (!fetched.success) return { success: false, error: fetched.error || `Failed to fetch ${plugin}` };
       const path = resolveRemotePluginPath(effectiveSource, fetched.cachePath);
       if (!existsSync(path)) return { success: false, error: `Path not found in repository: ${path}` };
@@ -211,7 +214,10 @@ async function addValidatedUserPlugin(
         error: validation.error || 'Invalid GitHub URL',
       };
     }
-    const verifyResult = await verifyGitHubUrlExists(plugin);
+    const remote = onProgress ? parseRemotePluginSource(effectiveSource) : null;
+    const verifyResult = await verifyGitHubUrlExists(plugin, remote && onProgress
+      ? (phase) => onProgress({ cachePath: remote.cachePath, source: `${remote.owner}/${remote.repo}`, phase })
+      : undefined);
     if (!verifyResult.exists) {
       return {
         success: false,

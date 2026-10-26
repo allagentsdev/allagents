@@ -22,7 +22,7 @@ import {
   type RemoteRevisionResult,
   type RepositoryHealthResult,
 } from './git.js';
-import type { UpdateContext } from './update-context.js';
+import { UpdateContext } from './update-context.js';
 
 /**
  * Information about a cached plugin
@@ -54,11 +54,20 @@ export interface FetchResult {
 /**
  * Options for fetchPlugin
  */
+export interface PluginFetchProgress {
+  cachePath: string;
+  source: string;
+  ref?: string;
+  phase: 'checking' | 'downloading' | 'updating' | 'current' | 'ready' | 'cached' | 'failed';
+}
+
 export interface FetchOptions {
   /** Skip fetching from remote and use cached version if available */
   offline?: boolean;
   /** Branch to checkout after fetching (defaults to default branch) */
   branch?: string;
+  /** Physical source stages, emitted before remote work and when it settles. */
+  onProgress?: (progress: PluginFetchProgress) => void;
 }
 
 /**
@@ -69,10 +78,6 @@ export interface FetchDeps {
   mkdir?: typeof mkdir;
   cloneTo?: typeof cloneTo;
   pull?: typeof pull;
-}
-
-export interface PluginUpdateFetchDeps extends FetchDeps {
-  resolveHeadSha?: (repoPath: string) => Promise<string | undefined>;
   resolveRemoteRevision?: (
     source: string,
     requestedRef?: string,
@@ -81,6 +86,10 @@ export interface PluginUpdateFetchDeps extends FetchDeps {
     repoPath: string,
     expected: { source: string; ref?: string; head: string },
   ) => Promise<RepositoryHealthResult>;
+}
+
+export interface PluginUpdateFetchDeps extends FetchDeps {
+  resolveHeadSha?: (repoPath: string) => Promise<string | undefined>;
 }
 
 /**
@@ -211,7 +220,7 @@ export async function fetchPlugin(
     return cached;
   }
 
-  const promise = doFetchPlugin(remote, offline, deps);
+  const promise = doFetchPlugin(remote, offline, deps, options.onProgress);
   fetchCache.set(cachePath, promise);
   return promise;
 }
@@ -223,6 +232,7 @@ async function doFetchPlugin(
   remote: RemotePluginSource,
   offline: boolean,
   deps: FetchDeps,
+  onProgress?: FetchOptions['onProgress'],
 ): Promise<FetchResult> {
   const {
     existsSync: existsSyncFn = existsSync,
@@ -234,6 +244,13 @@ async function doFetchPlugin(
   const { cachePath, branch, url: repoUrl } = remote;
   const remoteName =
     remote.type === 'github' ? `${remote.owner}/${remote.repo}` : remote.url;
+  const progress = (phase: PluginFetchProgress['phase']) => onProgress?.({
+    cachePath,
+    // Never include transport URLs, authentication data or Git error text.
+    source: remote.type === 'github' ? `${remote.owner}/${remote.repo}` : remote.repo,
+    ...(branch && { ref: branch }),
+    phase,
+  });
   // Check if plugin is already cached
   const isCached = existsSyncFn(cachePath);
 
@@ -257,14 +274,34 @@ async function doFetchPlugin(
   }
 
   if (isCached) {
+    progress('checking');
+    const context = new UpdateContext();
+    let check: CheckoutUpdateCheck;
+    try {
+      check = await checkoutUpdateCheck(cachePath, repoUrl, branch, context, deps);
+    } finally {
+      context.dispose();
+    }
+    if (check.status === 'up-to-date') {
+      progress('current');
+      return {
+        success: true,
+        action: 'updated',
+        cachePath,
+        ...(branch && { resolvedRef: branch }),
+        resolvedSha: check.head,
+      };
+    }
     // Pull latest changes, but treat failures as non-fatal since the
     // cached version is still usable (e.g. concurrent pulls on the same
     // shallow clone can fail with "not something we can merge").
     try {
+      progress('updating');
       const pullStart = performance.now();
       await pullFn(cachePath);
       const pullMs = Math.round(performance.now() - pullStart);
       const sha = await resolveHeadSha(cachePath);
+      progress('ready');
       return {
         success: true,
         action: 'updated',
@@ -275,6 +312,7 @@ async function doFetchPlugin(
       };
     } catch (error) {
       const sha = await resolveHeadSha(cachePath);
+      progress('cached');
       return {
         success: true,
         action: 'skipped',
@@ -295,9 +333,11 @@ async function doFetchPlugin(
     await mkdirFn(parentDir, { recursive: true });
 
     const cloneStart = performance.now();
+    progress('downloading');
     await cloneToFn(repoUrl, cachePath, branch);
     const cloneMs = Math.round(performance.now() - cloneStart);
     const sha = await resolveHeadSha(cachePath);
+    progress('ready');
 
     return {
       success: true,
@@ -308,6 +348,7 @@ async function doFetchPlugin(
       ...(sha && { resolvedSha: sha }),
     };
   } catch (error) {
+    progress('failed');
     if (error instanceof GitCloneError) {
       if (error.isAuthError) {
         return {
@@ -521,22 +562,25 @@ export interface PluginUpdateCheck {
   error?: string;
 }
 
-type CheckoutUpdateState = 'available' | 'up-to-date';
+type CheckoutUpdateCheck =
+  | { status: 'available' }
+  | { status: 'up-to-date'; head: string };
+type CheckoutUpdateState = CheckoutUpdateCheck['status'];
 
 /**
  * Classify one checkout without writing to it: a healthy checkout that already
  * matches its advertised remote revision has nothing to apply.
  */
-async function checkoutUpdateState(
+async function checkoutUpdateCheck(
   cachePath: string,
   source: string,
   ref: string | undefined,
   context: UpdateContext | undefined,
-  deps: PluginUpdateCheckDeps,
-): Promise<CheckoutUpdateState> {
-  if (!context) return 'available';
+  deps: FetchDeps,
+): Promise<CheckoutUpdateCheck> {
+  if (!context) return { status: 'available' };
   const exists = deps.existsSync ?? existsSync;
-  if (!exists(cachePath)) return 'available';
+  if (!exists(cachePath)) return { status: 'available' };
   const resolveRemote = deps.resolveRemoteRevision ?? resolveRemoteRevision;
   let remote: RemoteRevisionResult;
   try {
@@ -544,9 +588,9 @@ async function checkoutUpdateState(
       resolveRemote(source, ref),
     );
   } catch {
-    return 'available';
+    return { status: 'available' };
   }
-  if (remote.status !== 'resolved') return 'available';
+  if (remote.status !== 'resolved') return { status: 'available' };
   const checkHealth = deps.checkRepositoryHealth ?? checkRepositoryHealth;
   const identity = {
     path: cachePath,
@@ -563,9 +607,11 @@ async function checkoutUpdateState(
       }),
     );
   } catch {
-    return 'available';
+    return { status: 'available' };
   }
-  return health.status === 'healthy' ? 'up-to-date' : 'available';
+  return health.status === 'healthy'
+    ? { status: 'up-to-date', head: health.head }
+    : { status: 'available' };
 }
 
 /**
@@ -586,7 +632,7 @@ async function marketplaceUpdateState(
     marketplace.source.type === 'github'
       ? parseMarketplaceLocation(marketplace.source.location)
       : undefined;
-  return checkoutUpdateState(
+  const check = await checkoutUpdateCheck(
     marketplace.path,
     location
       ? gitHubUrl(location.owner, location.repo)
@@ -595,6 +641,7 @@ async function marketplaceUpdateState(
     context,
     deps,
   );
+  return check.status;
 }
 
 async function directUrlUpdateCheck(
@@ -617,15 +664,14 @@ async function directUrlUpdateCheck(
         'Invalid GitHub URL format. Expected: https://github.com/owner/repo',
     };
   }
-  return {
-    status: await checkoutUpdateState(
-      remote.cachePath,
-      remote.url,
-      remote.branch,
-      context,
-      deps,
-    ),
-  };
+  const check = await checkoutUpdateCheck(
+    remote.cachePath,
+    remote.url,
+    remote.branch,
+    context,
+    deps,
+  );
+  return { status: check.status };
 }
 
 function isPluginUpdateRemoteSource(source: string): boolean {

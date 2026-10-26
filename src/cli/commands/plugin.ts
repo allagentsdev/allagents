@@ -24,7 +24,6 @@ import {
   buildPluginSyncPlans,
   nativeIdentityMatches,
   preflightNativePluginDeclaration,
-  syncUserWorkspace,
   type SyncOptions,
 } from '../../core/sync.js';
 import type { NativeEffectData } from '../../core/native/types.js';
@@ -60,8 +59,9 @@ import {
 } from '../../core/status.js';
 import { parseMarketplaceManifest } from '../../utils/marketplace-manifest-parser.js';
 import { isJsonMode, jsonOutput } from '../json-output.js';
-import { syncProjectWorkspace, type CliSyncOptions } from '../project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace, type CliSyncOptions } from '../project-sync.js';
 import { terminalSafe } from '../terminal-output.js';
+import { withPluginProgress } from '../plugin-progress.js';
 import { settleNativePluginUpdate } from '../native-plugin-update.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
 import {
@@ -1308,9 +1308,12 @@ const pluginInstallCmd = command({
           sourceValidation: 'declaration' as const,
         }),
       };
-      const result = isUser
-        ? await addUserPluginForTarget(installTarget)
-        : await addPluginForTarget(installTarget, workspacePath);
+      const result = await withPluginProgress((onProgress) => {
+        const target = { ...installTarget, ...(onProgress && { onProgress }) };
+        return isUser
+          ? addUserPluginForTarget(target)
+          : addPluginForTarget(target, workspacePath);
+      });
 
       if (!result.success) {
         if (isJsonMode()) {

@@ -13,11 +13,8 @@ import {
 import { resetFetchCache } from '../../core/plugin.js';
 import { pruneOrphanedPlugins } from '../../core/prune.js';
 import { getWorkspaceStatus } from '../../core/status.js';
-import {
-  mergeSyncResults,
-  syncUserWorkspace,
-} from '../../core/sync.js';
-import { syncProjectWorkspace, createLegacyVscodeImportConfirmation } from '../project-sync.js';
+import { mergeSyncResults } from '../../core/sync.js';
+import { syncUserWorkspace, syncProjectWorkspace, createLegacyVscodeImportConfirmation } from '../project-sync.js';
 import type { SyncResult } from '../../core/sync.js';
 import { updateInstalledProfiles } from '../../core/profile/index.js';
 import type { ProfileApplyResult } from '../../core/profile/index.js';

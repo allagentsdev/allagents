@@ -694,6 +694,7 @@ export interface VerifyGitHubResult {
  */
 export async function verifyGitHubUrlExists(
   source: string,
+  onProgress?: (phase: 'checking' | 'downloading' | 'ready' | 'failed') => void,
 ): Promise<VerifyGitHubResult> {
   const parsed = parseGitHubUrl(source);
   if (!parsed) {
@@ -708,8 +709,10 @@ export async function verifyGitHubUrlExists(
   const repoUrl = gitHubUrl(owner, repo);
 
   // Check if repository exists using git ls-remote
+  onProgress?.('checking');
   const exists = await repoExists(repoUrl);
   if (!exists) {
+    onProgress?.('failed');
     return {
       exists: false,
       error: `Repository not found or not accessible: ${owner}/${repo}`,
@@ -720,15 +723,18 @@ export async function verifyGitHubUrlExists(
   if (subpath) {
     let tempDir: string | undefined;
     try {
+      onProgress?.('downloading');
       tempDir = await cloneToTemp(repoUrl);
       const fullPath = join(tempDir, subpath);
       if (!existsSync(fullPath)) {
+        onProgress?.('failed');
         return {
           exists: false,
           error: `Path not found in repository: ${owner}/${repo}/${subpath}`,
         };
       }
     } catch (error) {
+      onProgress?.('failed');
       if (error instanceof GitCloneError && error.isAuthError) {
         return {
           exists: false,
@@ -746,5 +752,6 @@ export async function verifyGitHubUrlExists(
     }
   }
 
+  onProgress?.('ready');
   return { exists: true };
 }

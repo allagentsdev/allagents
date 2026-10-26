@@ -1,4 +1,4 @@
-import { syncProjectWorkspace } from '../project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace } from '../project-sync.js';
 import { assertPluginSourceNoCredentials } from '../../utils/git-source.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -46,10 +46,7 @@ import {
   NATIVE_SKILL_SELECTION_ERROR,
 } from '../../core/skills.js';
 import { upsertSyncStateSource } from '../../core/sync-state.js';
-import {
-  mergeSyncResults,
-  syncUserWorkspace,
-} from '../../core/sync.js';
+import { mergeSyncResults } from '../../core/sync.js';
 import type { SyncResult } from '../../core/sync.js';
 import {
   addUserEnabledSkill,

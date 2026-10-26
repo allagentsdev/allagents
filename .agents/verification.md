@@ -68,6 +68,15 @@ A branch is ready only when:
 6. The PR description records commands, fixture setup, results, and evidence links.
 7. CI is passing or the exact external blocker is documented.
 
+## Remote plugin refresh
+
+For refresh efficiency changes, measure the built install/reconciliation path
+with isolated Git remotes and count operations with `GIT_TRACE2_EVENT`. Cover
+unchanged and advanced refs, cold and offline caches, and a failed remote with
+usable cached content. Label injected Git delays as controlled latency rather
+than real-network performance. Preserve dirty cache files and ref-qualified
+cache identity; a shallow pull can hide ancestry and break fast-forward updates.
+
 ## Package size failures
 
 Before raising `PACKAGE_SIZE_BUDGETS` in `scripts/check-package-size.ts`, inspect

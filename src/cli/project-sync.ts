@@ -1,16 +1,18 @@
 import * as p from '@clack/prompts';
 import {
   syncWorkspace,
+  syncUserWorkspace as syncCoreUserWorkspace,
   type LegacyVscodeImportPreview,
   type SyncOptions,
 } from '../core/sync.js';
 import { isJsonMode } from './json-output.js';
 import { terminalSafe } from './terminal-output.js';
+import { withPluginProgress, type ProgressSpinner } from './plugin-progress.js';
 
 export interface CliSyncOptions extends SyncOptions {
   yes?: boolean | undefined;
   /** Pass only a currently running spinner; prompts pause and resume it. */
-  spinner?: Pick<ReturnType<typeof p.spinner>, 'start' | 'stop'> | undefined;
+  spinner?: ProgressSpinner | undefined;
 }
 
 export function createLegacyVscodeImportConfirmation(
@@ -65,11 +67,20 @@ export function syncProjectWorkspace(
   options: CliSyncOptions = {},
 ) {
   const { yes, spinner, ...syncOptions } = options;
-  return syncWorkspace(workspacePath, {
+  return withPluginProgress((onPluginProgress) => syncWorkspace(workspacePath, {
     ...syncOptions,
+    ...(onPluginProgress && { onPluginProgress }),
     confirmLegacyVscodeImport: createLegacyVscodeImportConfirmation({
       yes,
       spinner,
     }),
-  });
+  }), options);
+}
+
+export function syncUserWorkspace(options: CliSyncOptions = {}) {
+  const { spinner: _spinner, yes: _yes, ...syncOptions } = options;
+  return withPluginProgress((onPluginProgress) => syncCoreUserWorkspace({
+    ...syncOptions,
+    ...(onPluginProgress && { onPluginProgress }),
+  }), options);
 }

@@ -69,7 +69,7 @@ Record an MP4 for every visible TUI change, including navigation, prompts, label
 5. Render at a legible terminal size. Cropping and explanatory captions are acceptable; the terminal body must come from the real session.
 6. Encode an H.264 MP4 with a broadly compatible pixel format. A GIF and final-frame PNG are optional companions, not substitutes for the MP4.
 7. Verify the local MP4 decodes from start to finish and inspect its final frame.
-8. Publish the media as a PR attachment or in a persistent evidence location. A branch-hosted asset is durable only when that branch will remain available or the media is merged into a persistent branch before source-branch deletion. Never link `/tmp/` output.
+8. Store dogfooding recordings, captures, timing data, and verification reports on a separate persistent orphan branch and link them from the PR. Keep those artifacts out of feature-branch and `main` history. Retain the evidence branch after merge so the links remain available. Never link `/tmp/` output.
 9. Verify the remote asset exists and its byte size matches the local file, then link it from the PR description.
 
 The recording passes only if a reviewer can see the route into the flow, every changed visible state, the relevant in-progress and settled states, and the next stable screen without relying on narration.

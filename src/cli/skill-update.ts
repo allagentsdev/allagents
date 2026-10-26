@@ -1,4 +1,4 @@
-import { syncProjectWorkspace, type CliSyncOptions } from './project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace, type CliSyncOptions } from './project-sync.js';
 import { execFile } from 'node:child_process';
 import { constants, existsSync } from 'node:fs';
 import { access, mkdtemp, rm } from 'node:fs/promises';
@@ -47,7 +47,7 @@ import {
   type DiscoveredSkillEntry,
   discoverSkillEntriesFromPluginRoot,
 } from '../core/skills.js';
-import { buildPluginSyncPlans, syncUserWorkspace } from '../core/sync.js';
+import { buildPluginSyncPlans } from '../core/sync.js';
 import { getUserWorkspaceConfigPath } from '../core/user-workspace.js';
 import type {
   PluginEntry,

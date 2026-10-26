@@ -286,7 +286,7 @@ function repositoryFacts(
   const calls: string[][] = [];
   const values: Record<string, string | Error> = {
     'rev-parse --is-inside-work-tree': 'true\n',
-    'remote get-url origin': 'git@github.com:Acme/Tools.git\n',
+    'config --get-all remote.origin.url': 'git@github.com:Acme/Tools.git\n',
     'rev-parse HEAD': `${SHA_A}\n`,
     'symbolic-ref --quiet --short HEAD': 'main\n',
     'status --porcelain --untracked-files=all': '',
@@ -316,6 +316,18 @@ const expectedCheckout = {
 };
 
 describe('checkRepositoryHealth', () => {
+  it('accepts a detached tag with empty symbolic-ref output but rejects an explicit branch there', async () => {
+    const facts = repositoryFacts({
+      'symbolic-ref --quiet --short HEAD': '',
+      'rev-parse --verify refs/tags/v1^{commit}': `${SHA_A}\n`,
+    });
+    await expect(checkRepositoryHealth('/cache/tools', {
+      ...expectedCheckout, ref: 'v1',
+    }, facts.dependencies)).resolves.toMatchObject({ status: 'healthy', head: SHA_A, ref: 'v1' });
+    await expect(checkRepositoryHealth('/cache/tools', expectedCheckout, facts.dependencies))
+      .resolves.toMatchObject({ status: 'unhealthy', reason: 'ref-mismatch' });
+  });
+
   it('accepts only the canonical origin, expected ref and HEAD, and a clean tree without mutation', async () => {
     const facts = repositoryFacts();
 
@@ -328,7 +340,7 @@ describe('checkRepositoryHealth', () => {
     });
     expect(facts.calls).toEqual([
       ['rev-parse', '--is-inside-work-tree'],
-      ['remote', 'get-url', 'origin'],
+      ['config', '--get-all', 'remote.origin.url'],
       ['rev-parse', 'HEAD'],
       ['symbolic-ref', '--quiet', '--short', 'HEAD'],
       ['status', '--porcelain', '--untracked-files=all'],
@@ -350,7 +362,7 @@ describe('checkRepositoryHealth', () => {
 
   it('rejects wrong origin, ref, and HEAD identities', async () => {
     const wrongOrigin = repositoryFacts({
-      'remote get-url origin': 'https://github.com/acme/other\n',
+      'config --get-all remote.origin.url': 'https://github.com/acme/other\n',
     });
     const wrongRef = repositoryFacts({
       'symbolic-ref --quiet --short HEAD': 'next\n',

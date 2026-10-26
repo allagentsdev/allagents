@@ -16,7 +16,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, posix } from 'node:path';
-import { fetchPlugin } from './plugin.js';
+import { fetchPlugin, type FetchOptions } from './plugin.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import type {
   ClientEntry,
@@ -71,6 +71,7 @@ export interface ModifyResult {
 export interface PluginInstallTarget {
   declaration: PluginEntry;
   clients: readonly ClientType[];
+  onProgress?: FetchOptions['onProgress'];
   /**
    * `declaration` preserves the established native-only path whose source is
    * consumed by a client package manager rather than resolved on disk.
@@ -329,6 +330,7 @@ export async function addPluginForTarget(
     target.clients,
     target.sourceValidation,
     dependencies,
+    target.onProgress,
   );
 }
 
@@ -339,6 +341,7 @@ async function addValidatedPlugin(
   initialClients?: readonly ClientType[],
   sourceValidation: 'standard' | 'declaration' = 'standard',
   dependencies?: TargetedPluginWriteDependencies,
+  onProgress?: FetchOptions['onProgress'],
 ): Promise<ModifyResult> {
   const plugin = getPluginSource(declaration);
   const configPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
@@ -386,7 +389,7 @@ async function addValidatedPlugin(
   const effectiveSource = getEffectivePluginSource(declaration);
   if (isRemotePluginSource(effectiveSource) && !isGitHubUrl(plugin)) {
     try {
-      const fetched = await fetchPlugin(effectiveSource);
+      const fetched = await fetchPlugin(effectiveSource, onProgress ? { onProgress } : {});
       if (!fetched.success) return { success: false, error: fetched.error || `Failed to fetch ${plugin}` };
       const path = resolveRemotePluginPath(effectiveSource, fetched.cachePath);
       if (!existsSync(path)) return { success: false, error: `Path not found in repository: ${path}` };
@@ -401,7 +404,10 @@ async function addValidatedPlugin(
         error: validation.error || 'Invalid GitHub URL',
       };
     }
-    const verifyResult = await verifyGitHubUrlExists(plugin);
+    const remote = onProgress ? parseRemotePluginSource(effectiveSource) : null;
+    const verifyResult = await verifyGitHubUrlExists(plugin, remote && onProgress
+      ? (phase) => onProgress({ cachePath: remote.cachePath, source: `${remote.owner}/${remote.repo}`, phase })
+      : undefined);
     if (!verifyResult.exists) {
       return {
         success: false,

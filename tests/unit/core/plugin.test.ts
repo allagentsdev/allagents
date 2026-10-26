@@ -32,6 +32,7 @@ const deps: FetchDeps = {
   mkdir: mkdirMock as unknown as FetchDeps['mkdir'],
   cloneTo: cloneToMock as unknown as FetchDeps['cloneTo'],
   pull: pullMock as unknown as FetchDeps['pull'],
+  resolveRemoteRevision: async () => ({ status: 'unresolved', reason: 'failed' }),
 };
 
 beforeEach(() => {

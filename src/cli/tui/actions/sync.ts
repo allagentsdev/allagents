@@ -1,6 +1,6 @@
-import { syncProjectWorkspace } from '../../project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
-import { syncUserWorkspace } from '../../../core/sync.js';
+
 import { formatVerboseSyncLines } from '../../format-sync.js';
 import type { TuiContext } from '../context.js';
 
@@ -42,7 +42,7 @@ export async function runSync(context: TuiContext): Promise<void> {
       if (!context.hasWorkspace || !context.workspacePath) {
         s.start('Updating user configuration...');
       }
-      const userResult = await syncUserWorkspace();
+      const userResult = await syncUserWorkspace({ spinner: s });
       s.stop(userResult.success && !projectFailed ? 'Update complete' : 'Update failed');
 
       // Show project results first (deferred from above)

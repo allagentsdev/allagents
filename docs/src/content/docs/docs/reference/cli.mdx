@@ -307,6 +307,19 @@ With `--json`, each entry includes the friendly `name`, raw configured `spec`, `
 
 Install a plugin, then sync the selected scope.
 
+Online installation and workspace updates check the advertised Git revision
+before refreshing a cached remote plugin. A clean cache with the expected
+origin, ref and commit skips the pull; upstream changes still trigger a pull.
+If the check cannot establish that the cache is current, AllAgents attempts
+the usual refresh and retains usable cached content if that refresh fails.
+`--offline` on workspace updates skips remote checks and transfers entirely.
+
+Interactive terminals show the source and ref while checking upstream,
+downloading or updating, with elapsed time during slow operations. A failed
+refresh reports when cached content is used. JSON and redirected output keep
+their existing format. New caches use shallow clones; refreshing a changed
+cache can still transfer intervening history. Existing caches are preserved.
+
 | Flag | Description |
 |------|-------------|
 | `-s, --scope <scope>` | Installation scope: `project` or `user` |

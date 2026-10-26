@@ -1,4 +1,4 @@
-import { syncProjectWorkspace } from '../../project-sync.js';
+import { syncUserWorkspace, syncProjectWorkspace } from '../../project-sync.js';
 import * as p from '@clack/prompts';
 import { getAllSkillsFromPlugins, getNativePluginSources, discoverSkillNames, type SkillInfo } from '../../../core/skills.js';
 import {
@@ -12,7 +12,7 @@ import {
   isUserConfigPath,
   hasUserPlugin,
 } from '../../../core/user-workspace.js';
-import { syncUserWorkspace } from '../../../core/sync.js';
+
 import {
   listMarketplaces,
   listMarketplacePlugins,
@@ -263,7 +263,7 @@ async function runToggleSkills(
     if (!synced.success) errors.push(synced.error ?? 'Project update failed');
   }
   if (changedUser) {
-    const synced = await syncUserWorkspace();
+    const synced = await syncUserWorkspace({ spinner: s });
     if (!synced.success) errors.push(synced.error ?? 'User update failed');
   }
   cache?.invalidate();

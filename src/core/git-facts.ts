@@ -276,9 +276,10 @@ export async function checkRepositoryHealth(
   }
 
   try {
-    const origin = (await git.raw(['remote', 'get-url', 'origin'])).trim();
+    // Compare all declared identities; `remote get-url` expands user insteadOf rules.
+    const origins = (await git.raw(['config', '--get-all', 'remote.origin.url'])).trim().split(/\r?\n/);
     if (
-      canonicalizeGitSource(origin) !== canonicalizeGitSource(expected.source)
+      origins.some((origin) => canonicalizeGitSource(origin) !== canonicalizeGitSource(expected.source))
     ) {
       return { status: 'unhealthy', reason: 'origin-mismatch' };
     }
@@ -297,7 +298,7 @@ export async function checkRepositoryHealth(
           actualRef = normalizeGitRef(
             await git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']),
           );
-          if (actualRef !== expectedRef) {
+          if (actualRef && actualRef !== expectedRef) {
             return {
               status: 'unhealthy',
               reason: 'ref-mismatch',
@@ -309,6 +310,9 @@ export async function checkRepositoryHealth(
           if (expectedIdentity.kind === 'branch') {
             return { status: 'unhealthy', reason: 'ref-mismatch', head };
           }
+        }
+        if (!actualRef && expectedIdentity.kind === 'branch') {
+          return { status: 'unhealthy', reason: 'ref-mismatch', head };
         }
       }
       if (!actualRef) {

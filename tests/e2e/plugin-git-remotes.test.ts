@@ -81,6 +81,37 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('file-mode Git remotes through the built CLI', () => {
+  test('local plugin installation checks an unchanged remote once and still applies later upstream changes', () => {
+    const source = 'https://github.com/fixture/refresh/tree/main/collection/fixture';
+    writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = https://github.com/fixture/refresh.git\n`);
+    writeFileSync(join(project, '.allagents', 'workspace.yaml'), `version: 2\nrepositories: []\nclients: [codex, pi]\nplugins:\n  - source: '${source}'\n    install: file\n`);
+    const local = join(project, 'local', 'skills', 'local');
+    mkdirSync(local, { recursive: true });
+    writeFileSync(join(local, 'SKILL.md'), '---\nname: local\ndescription: Local fixture\n---\n');
+    const args = ['plugin', 'install', './local', '--scope', 'project', '--client', 'codex,pi', '--yes'];
+    expect(run(args).exit).toBe(0);
+    const trace = join(root, 'trace.jsonl');
+    const repeat = run(args, { GIT_TRACE2_EVENT: trace });
+    expect(repeat.exit, repeat.stdout + repeat.stderr).toBe(0);
+    expect(repeat.stderr).toBe('');
+    expect(JSON.parse(repeat.stdout).success).toBe(true);
+    const commands = readFileSync(trace, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line)).filter((event) => event.event === 'cmd_name')
+      .map((event) => event.name);
+    expect(commands.filter((name) => name === 'ls-remote')).toHaveLength(1);
+    expect(commands).not.toContain('pull');
+    expect(commands).not.toContain('fetch');
+    for (const client of ['codex', 'pi']) expect(readFileSync(artifact(client), 'utf8')).toBe(content('one'));
+
+    writeFileSync(join(upstream, 'collection', 'fixture', 'SKILL.md'), content('two'));
+    git(upstream, 'add', 'collection'); git(upstream, 'commit', '-m', 'advance during install'); git(upstream, 'push', remote, 'main');
+    expect(run(args).exit).toBe(0);
+    for (const client of ['codex', 'pi']) expect(readFileSync(artifact(client), 'utf8')).toBe(content('two'));
+    rmSync(remote, { recursive: true, force: true });
+    expect(run(args).exit).toBe(0);
+    for (const client of ['codex', 'pi']) expect(readFileSync(artifact(client), 'utf8')).toBe(content('two'));
+  }, 30_000);
+
   for (const transport of [
     'ssh://git@git.example.invalid:2222/team/skills.git',
     'git@git.example.invalid:team/skills.git',

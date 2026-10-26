@@ -148,3 +148,20 @@ The recording, terminal captures, timing data, and this report live only on the
 persistent orphan branch `evidence/plugin-refresh-progress`. They are excluded
 from the feature branch and `main`; the pull request links to this branch. Keep
 the evidence branch after merge so those links remain available.
+
+## CI follow-up
+
+[PR #594](https://github.com/allagentsdev/allagents/pull/594) initially exposed
+two order-dependent GitHub credential-fallback test failures. An earlier
+marketplace fixture replaces the shared `GitCloneError` constructor with a bare
+error class. The GitHub-fetch fixture then imports that replacement, so its
+authentication errors lack `isAuthError` and skip the intended GitHub CLI fallback.
+The exact two failures were reproduced with CI's Bun 1.4.0.
+
+Commit `fe4deede3699880be969e4aa87cb1b34ff91da90` moves all 15 existing cases
+unchanged into an isolated worker and keeps the normal test entry point as its
+launcher. Both ordered reproductions pass after the fix. The complete CI-pinned
+Bun 1.4.0 suite passes 2,349 parent-suite tests plus all 15 preserved worker cases,
+with 7 skipped and no failures. Production source, packages and lockfile are
+unchanged, so the existing built-terminal recording still covers the final
+product behavior. The PR carries the subsequent hosted CI result.

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.21.4](https://github.com/allagentsdev/allagents/compare/v1.21.3...v1.21.4) (2026-10-26)
+
+
+### Fixed
+
+* **deps-dev:** bump execa from 10.1.0 to 10.2.0 in the routine-updates group ([#596](https://github.com/allagentsdev/allagents/issues/596)) ([4c14d5b](https://github.com/allagentsdev/allagents/commit/4c14d5b795185ee865917edcc7a43b50e462c6dd))
+
+
+### Performance
+
+* **plugin:** skip unchanged pulls and report refresh progress ([#594](https://github.com/allagentsdev/allagents/issues/594)) ([5173182](https://github.com/allagentsdev/allagents/commit/5173182baa8426a468a0a1312c7949a2598bdcd0))
+
 ## [1.21.3](https://github.com/allagentsdev/allagents/compare/v1.21.2...v1.21.3) (2026-10-26)
 
 

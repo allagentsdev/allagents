@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.21.3](https://github.com/allagentsdev/allagents/compare/v1.21.2...v1.21.3) (2026-10-26)
+
+
+### Fixed
+
+* **deps:** update vulnerable transitive dependencies ([#593](https://github.com/allagentsdev/allagents/issues/593)) ([884ddf0](https://github.com/allagentsdev/allagents/commit/884ddf0556416dee34e1a363f7158dc6c312d243))
+* **mcp:** stop syncing deprecated VS Code user configuration ([#591](https://github.com/allagentsdev/allagents/issues/591)) ([d831a28](https://github.com/allagentsdev/allagents/commit/d831a282bf98cc62b9cbe4e0f0b2aba10ce3a44b))
+* preserve MCP configuration and correct repository detection ([#590](https://github.com/allagentsdev/allagents/issues/590)) ([36f42de](https://github.com/allagentsdev/allagents/commit/36f42de184a3ada7001c2918280fdca50e2b4f1c))
+* **sync:** preserve supporting files in root skills ([#589](https://github.com/allagentsdev/allagents/issues/589)) ([a7d856f](https://github.com/allagentsdev/allagents/commit/a7d856f09d14a365ab9b0dfd1e1ff3a1b7988b7e))
+
 ## [1.21.2](https://github.com/allagentsdev/allagents/compare/v1.21.1...v1.21.2) (2026-10-21)
 
 

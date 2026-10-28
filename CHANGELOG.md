@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.22.0](https://github.com/allagentsdev/allagents/compare/v1.21.4...v1.22.0) (2026-10-28)
+
+
+### Added
+
+* **plugin:** implement read-only local plugin validation ([#599](https://github.com/allagentsdev/allagents/issues/599)) ([80fec49](https://github.com/allagentsdev/allagents/commit/80fec492353285f09101ca5fcf61420220f006aa))
+
+
+### Fixed
+
+* **deps:** update qs to resolve release audit failure ([#602](https://github.com/allagentsdev/allagents/issues/602)) ([9824c0c](https://github.com/allagentsdev/allagents/commit/9824c0cc56115c09cb99768026fd960f48318dc2))
+
+
+### Performance
+
+* **sync:** reduce repeated parent cleanup during updates ([#600](https://github.com/allagentsdev/allagents/issues/600)) ([3c29ad4](https://github.com/allagentsdev/allagents/commit/3c29ad49ceaa03ce9b714a117595ce682e9738bf))
+
 ## [1.21.4](https://github.com/allagentsdev/allagents/compare/v1.21.3...v1.21.4) (2026-10-26)
 
 

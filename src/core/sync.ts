@@ -982,7 +982,22 @@ export async function selectivePurgeWorkspace(
     const mapping = clientMappings[client];
     if (!mapping) continue;
     const context = clientContexts?.get(client);
+    const writeRoot = resolve(context?.writeRoot ?? workspacePath);
     const purgedPaths: string[] = [];
+    const cleanupPaths = new Map<string, string>();
+    const trackedPaths = new Set(
+      previousFiles.map((path) => resolveTrackedPath(workspacePath, path)),
+    );
+    // Overlapping state entries depend on immediate cleanup: removing the last
+    // file can also remove a directory that appears later in the tracked list.
+    const hasTrackedAncestor = (path: string): boolean => {
+      let parent = dirname(path);
+      while (parent !== writeRoot && pathIsWithin(writeRoot, parent)) {
+        if (trackedPaths.has(parent)) return true;
+        parent = dirname(parent);
+      }
+      return false;
+    };
 
     for (const filePath of previousFiles) {
       if (!trackedPathIsAllowed(workspacePath, filePath, mapping, context)) {
@@ -1010,13 +1025,20 @@ export async function selectivePurgeWorkspace(
           await unlink(cleanPath);
         }
         purgedPaths.push(filePath);
-        await cleanupEmptyParents(
-          context?.writeRoot ?? workspacePath,
-          cleanPath,
-        );
+        if (hasTrackedAncestor(cleanPath)) {
+          await cleanupEmptyParents(writeRoot, cleanPath);
+        } else {
+          cleanupPaths.set(dirname(cleanPath), cleanPath);
+        }
       } catch {
         // Best effort - continue with other files
       }
+    }
+
+    // Sibling deletions share a parent. Wait until they finish so cleanup does
+    // not repeatedly check and try to remove the same nonempty directory.
+    for (const cleanPath of cleanupPaths.values()) {
+      await cleanupEmptyParents(writeRoot, cleanPath);
     }
 
     if (purgedPaths.length > 0) {

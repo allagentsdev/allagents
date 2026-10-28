@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -157,6 +157,90 @@ describe('collectSyncedPaths with shared paths', () => {
 });
 
 describe('external resolved path state and purge containment', () => {
+  it('unlinks tracked final symlinks but refuses traversal through symlink parents', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-purge-symlinks-'));
+    const outside = join(root, 'outside');
+    const workspace = join(root, 'workspace');
+    const finalLink = '.claude/skills/final';
+    const traversal = '.claude/skills/parent/SKILL.md';
+    try {
+      await mkdir(outside, { recursive: true });
+      await mkdir(join(workspace, '.claude/skills'), { recursive: true });
+      await writeFile(join(outside, 'SKILL.md'), 'outside');
+      await symlink(outside, join(workspace, finalLink), 'dir');
+      await symlink(outside, join(workspace, '.claude/skills/parent'), 'dir');
+      const state: SyncState = {
+        version: 1,
+        lastSync: new Date().toISOString(),
+        files: { claude: [finalLink, traversal] },
+      };
+
+      expect(await selectivePurgeWorkspace(workspace, state, ['claude'])).toEqual([
+        { client: 'claude', paths: [finalLink] },
+      ]);
+      expect(existsSync(join(workspace, finalLink))).toBe(false);
+      expect(await readFile(join(workspace, traversal), 'utf8')).toBe('outside');
+      expect(await readFile(join(outside, 'SKILL.md'), 'utf8')).toBe('outside');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans shared empty parents while retaining user files and the write root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-purge-siblings-'));
+    const paths = [
+      '.claude/commands/group/first.md',
+      '.claude/commands/group/second.md',
+      '.claude/skills/first/',
+      '.claude/skills/second/',
+    ];
+    try {
+      await mkdir(join(root, '.claude/commands/group'), { recursive: true });
+      await mkdir(join(root, '.claude/skills/first'), { recursive: true });
+      await mkdir(join(root, '.claude/skills/second'), { recursive: true });
+      for (const path of paths.slice(0, 2)) await writeFile(join(root, path), 'managed');
+      await writeFile(join(root, '.claude/skills/user.md'), 'user');
+      const state: SyncState = {
+        version: 1,
+        lastSync: new Date().toISOString(),
+        files: { claude: paths },
+      };
+
+      expect(await selectivePurgeWorkspace(root, state, ['claude'])).toEqual([
+        { client: 'claude', paths },
+      ]);
+      expect(existsSync(join(root, '.claude/commands'))).toBe(false);
+      for (const path of paths) expect(existsSync(join(root, path))).toBe(false);
+      expect(await readFile(join(root, '.claude/skills/user.md'), 'utf8')).toBe('user');
+      expect(existsSync(root)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves purge reporting when state tracks both a file and its empty parent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-purge-overlap-'));
+    const file = '.claude/skills/managed/SKILL.md';
+    const directory = '.claude/skills/managed/';
+    try {
+      await mkdir(join(root, directory), { recursive: true });
+      await writeFile(join(root, file), 'managed');
+      const state: SyncState = {
+        version: 1,
+        lastSync: new Date().toISOString(),
+        files: { claude: [file, directory] },
+      };
+
+      expect(await selectivePurgeWorkspace(root, state, ['claude'])).toEqual([
+        { client: 'claude', paths: [file] },
+      ]);
+      expect(existsSync(join(root, '.claude'))).toBe(false);
+      expect(existsSync(root)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('tracks an external Pi root as an absolute path without traversal', () => {
     const contexts = resolveClientContexts(['pi'], 'user', {
       homeDir: '/home/tester',

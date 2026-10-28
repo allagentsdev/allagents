@@ -53,6 +53,7 @@ import {
 } from '../../core/plugin.js';
 import { UpdateContext } from '../../core/update-context.js';
 import { getAllSkillsFromPlugins } from '../../core/skills.js';
+import { validateLocalPlugin } from '../../validators/plugin.js';
 import {
   getWorkspaceStatus,
   type NativePluginStatus,
@@ -1168,17 +1169,21 @@ const pluginValidateCmd = command({
     path: positional({ type: string, displayName: 'path' }),
   },
   handler: async ({ path }) => {
+    const result = await validateLocalPlugin(path);
     if (isJsonMode()) {
       jsonOutput({
-        success: true,
+        success: result.valid,
         command: 'plugin validate',
-        data: { path, valid: false, message: 'not yet implemented' },
+        data: result,
       });
-      return;
+    } else {
+      console.log(`${result.valid ? 'Valid plugin' : 'Validation failed'} at: ${terminalSafe(path)}`);
+      console.log(`Checked ${result.validation.skills} skill(s).`);
+      for (const diagnostic of result.validation.diagnostics) {
+        console.log(`${diagnostic.severity === 'error' ? 'Error' : 'Warning'}: ${terminalSafe(diagnostic.path)}: ${terminalSafe(diagnostic.message)}`);
+      }
     }
-    // TODO: Implement plugin validation
-    console.log(`Validating plugin at: ${path}`);
-    console.log('(validation not yet implemented)');
+    if (!result.valid) process.exitCode = 1;
   },
 });
 

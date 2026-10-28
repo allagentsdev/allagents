@@ -141,7 +141,8 @@ export const pluginListMeta: AgentCommandMeta = {
 
 export const pluginValidateMeta: AgentCommandMeta = {
   command: 'plugin validate',
-  description: 'Validate plugin structure at the given path',
+  description: 'Validate local plugin structure and skill metadata without modifying files',
+  skipUpdateCheck: true,
   whenToUse: 'When developing a plugin, to check that its structure conforms to the expected format',
   examples: [
     'allagents plugin validate ./my-plugin',
@@ -156,6 +157,10 @@ export const pluginValidateMeta: AgentCommandMeta = {
     path: 'string',
     valid: 'boolean',
     message: 'string',
+    validation: {
+      skills: 'number',
+      diagnostics: [{ severity: 'error | warning', path: 'string', message: 'string' }],
+    },
   },
 };
 

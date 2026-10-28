@@ -4,12 +4,15 @@ import {
   Document,
   isMap,
   isNode,
+  isPair,
   isScalar,
   isSeq,
   type Node,
   type Pair,
   Parser,
   visit,
+  type YAMLMap,
+  type YAMLSeq,
 } from 'yaml';
 
 type Entry = {
@@ -21,7 +24,8 @@ type Entry = {
 
 /** Render the reconciled workspace nodes using their original source boundaries. */
 export function workspaceSourceEditor(document: Document, original: string) {
-  const root = document.contents!;
+  const root = document.contents;
+  if (!root) throw new Error('Missing workspace YAML root');
   const rootToken = root.srcToken;
   const entries = new Map<Node, Entry[]>();
   const scalarValues = new Map<Node, unknown>();
@@ -55,8 +59,9 @@ export function workspaceSourceEditor(document: Document, original: string) {
       if (!token || !CST.isCollection(token) || !(isMap(node) || isSeq(node)))
         return;
       const parent = path.at(-1);
-      if (parent && 'value' in parent && isMap(path.at(-2))) {
-        const parentToken = (path.at(-2) as Node).srcToken;
+      const parentMap = path.at(-2);
+      if (isPair(parent) && isMap(parentMap)) {
+        const parentToken = parentMap.srcToken;
         if (parentToken && 'indent' in parentToken) {
           const width = token.indent - parentToken.indent;
           if (width > 0)
@@ -70,24 +75,28 @@ export function workspaceSourceEditor(document: Document, original: string) {
               (item) => item.key !== undefined || item.value !== undefined,
             )
           : token.items;
-      const captured = node.items.map((item, index) => ({
-        node: item,
-        token: items[index]!,
-        index,
-        trailing: '',
-      }));
+      const captured = node.items.map((item, index): Entry => {
+        const itemToken = items[index];
+        if (!itemToken)
+          throw new Error('Missing source for existing workspace YAML entry');
+        return { node: item, token: itemToken, index, trailing: '' };
+      });
       if (token.type !== 'flow-collection') {
         // A missing value's boundary may own the following entry's indentation.
-        for (let index = 1; index < captured.length; index++) {
-          const previous = captured[index - 1]!;
-          const current = captured[index]!;
+        for (const [index, current] of captured.entries()) {
+          const previous = captured[index - 1];
+          if (!previous) continue;
           const field = token.type === 'block-map' ? 'sep' : 'start';
           const separator = previous.token[field];
           const indentation = separator?.at(-1);
-          if (!previous.token.value && indentation?.type === 'space') {
+          if (
+            separator &&
+            !previous.token.value &&
+            indentation?.type === 'space'
+          ) {
             previous.token = {
               ...previous.token,
-              [field]: separator!.slice(0, -1),
+              [field]: separator.slice(0, -1),
             };
             current.token = {
               ...current.token,
@@ -205,21 +214,29 @@ export function workspaceSourceEditor(document: Document, original: string) {
     const parsed = [...new Parser().parse(source)].find(
       (t) => t.type === 'document',
     );
-    if (!parsed || parsed.type !== 'document')
-      throw new Error('Unable to render workspace YAML entry');
+    if (!parsed) throw new Error('Unable to render workspace YAML entry');
     return parsed;
   }
 
   function generatedItem(
-    owner: Node,
+    owner: YAMLMap | YAMLSeq,
     item: unknown,
     flow: boolean,
     indent: number,
     originalEntry?: CST.CollectionItem,
   ): CST.CollectionItem {
-    const wrapper = document.createNode(isMap(owner) ? {} : []) as Node;
-    if (isMap(wrapper)) wrapper.items = [item as Pair];
-    else if (isSeq(wrapper)) wrapper.items = [item];
+    let wrapper: YAMLMap | YAMLSeq;
+    if (isMap(owner)) {
+      if (!isPair(item))
+        throw new Error('Unable to render workspace YAML entry');
+      const map: YAMLMap = document.createNode({});
+      map.items = [item];
+      wrapper = map;
+    } else {
+      const seq: YAMLSeq = document.createNode([]);
+      seq.items = [item];
+      wrapper = seq;
+    }
     const collection = fragment(wrapper, flow, indent, originalEntry).value;
     if (!collection || !CST.isCollection(collection) || !collection.items[0])
       throw new Error('Unable to render workspace YAML entry');
@@ -234,15 +251,18 @@ export function workspaceSourceEditor(document: Document, original: string) {
       return CST.stringify(token);
     const copy = node.clone() as Node;
     copy.comment = null;
-    const wrapper = document.createNode(flow ? [] : { value: null }) as Node;
-    const item = isMap(wrapper) ? wrapper.items[0]! : copy;
-    if (isMap(wrapper)) wrapper.items[0]!.value = copy;
+    const wrapper: YAMLMap | YAMLSeq = flow
+      ? document.createNode([])
+      : document.createNode({ value: copy });
+    const item = isMap(wrapper) ? wrapper.items[0] : copy;
+    if (!item) throw new Error('Unable to render workspace YAML entry');
     const generated = generatedItem(
       wrapper,
       item,
       flow,
       'indent' in token ? token.indent : 0,
-    ).value!;
+    ).value;
+    if (!generated) throw new Error('Unable to render workspace YAML entry');
     if (generated.type === 'block-scalar') {
       const end =
         token.type === 'block-scalar'
@@ -271,7 +291,9 @@ export function workspaceSourceEditor(document: Document, original: string) {
     if (unchanged(node)) return CST.stringify(token);
     if (!CST.isCollection(token) || !(isMap(node) || isSeq(node)))
       return renderScalar(node, token, inFlow);
-    const captured = entries.get(node)!;
+    const captured = entries.get(node);
+    if (!captured)
+      throw new Error('Missing source for existing workspace YAML collection');
     const byItem = new Map(captured.map((entry) => [entry.node, entry]));
     const flow = token.type === 'flow-collection';
     const originFor = (item: unknown) =>
@@ -288,12 +310,10 @@ export function workspaceSourceEditor(document: Document, original: string) {
         !old || (isNode(value) && !value.srcToken && !unchanged(value))
           ? generatedItem(node, item, flow, token.indent, old)
           : undefined;
-      let start = text(old?.start ?? generated!.start);
-      if (flow)
-        start = flowLeading(
-          old?.start ?? generated!.start,
-          (entry?.index ?? 0) > 0,
-        );
+      const source = old ?? generated;
+      if (!source) throw new Error('Unable to render workspace YAML entry');
+      let start = text(source.start);
+      if (flow) start = flowLeading(source.start, (entry?.index ?? 0) > 0);
       if (!flow && entry?.index === 0) start = ' '.repeat(token.indent) + start;
       if (!flow && !old) start = ' '.repeat(token.indent) + start;
       if (
@@ -308,7 +328,6 @@ export function workspaceSourceEditor(document: Document, original: string) {
           (start.endsWith('\n') ? '' : newline) +
           ' '.repeat(token.indent + indentWidth);
       }
-      const source = old ?? generated!;
       const key = !implicitMap && source.key ? CST.stringify(source.key) : '';
       let sep = implicitMap ? '' : text(source.sep);
       let body: string;
@@ -384,10 +403,11 @@ export function workspaceSourceEditor(document: Document, original: string) {
       let body = '';
       rendered.forEach((item, index) => {
         let prefix = item.start;
+        const previous = rendered[index - 1];
         if (
           index > 0 &&
-          rendered[index - 1]?.trailing &&
-          !rendered[index - 1]!.trailing.endsWith('\n') &&
+          previous?.trailing &&
+          !previous.trailing.endsWith('\n') &&
           !/^\r?\n/.test(prefix)
         )
           prefix = newline + ' '.repeat(token.indent + indentWidth) + prefix;
@@ -423,15 +443,19 @@ export function workspaceSourceEditor(document: Document, original: string) {
       origins.set(next, origins.get(previous) ?? previous);
     },
     stringify() {
+      const contents = document.contents;
+      if (!contents) throw new Error('Missing workspace YAML root');
       // An implicit null document has no value token. Insert the new root
       // after its header, before any explicit document end and footer.
       if (!rootToken) {
         const envelope = [...new Parser().parse(original)].find(
           (token) => token.type === 'document',
-        )!;
+        );
+        if (!envelope)
+          throw new Error('Missing workspace YAML document source');
         const offset = envelope.offset + CST.stringify(envelope).length;
         const prefix = original.slice(0, offset);
-        const node = document.contents!.clone() as Node;
+        const node = contents.clone() as Node;
         node.comment = null;
         if ('anchor' in node) delete node.anchor;
         const separator = prefix.endsWith('\n')
@@ -445,9 +469,9 @@ export function workspaceSourceEditor(document: Document, original: string) {
         return prefix + separator + value + original.slice(offset);
       }
       let result =
-        document.contents === root
+        contents === root
           ? render(root)
-          : CST.stringify(fragment(document.contents!, false));
+          : CST.stringify(fragment(contents, false));
       const suffix = original.slice(
         rootToken.offset + CST.stringify(rootToken).length,
       );

@@ -303,6 +303,56 @@ With `--json`, each entry includes the friendly `name`, raw configured `spec`, `
 }
 ```
 
+### plugin validate
+
+Check a local source or installed plugin directory without changing files,
+checking for updates, installing dependencies, or running plugin scripts:
+
+```bash
+allagents plugin validate ./my-plugin
+allagents plugin validate ./my-plugin --json
+allagents plugin validate ./my-plugin --json=path,valid
+```
+
+Supports conventional plugin resources (`skills/`, `commands/`, `agents/`,
+`hooks/`, `.github/` content, `.mcp.json`, `hooks.json`, and root instruction
+files), nested skill collections, and [single-skill repositories](/docs/guides/plugins/#single-skill-repositories).
+Manifests are optional. Skill discovery uses the same precedence as installation:
+`skills/` first, otherwise nested skills, otherwise root `SKILL.md`.
+Links to resource files, such as `commands/review.md`, are supported; scanning
+does not recurse through directory links inside resource directories.
+
+Pi packages are recognized by a `package.json` with a `pi` object and a nonempty
+package `name`, or by conventional `extensions/`, `prompts/`, or `themes/`
+directories without a manifest. When those directories establish an otherwise
+unsupported layout, any package manifest must be a JSON object with a nonempty
+`name`. Recognized skills and file plugins retain unmarked sidecar packages as
+supporting content. An ordinary Node package with only
+`package.json` and source files is not considered a plugin. Extensions and other
+native resources are recognized without loading them or invoking Pi.
+
+Recognized skills must have valid YAML frontmatter with a nonempty `name` and
+`description`, using the existing skill metadata rules. Plugin manifests at
+`.claude-plugin/plugin.json`, `.github/plugin/plugin.json`, and
+`.codex-plugin/plugin.json` must parse as JSON objects; client-specific manifest
+fields are not checked. Marketplace manifests use the installation parser,
+preferring `.github/plugin/marketplace.json` over
+`.claude-plugin/marketplace.json`. Its recoverable metadata issues remain
+warnings. `.mcp.json` must be a readable JSON5 object (comments and trailing
+commas are supported). `hooks.json`, `hooks/hooks.json`, and `.codex/hooks.json`
+must be readable JSON objects. Invalid syntax or a non-object container is an
+error; client-specific declaration fields are not checked. Hook commands, MCP
+connections, supporting scripts, and Markdown body references are not executed
+or semantically checked.
+
+Exit status is `0` for valid input (including warnings) and `1` for errors such
+as missing paths, empty or unsupported layouts, malformed manifests or
+declarations, or invalid recognized skills. Diagnostics identify locations relative to the plugin root;
+`.` means the root itself. JSON emits one envelope with `command: "plugin validate"`,
+`success`, and `data.path`, `data.valid`, `data.message`, plus
+`data.validation.skills` and `data.validation.diagnostics`. Each diagnostic has
+`severity`, `path`, and `message`.
+
 ### plugin install
 
 Install a plugin, then sync the selected scope.

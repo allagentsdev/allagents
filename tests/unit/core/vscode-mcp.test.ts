@@ -188,7 +188,7 @@ describe('collectMcpServers', () => {
     ).toEqual({});
   });
 
-  test('skips MCP servers omitted by a non-strict marketplace entry', () => {
+  test('skips MCP servers explicitly disabled by an artifact filter', () => {
     writeFileSync(
       join(tempDir1, '.mcp.json'),
       JSON.stringify({

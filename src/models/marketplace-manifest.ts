@@ -123,8 +123,8 @@ export interface MarketplaceFileArtifacts {
 }
 
 /**
- * In non-strict mode the marketplace entry is the complete component
- * definition. Omitted components must not be inferred from repository files.
+ * Non-strict entries limit copied component kinds to their declarations.
+ * Root MCP configuration is still discovered, matching native clients.
  */
 export function getMarketplaceFileArtifacts(
   entry: MarketplacePluginEntry,
@@ -136,7 +136,7 @@ export function getMarketplaceFileArtifacts(
     skills: entry.skills !== undefined,
     hooks: entry.hooks !== undefined,
     agents: entry.agents !== undefined,
-    mcpServers: entry.mcpServers !== undefined,
+    mcpServers: true,
     // .github is repository configuration, not a marketplace component kind.
     github: false,
   };

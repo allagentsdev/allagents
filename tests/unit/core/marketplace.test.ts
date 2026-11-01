@@ -258,7 +258,7 @@ describe('getMarketplacePluginsFromManifest', () => {
       commands: false,
       github: false,
       hooks: false,
-      mcpServers: false,
+      mcpServers: true,
       skills: true,
     });
   });
@@ -423,7 +423,7 @@ describe('getMarketplacePluginsFromManifest', () => {
       commands: false,
       github: false,
       hooks: false,
-      mcpServers: false,
+      mcpServers: true,
       skills: true,
     });
   });

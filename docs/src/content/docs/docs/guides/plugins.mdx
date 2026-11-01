@@ -88,10 +88,10 @@ AllAgents recognizes marketplace manifests at both
 `.claude-plugin/marketplace.json` and `.github/plugin/marketplace.json`. The
 GitHub Copilot location takes precedence when a repository contains both.
 
-A marketplace entry with `strict: false` defines the complete set of plugin
-components. For example, this entry syncs the repository's top-level skills
-without treating its top-level hooks or `.github/` development configuration as
-plugin artifacts:
+A marketplace entry with `strict: false` limits copied skills, commands, agents,
+and hooks to the declared component kinds. For example, this entry syncs the
+repository's top-level skills without treating its top-level hooks or `.github/`
+development configuration as plugin artifacts:
 
 ```json
 {
@@ -101,6 +101,11 @@ plugin artifacts:
   "skills": ["./skills/"]
 }
 ```
+
+Root `.mcp.json` is discovered even when the entry omits `mcpServers`, matching
+native Copilot and Codex plugin discovery. This MCP exception does not enable
+undeclared hooks, commands, agents, skills, or repository `.github/` content.
+Keep development-only MCP configuration outside the distributable plugin root.
 
 Without `strict: false`, AllAgents retains conventional plugin-directory
 discovery for compatibility. Top-level `hooks/` remains the portable hook

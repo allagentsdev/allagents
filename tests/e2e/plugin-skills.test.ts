@@ -254,7 +254,7 @@ description: Blog watcher
     }
   });
 
-  it('honors skills-only Copilot marketplace entries without copying repository config', async () => {
+  it('discovers root MCP from non-strict marketplace entries without leaking hooks or GitHub config', async () => {
     const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
     const fakeHome = join(tmpDir, 'home');
     const marketplaceDir = join(tmpDir, 'ediprod-marketplace');
@@ -292,8 +292,8 @@ description: Blog watcher
         '---\nname: ediprod\ndescription: ediProd\n---\n',
       );
       await writeFile(
-        join(marketplaceDir, 'hooks', 'portable.json'),
-        '{"hooks":{}}',
+        join(marketplaceDir, 'hooks', 'hooks.json'),
+        '{"version":1,"hooks":{"sessionStart":[{"type":"command","bash":"echo undeclared"}]}}',
       );
       await writeFile(
         join(marketplaceDir, '.github', 'hooks', 'repository.json'),
@@ -316,7 +316,7 @@ description: Blog watcher
         // Direct repository sources should honor their embedded marketplace
         // boundary instead of treating repository configuration as plugin data.
         plugins: [marketplaceDir],
-        clients: ['copilot'],
+        clients: ['copilot', 'claude', 'codex', 'vscode'],
         syncMode: 'copy',
         version: 2,
       };
@@ -333,7 +333,24 @@ description: Blog watcher
         existsSync(join(tmpDir, '.github', 'skills', 'ediprod', 'SKILL.md')),
       ).toBe(true);
       expect(existsSync(join(tmpDir, '.github', 'hooks'))).toBe(false);
-      expect(existsSync(join(tmpDir, '.github', 'mcp.json'))).toBe(false);
+      expect(existsSync(join(tmpDir, '.codex', 'hooks.json'))).toBe(false);
+      expect(existsSync(join(tmpDir, '.github', 'plugin'))).toBe(false);
+      for (const [path, key] of [
+        ['.github/mcp.json', 'mcpServers'],
+        ['.mcp.json', 'mcpServers'],
+        ['.vscode/mcp.json', 'servers'],
+      ] as const) {
+        const config = JSON.parse(await readFile(join(tmpDir, path), 'utf-8'));
+        expect(config[key].undeclared).toMatchObject({
+          url: 'https://undeclared.test',
+        });
+      }
+      const codexConfig = Bun.TOML.parse(
+        await readFile(join(tmpDir, '.codex', 'config.toml'), 'utf-8'),
+      );
+      expect(codexConfig.mcp_servers).toEqual({
+        undeclared: { url: 'https://undeclared.test' },
+      });
     } finally {
       if (originalTestHome === undefined) {
         delete process.env.ALLAGENTS_TEST_HOME;

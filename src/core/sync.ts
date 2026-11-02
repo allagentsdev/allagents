@@ -79,6 +79,7 @@ import {
 import { collectPluginCodexHooks, syncCodexProjectHooks } from './codex-hooks.js';
 import {
   COPILOT_MANAGED_HOOKS_RELATIVE_PATH,
+  collectPluginCopilotHooks,
   syncCopilotProjectHooks,
 } from './copilot-hooks.js';
 import { processManagedRepos } from './managed-repos.js';
@@ -1838,9 +1839,14 @@ export async function validateAllPlugins(
         if (pluginSkillsConfig !== undefined) {
           result.pluginSkillsConfig = pluginSkillsConfig;
         }
-        if (result.success && clients.includes('codex') && hooks !== false) {
+        if (result.success && hooks !== false) {
           try {
-            collectPluginCodexHooks(result, workspacePath, []);
+            if (clients.includes('codex')) collectPluginCodexHooks(result, workspacePath, []);
+            if (clients.includes('copilot')) {
+              const hookWarnings: string[] = [];
+              await collectPluginCopilotHooks(result, hookWarnings);
+              if (hookWarnings.length > 0) throw new Error(hookWarnings.join('\n'));
+            }
           } catch (error) {
             result.success = false;
             result.error = error instanceof Error ? error.message : String(error);
@@ -4019,11 +4025,6 @@ export async function syncUserWorkspace(
     );
   }
 
-  if (!dryRun) {
-    // MIGRATION: v1→v2 - remove after v3 release.
-    await migrateUserWorkspaceSkillsV1toV2();
-    config = (await getUserWorkspaceConfig()) ?? config;
-  }
 
   const filePlans = pluginPlans.filter((plan) => plan.clients.length > 0);
   const marketplaceResults = await sw.measure('marketplace-registration', () =>
@@ -4051,6 +4052,11 @@ export async function syncUserWorkspace(
       `Plugin validation failed (user workspace unchanged):\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
       { totalFailed: failedValidations.length, warnings },
     );
+  }
+  if (!dryRun) {
+    // MIGRATION: v1→v2 - remove after v3 release.
+    await migrateUserWorkspaceSkillsV1toV2();
+    config = (await getUserWorkspaceConfig()) ?? config;
   }
   const validPlugins = validatedPlugins.filter((plugin) => plugin.success);
   const filePlugins = validPlugins.filter(

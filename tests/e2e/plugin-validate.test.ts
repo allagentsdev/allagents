@@ -56,7 +56,7 @@ describe('plugin validate', () => {
   });
 
   test.each(['commands/example.md', 'agents/example.md', 'hooks/example.sh', '.github/instructions/example.md', '.mcp.json'])('accepts conventional non-skill resource %s without requiring a manifest', (resource) => {
-    file(`plugin/${resource}`, resource.endsWith('.json') ? '{}' : 'Plugin resource\n');
+    file(`plugin/${resource}`, resource.endsWith('.json') ? '{"mcpServers":{}}' : 'Plugin resource\n');
     expect(run('./plugin').status).toBe(0);
   });
 
@@ -74,6 +74,16 @@ describe('plugin validate', () => {
   test.each(['.mcp.json', 'hooks.json', 'hooks/hooks.json', '.codex/hooks.json'])('requires an object container in declaration %s', (declaration) => {
     file(`plugin/${declaration}`, '[]');
     expect(run('./plugin').status).toBe(1);
+  });
+
+  test.each(['{}', '{"mcpServers":[]}', '{"mcpServers":null}', '{"mcpServers":{"example":{}}}'])('rejects invalid selected MCP server maps %s', (contents) => {
+    file('plugin/commands/example.md', '# Valid command\n');
+    file('plugin/.mcp.json', contents);
+    const result = run('./plugin');
+    expect(result.status).toBe(1);
+    const errors = JSON.parse(result.stdout).data.validation.diagnostics.filter((entry: { severity: string }) => entry.severity === 'error');
+    expect(errors).toContainEqual(expect.objectContaining({ message: expect.stringMatching(/MCP/i) }));
+    expect(result.stdout).not.toContain(project);
   });
 
   test('accepts comments and trailing commas in MCP JSON5 declarations', () => {
@@ -141,15 +151,34 @@ describe('plugin validate', () => {
     }
   });
 
-  test('accepts linked command files without traversing linked directories', () => {
-    file('external/review.md', '# Review instructions\n');
+  test('accepts command file links contained within the plugin', () => {
+    file('plugin/shared/review.md', '# Review instructions\n');
     mkdirSync(join(project, 'plugin/commands'), { recursive: true });
-    symlinkSync(join(project, 'external/review.md'), join(project, 'plugin/commands/review.md'));
-    expect(run('./plugin').status).toBe(0);
-    rmSync(join(project, 'plugin/commands/review.md'));
-    symlinkSync(join(project, 'external'), join(project, 'plugin/commands/linked-directory'));
+    symlinkSync(join(project, 'plugin/shared/review.md'), join(project, 'plugin/commands/review.md'));
+    const result = run('./plugin');
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).data.valid).toBe(true);
+  });
+
+  test('does not traverse contained command directory links or loops', () => {
+    file('plugin/shared/review.md', '# Review instructions\n');
+    mkdirSync(join(project, 'plugin/commands'), { recursive: true });
+    symlinkSync(join(project, 'plugin/shared'), join(project, 'plugin/commands/linked-directory'));
     symlinkSync(join(project, 'plugin/commands'), join(project, 'plugin/commands/loop'));
     expect(run('./plugin').status).toBe(1);
+  });
+
+  test.each(['file', 'directory'])('rejects command %s links escaping the plugin even with valid resources', (kind) => {
+    file('plugin/commands/example.md', '# Valid command\n');
+    file('external/review.md', '# External review instructions\n');
+    symlinkSync(
+      join(project, kind === 'file' ? 'external/review.md' : 'external'),
+      join(project, kind === 'file' ? 'plugin/commands/review.md' : 'plugin/commands/linked-directory'),
+    );
+    const result = run('./plugin');
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).data.validation.diagnostics).toContainEqual(expect.objectContaining({ severity: 'error', path: '.' }));
+    expect(result.stdout).not.toContain(project);
   });
 
   test.each(['---\nname: missing-description\n---\n', '---\nname: [broken\n---\n', '# Missing metadata\n'])('rejects malformed recognized skills with relative locations', (contents) => {
@@ -167,16 +196,18 @@ describe('plugin validate', () => {
 
   test.each(['.claude-plugin/plugin.json', '.github/plugin/plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/marketplace.json', '.github/plugin/marketplace.json'])('rejects malformed manifest %s', (manifest) => {
     file(`plugin/${manifest}`, '{bad json');
-    expect(run('./plugin').status).toBe(1);
+    const result = run('./plugin');
+    expect(result.status).toBe(1);
+    const errors = JSON.parse(result.stdout).data.validation.diagnostics.filter((entry: { severity: string }) => entry.severity === 'error');
+    expect(errors.map((entry: { path: string }) => entry.path)).toEqual([manifest]);
   });
 
   test.each(['[]', 'null'])('rejects non-object plugin manifests %s', (contents) => {
     file('plugin/.claude-plugin/plugin.json', contents);
     const result = run('./plugin');
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout).data.validation.diagnostics).toEqual([
-      { severity: 'error', path: '.claude-plugin/plugin.json', message: 'Plugin manifest must be a JSON object' },
-    ]);
+    const errors = JSON.parse(result.stdout).data.validation.diagnostics.filter((entry: { severity: string }) => entry.severity === 'error');
+    expect(errors.map((entry: { path: string }) => entry.path)).toEqual(['.claude-plugin/plugin.json']);
   });
 
   test('accepts a standalone plugin manifest without imposing client-specific fields', () => {
@@ -188,9 +219,8 @@ describe('plugin validate', () => {
     file('plugin/.claude-plugin/marketplace.json', '{"name":"example"}');
     const result = run('./plugin');
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout).data.validation.diagnostics).toEqual([
-      { severity: 'error', path: '.claude-plugin/marketplace.json', message: 'Marketplace manifest must contain a "plugins" array' },
-    ]);
+    const errors = JSON.parse(result.stdout).data.validation.diagnostics.filter((entry: { severity: string }) => entry.severity === 'error');
+    expect(errors.map((entry: { path: string }) => entry.path)).toEqual(['.claude-plugin/marketplace.json']);
   });
 
   test('uses installation skill and marketplace precedence', () => {

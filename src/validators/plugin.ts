@@ -2,6 +2,8 @@ import { lstat, readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import JSON5 from 'json5';
 import { discoverSkillEntriesFromPluginRoot } from '../core/skills.js';
+import { resolvePluginComponents } from '../core/plugin-components.js';
+import type { PluginComponents } from '../models/plugin-components.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
 import { validateSkill } from './skill.js';
 
@@ -141,27 +143,37 @@ export async function validateLocalPlugin(
     break;
   }
 
-  try {
-    const warnings: string[] = [];
-    const entries = await discoverSkillEntriesFromPluginRoot(root, warnings);
-    for (const warning of warnings) diagnostic('.', warning);
-    skills = entries.length;
-    recognized ||= skills > 0;
-    for (const entry of entries.sort((a, b) =>
-      a.skillPath.localeCompare(b.skillPath),
-    )) {
-      const skill = await validateSkill(entry.skillPath);
-      if (!skill.valid)
-        diagnostic(
-          relative(root, skill.path).replaceAll('\\', '/'),
-          skill.error ?? 'Invalid skill',
-        );
+  // Component selection depends on readable, valid declarations. A failed
+  // prerequisite already has a diagnostic at its source, not a skill read error.
+  let components: PluginComponents | undefined;
+  if (!diagnostics.some((entry) => entry.severity === 'error')) {
+    try {
+      components = resolvePluginComponents(root);
+    } catch (error) {
+      diagnostic('.', `Cannot resolve plugin components: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    diagnostic(
-      '.',
-      `Cannot discover skills (${(error as NodeJS.ErrnoException).code ?? 'read error'})`,
-    );
+  }
+
+  if (components) {
+    try {
+      const warnings: string[] = [];
+      const entries = await discoverSkillEntriesFromPluginRoot(root, warnings, components);
+      for (const warning of warnings) diagnostic('.', warning);
+      skills = entries.length;
+      recognized ||= skills > 0;
+      for (const entry of entries.sort((a, b) =>
+        a.skillPath.localeCompare(b.skillPath),
+      )) {
+        const skill = await validateSkill(entry.skillPath);
+        if (!skill.valid)
+          diagnostic(
+            relative(root, skill.path).replaceAll('\\', '/'),
+            skill.error ?? 'Invalid skill',
+          );
+      }
+    } catch (error) {
+      diagnostic('.', `Cannot discover skills: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   for (const location of ['commands', 'agents', 'hooks', '.github']) {

@@ -148,11 +148,14 @@ describe('sync resilience - user scope', () => {
     const original = await readFile(skillPath, 'utf8');
     const state = await readFile(getSyncStatePath(testDir), 'utf8');
     await writeUserConfig({ repositories: [], plugins: [goodPlugin, './missing-plugin'], clients: ['copilot'] });
+    const configPath = join(testDir, '.allagents', WORKSPACE_CONFIG_FILE);
+    const pendingConfig = await readFile(configPath, 'utf8');
     const result = await syncUserWorkspace();
     expect(result.success).toBe(false);
     expect(result.totalCopied).toBe(0);
     expect(result.error).toContain('user workspace unchanged');
     expect(await readFile(skillPath, 'utf8')).toBe(original);
     expect(await readFile(getSyncStatePath(testDir), 'utf8')).toBe(state);
+    expect(await readFile(configPath, 'utf8')).toBe(pendingConfig);
   });
 });

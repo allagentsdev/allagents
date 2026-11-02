@@ -216,6 +216,20 @@ syncMode: copy
     ).toBe(true);
   });
 
+  it('retains managed hooks and tracking when a refreshed Copilot hook version is unsupported', async () => {
+    const plugin = await writePlugin('plugin-a', 'SessionStart');
+    await writeWorkspace(['plugin-a']);
+    expect((await syncWorkspace(testDir)).success).toBe(true);
+    const hooksPath = join(testDir, '.github', 'hooks', 'allagents.json');
+    const statePath = join(testDir, CONFIG_DIR, 'sync-state.json');
+    const previousHooks = await readFile(hooksPath, 'utf-8');
+    const previousState = await readFile(statePath, 'utf-8');
+    await writeFile(join(plugin, 'hooks.json'), JSON.stringify({ version: 2, hooks: { SessionStart: [] } }));
+    expect((await syncWorkspace(testDir)).success).toBe(false);
+    expect(await readFile(hooksPath, 'utf-8')).toBe(previousHooks);
+    expect(await readFile(statePath, 'utf-8')).toBe(previousState);
+  });
+
   it('does not overwrite an existing unowned allagents hook file', async () => {
     await writePlugin('plugin-a', 'SessionStart');
     await writeWorkspace(['plugin-a']);

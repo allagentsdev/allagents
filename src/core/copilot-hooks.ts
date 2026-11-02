@@ -96,7 +96,7 @@ function withPluginRoot(
   return { version: 1, hooks };
 }
 
-async function collectPluginHooks(
+export async function collectPluginCopilotHooks(
   plugin: ValidatedPlugin,
   warnings: string[],
 ): Promise<CopilotHooksFile | null> {
@@ -155,7 +155,7 @@ export async function syncCopilotProjectHooks(
   const hookFiles = await Promise.all(
     validatedPlugins
       .filter(pluginTargetsCopilot)
-      .map((plugin) => collectPluginHooks(plugin, warnings)),
+      .map((plugin) => collectPluginCopilotHooks(plugin, warnings)),
   );
   const merged = mergeHooks(
     hookFiles.filter((file): file is CopilotHooksFile => file !== null),

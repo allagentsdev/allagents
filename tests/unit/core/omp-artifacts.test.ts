@@ -32,15 +32,7 @@ describe('OMP hook sync', () => {
     await mkdir(workspace, { recursive: true });
     await writeFile(source, 'export default function guard() {}\n');
 
-    const results = await copyHooks(plugin, workspace, 'omp');
-
-    expect(results).toEqual([
-      {
-        source,
-        destination: join(workspace, '.omp', 'hooks', 'pre', 'guard.ts'),
-        action: 'copied',
-      },
-    ]);
+    await copyHooks(plugin, workspace, 'omp');
     expect(
       await readFile(join(workspace, '.omp', 'hooks', 'pre', 'guard.ts'), 'utf8'),
     ).toBe('export default function guard() {}\n');
@@ -78,7 +70,7 @@ describe('OMP hook sync', () => {
     expect(await readFile(join(destinationDir, 'local.ts'), 'utf8')).toContain('local');
   });
 
-  it('reports an unreadable hook artifact without aborting plugin sync', async () => {
+  it('rejects an invalid hook source before changing user-owned hooks', async () => {
     root = await mkdtemp(join(tmpdir(), 'allagents-omp-hooks-'));
     const plugin = join(root, 'plugin');
     const workspace = join(root, 'workspace');
@@ -86,10 +78,11 @@ describe('OMP hook sync', () => {
     await mkdir(workspace, { recursive: true });
     await writeFile(join(plugin, 'hooks'), 'not a directory\n');
 
-    const results = await copyHooks(plugin, workspace, 'omp');
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.action).toBe('failed');
+    const personal = join(workspace, '.omp', 'hooks', 'personal.ts');
+    await mkdir(join(workspace, '.omp', 'hooks'), { recursive: true });
+    await writeFile(personal, 'export default function personal() {}\n');
+    await expect(copyHooks(plugin, workspace, 'omp')).rejects.toThrow();
+    expect(await readFile(personal, 'utf8')).toBe('export default function personal() {}\n');
   });
 
   it('rejects a hook destination beneath a symlinked client root', async () => {

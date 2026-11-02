@@ -45,9 +45,10 @@ const spinner = {
 };
 
 export const skillMultiselectMock = updateMultiselectMock;
+export const autocompleteMock = mock(async () => '');
 
 mock.module('@clack/prompts', () => ({
-  autocomplete: mock(async () => ''),
+  autocomplete: autocompleteMock,
   autocompleteMultiselect: mock(
     async () => installClientResponses.shift() ?? CLACK_CANCEL,
   ),

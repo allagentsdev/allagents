@@ -1,6 +1,7 @@
-import { type Dirent, existsSync, lstatSync } from 'node:fs';
+import { type Dirent, existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
+import type { PluginComponents } from '../models/plugin-components.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import {
   type PluginSkillsConfig,
@@ -19,6 +20,9 @@ import {
 } from './marketplace.js';
 import { fetchPlugin, getPluginName } from './plugin.js';
 import { buildPluginSyncPlans } from './sync.js';
+import { pathIsWithin } from './client-context.js';
+import { resolvePluginComponents } from './plugin-components.js';
+import { isExcluded } from './transform.js';
 
 /**
  * Information about a skill from an installed plugin
@@ -62,6 +66,7 @@ export interface DiscoveredSkillEntry {
  */
 interface ResolvedPlugin {
   path: string;
+  components?: PluginComponents;
   /** Plugin name from marketplace manifest (overrides directory basename) */
   pluginName?: string | undefined;
 }
@@ -72,16 +77,19 @@ interface ResolvedPlugin {
 async function resolvePluginPath(
   pluginSource: string,
   workspacePath: string,
+  exclude?: string[],
 ): Promise<ResolvedPlugin | null> {
   if (isPluginSpec(pluginSource)) {
     const resolved = await resolvePluginSpecWithAutoRegister(pluginSource, {
       offline: true,
       workspacePath,
+      componentPolicy: { exclude },
     });
     if (!resolved.success || !resolved.path) return null;
     return {
       path: resolved.path,
       pluginName: resolved.pluginName,
+      ...(resolved.components && { components: resolved.components }),
     };
   }
 
@@ -104,36 +112,78 @@ async function resolvePluginPath(
 export async function discoverNestedSkillEntries(
   scanRoot: string,
   warnings: string[] = [],
+  exclude?: string[],
+  pluginPath = scanRoot,
 ): Promise<DiscoveredSkillEntry[]> {
-  return walkForSkillMd(scanRoot, scanRoot, warnings);
+  return walkForSkillMd(scanRoot, scanRoot, warnings, exclude, pluginPath);
 }
 
-/** Discover all skills owned by a resolved plugin root. */
+/** Discover all skills owned by the selected component sources. */
 export async function discoverSkillEntriesFromPluginRoot(
   pluginPath: string,
   warnings: string[] = [],
+  components?: PluginComponents,
+  exclude?: string[],
 ): Promise<DiscoveredSkillEntry[]> {
-  const skillsDir = join(pluginPath, 'skills');
-  if (existsSync(skillsDir)) {
-    return discoverNestedSkillEntries(skillsDir, warnings);
+  if (isExcluded(pluginPath, pluginPath, exclude)) return [];
+  const selectedComponents = components ?? resolvePluginComponents(pluginPath, undefined, { exclude });
+  const discovered: DiscoveredSkillEntry[] = [];
+  const seen = new Set<string>();
+  const pluginRoot = realpathSync(pluginPath);
+  for (const source of selectedComponents.skills) {
+    if (isExcluded(pluginPath, source, exclude) || !existsSync(source)) continue;
+    if (!pathIsWithin(pluginPath, source) || !pathIsWithin(pluginRoot, realpathSync(source))) {
+      throw new Error(`Skill source escapes plugin root: ${source}`);
+    }
+    // Native skill declarations select directories, not an individual SKILL.md.
+    if (!statSync(source).isDirectory()) continue;
+    const scanRoot = source;
+    let entries: DiscoveredSkillEntry[];
+    // Preserve the ordinary repository layout: nested skills take priority over
+    // a root SKILL.md. Explicit skill directories select that skill directly.
+    const nested = scanRoot === pluginPath && selectedComponents.github
+      ? await discoverNestedSkillEntries(scanRoot, warnings, exclude, pluginPath)
+      : [];
+    if (nested.length > 0) {
+      entries = nested;
+    } else if (!isExcluded(pluginPath, join(scanRoot, 'SKILL.md'), exclude) &&
+        existsSync(join(scanRoot, 'SKILL.md'))) {
+      const skillMd = join(scanRoot, 'SKILL.md');
+      if (!pathIsWithin(pluginRoot, realpathSync(skillMd))) {
+        throw new Error(`Skill source escapes plugin root: ${skillMd}`);
+      }
+      let name = basename(scanRoot);
+      if (scanRoot === pluginPath) {
+        const content = await readFile(skillMd, 'utf-8');
+        name = parseSkillMetadata(content)?.name ?? name;
+      }
+      entries = [{ name, subpath: name, skillPath: scanRoot }];
+    } else {
+      entries = scanRoot === pluginPath && selectedComponents.github
+        ? nested
+        : await discoverNestedSkillEntries(scanRoot, warnings, exclude, pluginPath);
+    }
+    for (const entry of entries) {
+      const skillMd = join(entry.skillPath, 'SKILL.md');
+      if (!pathIsWithin(pluginRoot, realpathSync(skillMd))) {
+        throw new Error(`Skill source escapes plugin root: ${skillMd}`);
+      }
+      if (seen.has(entry.skillPath)) continue;
+      seen.add(entry.skillPath);
+      discovered.push(entry);
+    }
   }
-
-  const nestedSkills = await discoverNestedSkillEntries(pluginPath, warnings);
-  if (nestedSkills.length > 0) return nestedSkills;
-
-  const rootSkillMd = join(pluginPath, 'SKILL.md');
-  if (!existsSync(rootSkillMd)) return [];
-  const skillContent = await readFile(rootSkillMd, 'utf-8');
-  const metadata = parseSkillMetadata(skillContent);
-  const skillName = metadata?.name ?? basename(pluginPath);
-  return [{ name: skillName, subpath: skillName, skillPath: pluginPath }];
+  return discovered;
 }
 
 async function walkForSkillMd(
   scanRoot: string,
   currentDir: string,
   warnings: string[],
+  exclude?: string[],
+  pluginPath = scanRoot,
 ): Promise<DiscoveredSkillEntry[]> {
+  if (isExcluded(pluginPath, currentDir, exclude)) return [];
   let entries: Dirent[];
   try {
     entries = await readdir(currentDir, { withFileTypes: true });
@@ -153,6 +203,9 @@ async function walkForSkillMd(
     if (!entry.isDirectory()) continue;
 
     const skillPath = join(currentDir, entry.name);
+    const skillMd = join(skillPath, 'SKILL.md');
+    if (isExcluded(pluginPath, skillPath, exclude) ||
+        isExcluded(pluginPath, skillMd, exclude)) continue;
 
     // Skip symlinks/junctions to avoid unbounded recursion through loops.
     try {
@@ -161,13 +214,13 @@ async function walkForSkillMd(
       continue;
     }
 
-    if (existsSync(join(skillPath, 'SKILL.md'))) {
+    if (existsSync(skillMd)) {
       const subpath = relative(scanRoot, skillPath).split(/[\\/]/).join('/');
       discovered.push({ name: entry.name, subpath, skillPath });
       continue;
     }
 
-    discovered.push(...(await walkForSkillMd(scanRoot, skillPath, warnings)));
+    discovered.push(...(await walkForSkillMd(scanRoot, skillPath, warnings, exclude, pluginPath)));
   }
 
   return discovered;
@@ -231,7 +284,8 @@ export async function getAllSkillsFromPlugins(
     ) {
       continue;
     }
-    const resolved = await resolvePluginPath(effectiveSource, workspacePath);
+    const exclude = typeof pluginEntry === 'string' ? undefined : pluginEntry.exclude;
+    const resolved = await resolvePluginPath(effectiveSource, workspacePath, exclude);
     if (!resolved) continue;
 
     const pluginPath = resolved.path;
@@ -246,7 +300,12 @@ export async function getAllSkillsFromPlugins(
       enabledSkills &&
       [...enabledSkills].some((s) => s.startsWith(`${pluginName}`));
 
-    const skillEntries = await discoverSkillEntriesFromPluginRoot(pluginPath);
+    const skillEntries = await discoverSkillEntriesFromPluginRoot(
+      pluginPath,
+      [],
+      resolved.components,
+      exclude,
+    );
 
     const pluginSkillsMode: SkillInfo['pluginSkillsMode'] =
       pluginSkillsConfig === undefined
@@ -319,8 +378,10 @@ export async function findSkillByName(
  */
 export async function discoverSkillNames(
   pluginPath: string,
+  components?: PluginComponents,
+  exclude?: string[],
 ): Promise<string[]> {
-  return (await discoverSkillEntries(pluginPath)).map((entry) => entry.name);
+  return (await discoverSkillEntries(pluginPath, components, exclude)).map((entry) => entry.name);
 }
 
 /**
@@ -330,29 +391,9 @@ export async function discoverSkillNames(
  */
 export async function discoverSkillEntries(
   pluginPath: string,
+  components?: PluginComponents,
+  exclude?: string[],
 ): Promise<DiscoveredSkillEntry[]> {
   if (!existsSync(pluginPath)) return [];
-
-  const skillsDir = join(pluginPath, 'skills');
-  if (existsSync(skillsDir)) {
-    return discoverNestedSkillEntries(skillsDir);
-  }
-
-  const nestedSkills = await discoverNestedSkillEntries(pluginPath);
-  if (nestedSkills.length > 0) return nestedSkills;
-
-  const rootSkillMd = join(pluginPath, 'SKILL.md');
-  if (existsSync(rootSkillMd)) {
-    let name = basename(pluginPath);
-    try {
-      const content = await readFile(rootSkillMd, 'utf-8');
-      const metadata = parseSkillMetadata(content);
-      if (metadata?.name) name = metadata.name;
-    } catch {
-      // Fall through to basename
-    }
-    return [{ name, subpath: name, skillPath: pluginPath }];
-  }
-
-  return [];
+  return discoverSkillEntriesFromPluginRoot(pluginPath, [], components, exclude);
 }

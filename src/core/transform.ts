@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   realpath,
+  stat,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -24,7 +25,7 @@ import {
   type ClientMapping,
   type ClientMappings,
 } from '../models/client-mapping.js';
-import type { MarketplaceFileArtifacts } from '../models/marketplace-manifest.js';
+import { ROOT_SKILL_EXCLUDED_ENTRIES, type PluginComponents } from '../models/plugin-components.js';
 import type {
   ClientType,
   PluginSkillsConfig,
@@ -35,8 +36,9 @@ import { isGlobPattern, resolveGlobPatterns } from '../utils/glob-patterns.js';
 import { adjustLinksInContent } from '../utils/link-adjuster.js';
 import { parseFileSource } from '../utils/plugin-path.js';
 import { createSymlink } from '../utils/symlink.js';
-import { parseSkillMetadata } from '../validators/skill.js';
-import { discoverNestedSkillEntries } from './skills.js';
+import { discoverSkillEntriesFromPluginRoot } from './skills.js';
+import { resolvePluginComponents } from './plugin-components.js';
+import { isPluginHookSourceExcluded } from './plugin-hook-exclusions.js';
 import {
   assertSafeDestination,
   pathIsWithin,
@@ -47,13 +49,6 @@ import {
  * Agent instruction files that receive WORKSPACE-RULES injection
  */
 const AGENT_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
-
-/** Repository metadata omitted when the repository itself is a skill. */
-export const ROOT_SKILL_EXCLUDED_ENTRIES = [
-  '.git',
-  '.github',
-  '.allagents',
-] as const;
 
 /**
  * Ensure WORKSPACE-RULES exist in a file (creates file if needed)
@@ -103,6 +98,8 @@ export interface CopyResult {
   destination: string;
   action: 'copied' | 'deduped' | 'skipped' | 'failed' | 'generated';
   error?: string;
+  /** Materialized bytes for generated artifacts whose source is a manifest. */
+  content?: string;
   /** Resolved ownership supplied by the copy operation, when applicable. */
   client?: ClientType;
   artifactType?: CopyArtifactType;
@@ -118,6 +115,8 @@ export interface CopyOptions {
   clientMappings?: ClientMappings;
   /** Selected filesystem root that bounds this client's external writes. */
   writeRoot?: string;
+  /** Selected contained component sources; direct callers resolve them by default. */
+  components?: PluginComponents;
   /**
    * Glob patterns of files to exclude during sync.
    * Paths are relative to the plugin root (e.g., ".github/instructions/file.md",
@@ -136,7 +135,70 @@ export function isExcluded(
 ): boolean {
   if (!exclude || exclude.length === 0) return false;
   const relativePath = relative(pluginPath, filePath).replaceAll('\\', '/');
-  return exclude.some((pattern) => picomatch(pattern)(relativePath));
+  return exclude.some((pattern) => {
+    const matches = picomatch(pattern);
+    return matches(relativePath) || matches(`${relativePath}/`);
+  });
+}
+async function assertSafePluginSource(pluginPath: string, source: string): Promise<void> {
+  if (!pathIsWithin(pluginPath, source) ||
+      !pathIsWithin(await realpath(pluginPath), await realpath(source))) {
+    throw new Error(`Component source escapes plugin root: ${source}`);
+  }
+}
+
+interface ComponentFile {
+  source: string;
+  relativePath: string;
+}
+
+async function collectComponentFiles(
+  componentPath: string,
+  pluginPath: string,
+  exclude?: string[],
+  recursive = true,
+): Promise<ComponentFile[]> {
+  if (!existsSync(componentPath) || isExcluded(pluginPath, componentPath, exclude)) return [];
+  await assertSafePluginSource(pluginPath, componentPath);
+  if (!(await stat(componentPath)).isDirectory()) {
+    return [{ source: componentPath, relativePath: basename(componentPath) }];
+  }
+  return (await collectDirectoryFiles(componentPath, pluginPath, exclude, '', recursive)).map(
+    (relativePath) => ({ source: join(componentPath, relativePath), relativePath }),
+  );
+}
+
+async function copyComponentFiles(
+  files: readonly ComponentFile[],
+  pluginPath: string,
+  workspacePath: string,
+  destinationPath: string,
+  client: ClientType,
+  artifactType: CopyArtifactType,
+  options: CopyOptions,
+): Promise<CopyResult[]> {
+  const results: CopyResult[] = [];
+  const destinations = new Set<string>();
+  for (const { source, relativePath } of files) {
+    const destination = join(resolveMappedPath(workspacePath, destinationPath), relativePath);
+    if (destinations.has(destination)) continue;
+    destinations.add(destination);
+    try {
+      await assertSafePluginSource(pluginPath, source);
+      await assertSafeDestination(options.writeRoot ?? workspacePath, destination);
+      if (!options.dryRun) {
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(source, destination, { dereference: true });
+      }
+      results.push({ source, destination, action: 'copied', client, artifactType });
+    } catch (error) {
+      results.push({
+        source, destination, action: 'failed', client, artifactType,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+  return results;
 }
 
 /**
@@ -147,7 +209,10 @@ async function copyDirectoryWithExclusions(
   destDir: string,
   pluginPath: string,
   exclude: string[],
+  writeRoot: string,
 ): Promise<void> {
+  await assertSafePluginSource(pluginPath, sourceDir);
+  await assertSafeDestination(writeRoot, destDir);
   await mkdir(destDir, { recursive: true });
   const entries = await readdir(sourceDir, { withFileTypes: true });
 
@@ -159,15 +224,20 @@ async function copyDirectoryWithExclusions(
       continue;
     }
 
+    await assertSafePluginSource(pluginPath, sourcePath);
+    // Directory links are not traversed, matching skill discovery and avoiding loops.
+    if (entry.isSymbolicLink() && (await stat(sourcePath)).isDirectory()) continue;
     if (entry.isDirectory()) {
       await copyDirectoryWithExclusions(
         sourcePath,
         destPath,
         pluginPath,
         exclude,
+        writeRoot,
       );
     } else {
-      await cp(sourcePath, destPath);
+      await assertSafeDestination(writeRoot, destPath);
+      await cp(sourcePath, destPath, { dereference: true });
     }
   }
 }
@@ -177,8 +247,10 @@ async function collectDirectoryFiles(
   pluginPath: string,
   exclude?: string[],
   relativeDir = '',
+  recursive = true,
 ): Promise<string[]> {
   const directory = join(sourceRoot, relativeDir);
+  await assertSafePluginSource(pluginPath, directory);
   const entries = await readdir(directory, { withFileTypes: true });
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
@@ -186,7 +258,10 @@ async function collectDirectoryFiles(
   for (const entry of entries) {
     const relativePath = join(relativeDir, entry.name);
     const source = join(sourceRoot, relativePath);
+    if (entry.isDirectory() && !recursive) continue;
     if (isExcluded(pluginPath, source, exclude)) continue;
+    await assertSafePluginSource(pluginPath, source);
+    if (entry.isSymbolicLink() && (await stat(source)).isDirectory()) continue;
 
     if (entry.isDirectory()) {
       files.push(
@@ -195,6 +270,7 @@ async function collectDirectoryFiles(
           pluginPath,
           exclude,
           relativePath,
+          recursive,
         )),
       );
     } else {
@@ -281,66 +357,16 @@ export async function copyCommands(
   client: ClientType,
   options: CopyOptions = {},
 ): Promise<CopyResult[]> {
-  const { dryRun = false } = options;
   const mapping = getMapping(client, options);
-  const results: CopyResult[] = [];
-
-  // Skip if client doesn't support commands (only Claude has commandsPath)
-  if (!mapping.commandsPath) {
-    return results;
+  if (!mapping.commandsPath) return [];
+  const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude });
+  const files: ComponentFile[] = [];
+  for (const source of components.commands) {
+    files.push(...(await collectComponentFiles(source, pluginPath, options.exclude, false))
+      .filter((file) => file.source.endsWith('.md')));
   }
-
-  const sourceDir = join(pluginPath, 'commands');
-  if (!existsSync(sourceDir)) {
-    return results;
-  }
-
-  const destDir = resolveMappedPath(workspacePath, mapping.commandsPath);
-  try {
-    await assertSafeDestination(options.writeRoot ?? workspacePath, destDir);
-  } catch (error) {
-    return [{
-      source: sourceDir,
-      destination: destDir,
-      action: 'failed',
-      error: error instanceof Error ? error.message : 'Unsafe destination',
-      client,
-      artifactType: 'command',
-    }];
-  }
-  if (!dryRun) await mkdir(destDir, { recursive: true });
-
-  const files = await readdir(sourceDir);
-  const mdFiles = files.filter((f) => f.endsWith('.md'));
-
-  // Process files in parallel for better performance
-  const copyPromises = mdFiles
-    .filter(
-      (file) => !isExcluded(pluginPath, join(sourceDir, file), options.exclude),
-    )
-    .map(async (file): Promise<CopyResult> => {
-      const sourcePath = join(sourceDir, file);
-      const destPath = join(destDir, file);
-
-      if (dryRun) {
-        return { source: sourcePath, destination: destPath, action: 'copied' };
-      }
-
-      try {
-        const content = await readFile(sourcePath, 'utf-8');
-        await writeFile(destPath, content, 'utf-8');
-        return { source: sourcePath, destination: destPath, action: 'copied' };
-      } catch (error) {
-        return {
-          source: sourcePath,
-          destination: destPath,
-          action: 'failed',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        };
-      }
-    });
-
-  return Promise.all(copyPromises);
+  return copyComponentFiles(files, pluginPath, workspacePath, mapping.commandsPath,
+    client, 'command', options);
 }
 
 /**
@@ -378,71 +404,26 @@ export async function copySkills(
     return results;
   }
 
-  // Discover skill sources across all layouts. Skills can be nested below
-  // `skills/<category>/`; the subpath relative to the scan root is preserved
-  // so the allowlist can target nested skills with `category/skill` form.
-  const skillsDir = join(pluginPath, 'skills');
-  let skillSources: {
-    name: string;
-    subpath: string;
-    sourcePath: string;
-    isRootLevel: boolean;
-  }[];
-
-  if (existsSync(skillsDir)) {
-    const entries = await discoverNestedSkillEntries(skillsDir);
-    skillSources = entries
-      .filter(
-        (entry) => !isExcluded(pluginPath, entry.skillPath, options.exclude),
-      )
-      .map((entry) => ({
-        name: entry.name,
-        subpath: entry.subpath,
-        sourcePath: entry.skillPath,
-        isRootLevel: false,
-      }));
-  } else {
-    const nestedSkills = (await discoverNestedSkillEntries(pluginPath))
-      .filter(
-        (entry) => !isExcluded(pluginPath, entry.skillPath, options.exclude),
-      )
-      .map((entry) => ({
-        name: entry.name,
-        subpath: entry.subpath,
-        sourcePath: entry.skillPath,
-        isRootLevel: false,
-      }));
-
-    if (nestedSkills.length > 0) {
-      skillSources = nestedSkills;
-    } else {
-      // Root-level single-skill layout: plugin/SKILL.md
-      const rootSkillMd = join(pluginPath, 'SKILL.md');
-      if (existsSync(rootSkillMd)) {
-        const content = await readFile(rootSkillMd, 'utf-8');
-        const metadata = parseSkillMetadata(content);
-        const skillName = metadata?.name ?? basename(pluginPath);
-        skillSources = [
-          {
-            name: skillName,
-            subpath: skillName,
-            sourcePath: pluginPath,
-            isRootLevel: true,
-          },
-        ];
-      } else {
-        return results;
-      }
-    }
-  }
+  const skillSources = (await discoverSkillEntriesFromPluginRoot(
+    pluginPath,
+    [],
+    options.components,
+    options.exclude,
+  ))
+    .map((entry) => ({
+      name: entry.name,
+      subpath: entry.subpath,
+      sourcePath: entry.skillPath,
+      isRootLevel: entry.skillPath === pluginPath,
+    }));
 
   // When skillNameMap is provided, only copy skills that are in the map.
   // Match by either bare leaf name or qualified subpath so the map can carry
   // either form.
   if (skillNameMap) {
-    skillSources = skillSources.filter(
+    skillSources.splice(0, skillSources.length, ...skillSources.filter(
       (s) => skillNameMap.has(s.name) || skillNameMap.has(s.subpath),
-    );
+    ));
   }
 
   if (skillSources.length === 0) {
@@ -474,7 +455,7 @@ export async function copySkills(
   // Process skill directories in parallel for better performance
   const copyPromises = skillSources.map(async (skill): Promise<CopyResult> => {
     // Use resolved name from skillNameMap if available, otherwise use folder name
-    const resolvedName = skillNameMap?.get(skill.name) ?? skill.name;
+    const resolvedName = skillNameMap?.get(skill.subpath) ?? skillNameMap?.get(skill.name) ?? skill.name;
     const skillDestPath = join(destDir, resolvedName);
 
     if (dryRun) {
@@ -543,16 +524,16 @@ export async function copySkills(
           skillDestPath,
           pluginPath,
           [...ROOT_SKILL_EXCLUDED_ENTRIES, ...(options.exclude ?? [])],
+          writeRoot,
         );
-      } else if (options.exclude && options.exclude.length > 0) {
+      } else {
         await copyDirectoryWithExclusions(
           skill.sourcePath,
           skillDestPath,
           pluginPath,
-          options.exclude,
+          options.exclude ?? [],
+          writeRoot,
         );
-      } else {
-        await cp(skill.sourcePath, skillDestPath, { recursive: true });
       }
       return {
         source: skill.sourcePath,
@@ -609,8 +590,10 @@ export async function collectPluginSkills(
   enabledSkills?: Set<string>,
   pluginSkillsConfig?: PluginSkillsConfig,
   warnings?: string[],
+  components?: PluginComponents,
+  exclude?: string[],
 ): Promise<CollectedSkill[]> {
-  const skillsDir = join(pluginPath, 'skills');
+  const resolvedComponents = components ?? resolvePluginComponents(pluginPath, undefined, { exclude });
   const skillWalkWarnings: string[] = [];
 
   // v1 fallback: only apply enabledSkills to plugins that actually have entries in the set
@@ -620,44 +603,16 @@ export async function collectPluginSkills(
     pluginName &&
     [...enabledSkills].some((s) => s.startsWith(`${pluginName}:`));
 
-  let candidateDirs: { name: string; subpath: string; path: string }[];
-
-  if (existsSync(skillsDir)) {
-    const entries = await discoverNestedSkillEntries(
-      skillsDir,
-      skillWalkWarnings,
-    );
-    candidateDirs = entries.map((entry) => ({
-      name: entry.name,
-      subpath: entry.subpath,
-      path: entry.skillPath,
-    }));
-  } else {
-    const nestedDirs = (
-      await discoverNestedSkillEntries(pluginPath, skillWalkWarnings)
-    ).map((entry) => ({
-      name: entry.name,
-      subpath: entry.subpath,
-      path: entry.skillPath,
-    }));
-
-    if (nestedDirs.length > 0) {
-      candidateDirs = nestedDirs;
-    } else {
-      // Root-level single-skill layout: plugin/SKILL.md
-      const rootSkillMd = join(pluginPath, 'SKILL.md');
-      if (existsSync(rootSkillMd)) {
-        const content = await readFile(rootSkillMd, 'utf-8');
-        const metadata = parseSkillMetadata(content);
-        const skillName = metadata?.name ?? basename(pluginPath);
-        candidateDirs = [
-          { name: skillName, subpath: skillName, path: pluginPath },
-        ];
-      } else {
-        candidateDirs = [];
-      }
-    }
-  }
+  const candidateDirs = (await discoverSkillEntriesFromPluginRoot(
+    pluginPath,
+    skillWalkWarnings,
+    resolvedComponents,
+    exclude,
+  )).map((entry) => ({
+    name: entry.name,
+    subpath: entry.subpath,
+    path: entry.skillPath,
+  }));
 
   const matchesAllowlist = (
     entry: { name: string; subpath: string },
@@ -728,90 +683,50 @@ export async function copyHooks(
   client: ClientType,
   options: CopyOptions = {},
 ): Promise<CopyResult[]> {
-  const { dryRun = false } = options;
   const mapping = getMapping(client, options);
-
-  if (!mapping.hooksPath) {
-    return [];
-  }
-
-  const sourceDir = join(pluginPath, 'hooks');
-  if (!existsSync(sourceDir)) {
-    return [];
-  }
-
-  const destDir = resolveMappedPath(workspacePath, mapping.hooksPath);
-
-  // hooks/hooks.json is a plugin declaration, not a repository hook payload.
-  // Project Copilot sync materializes it separately with COPILOT_PLUGIN_ROOT
-  // bound to the plugin installation path; copying it verbatim would register
-  // the same hooks twice and leave the plugin-root variable unresolved.
-  const effectiveExclude =
-    mapping.hooksPath === '.github/hooks/' &&
-    existsSync(join(sourceDir, 'hooks.json'))
-      ? [...(options.exclude ?? []), 'hooks/hooks.json']
-      : options.exclude;
-  let hookFiles: string[];
-  try {
-    hookFiles = await collectDirectoryFiles(
-      sourceDir,
-      pluginPath,
-      effectiveExclude,
-    );
-  } catch (error) {
-    return [{
-      source: sourceDir,
-      destination: destDir,
-      action: 'failed',
-      error: error instanceof Error ? error.message : 'Unknown error',
-      client,
-      artifactType: 'hook',
-    }];
-  }
-  const writeRoot = options.writeRoot ?? workspacePath;
-
-  try {
-    await assertSafeDestination(writeRoot, destDir);
-  } catch (error) {
-    return [{
-      source: sourceDir,
-      destination: destDir,
-      action: 'failed',
-      error: error instanceof Error ? error.message : 'Unsafe destination',
-      client,
-      artifactType: 'hook',
-    }];
-  }
-
-  const results: CopyResult[] = [];
-  const preparedDirectories = new Set<string>();
-  for (const relativePath of hookFiles) {
-    const source = join(sourceDir, relativePath);
-    const destination = join(destDir, relativePath);
-    if (dryRun) {
-      results.push({ source, destination, action: 'copied' });
-      continue;
+  if (!mapping.hooksPath) return [];
+  const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude });
+  const files: ComponentFile[] = [];
+  // Conventional declaration files are never resource payloads, even when a
+  // higher-priority root hooks.json is selected.
+  const declarationPaths = new Set<string>([join(pluginPath, 'hooks', 'hooks.json')]);
+  const plugin = { resolved: pluginPath, ...(options.exclude && { exclude: options.exclude }), components };
+  const inlineSources = components.hooks.filter((source) => 'inline' in source &&
+    !isPluginHookSourceExcluded(plugin, source, components.hookResources));
+  for (const source of components.hooks) {
+    if (source.path) declarationPaths.add(source.path);
+    if (!source.path || isPluginHookSourceExcluded(plugin, source, components.hookResources)) continue;
+    await assertSafePluginSource(pluginPath, source.path);
+    if ((await stat(source.path)).isDirectory()) continue;
+    // Project Copilot declarations are schema-translated separately, never
+    // copied verbatim or registered a second time.
+    if (mapping.hooksPath !== '.github/hooks/') {
+      files.push({ source: source.path, relativePath: 'hooks.json' });
     }
-
-    try {
-      await assertSafeDestination(writeRoot, destination);
-      const destinationDirectory = dirname(destination);
-      if (!preparedDirectories.has(destinationDirectory)) {
-        await mkdir(destinationDirectory, { recursive: true });
-        preparedDirectories.add(destinationDirectory);
-      }
-      await cp(source, destination);
-      results.push({ source, destination, action: 'copied' });
-    } catch (error) {
-      results.push({
-        source,
-        destination,
-        action: 'failed',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        client,
-        artifactType: 'hook',
-      });
+  }
+  for (const directory of components.hookResources ?? []) {
+    files.push(...(await collectComponentFiles(directory, pluginPath, options.exclude))
+      .filter((file) => !declarationPaths.has(file.source)));
+  }
+  const results = await copyComponentFiles(files, pluginPath, workspacePath,
+    mapping.hooksPath, client, 'hook', options);
+  if (mapping.hooksPath === '.github/hooks/' || inlineSources.length === 0) return results;
+  const inlineSource = inlineSources[0];
+  if (!inlineSource?.inline) return results;
+  const source = inlineSource.declaredIn ?? pluginPath;
+  const destination = join(resolveMappedPath(workspacePath, mapping.hooksPath), 'hooks.json');
+  const content = `${JSON.stringify({ hooks: inlineSource.inline }, null, 2)}\n`;
+  try {
+    await assertSafePluginSource(pluginPath, source);
+    await assertSafeDestination(options.writeRoot ?? workspacePath, destination);
+    if (!options.dryRun) {
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, content, 'utf-8');
     }
+    results.push({ source, destination, content, action: 'copied', client, artifactType: 'hook' });
+  } catch (error) {
+    results.push({ source, destination, action: 'failed', client, artifactType: 'hook',
+      error: error instanceof Error ? error.message : 'Unknown error' });
   }
   return results;
 }
@@ -831,66 +746,29 @@ export async function copyAgents(
   client: ClientType,
   options: CopyOptions = {},
 ): Promise<CopyResult[]> {
-  const { dryRun = false } = options;
-  const mapping = getMapping(client, options);
-  const results: CopyResult[] = [];
-
-  // Skip if client doesn't support agents
-  if (!mapping.agentsPath) {
-    return results;
-  }
-
-  const sourceDir = join(pluginPath, 'agents');
-  if (!existsSync(sourceDir)) {
-    return results;
-  }
-
-  const destDir = resolveMappedPath(workspacePath, mapping.agentsPath);
-  try {
-    await assertSafeDestination(options.writeRoot ?? workspacePath, destDir);
-  } catch (error) {
-    return [{
-      source: sourceDir,
-      destination: destDir,
-      action: 'failed',
-      error: error instanceof Error ? error.message : 'Unsafe destination',
+  const plan = await planAgentOutputs([{
+    configurationIndex: 0,
+    plugin: basename(pluginPath),
+    pluginPath,
+    clients: [client],
+    ...(options.exclude && { exclude: options.exclude }),
+    components: { ...(options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude })), github: false },
+  }], workspacePath, options.clientMappings ?? CLIENT_MAPPINGS);
+  return [
+    ...(await copyPlannedAgentOutputs(plan.outputs, {
+      dryRun: options.dryRun ?? false,
+      clientMappings: options.clientMappings ?? CLIENT_MAPPINGS,
+      writeRoot: options.writeRoot ?? workspacePath,
+    })),
+    ...plan.failures.map((failure) => ({
+      source: failure.source,
+      destination: failure.destination,
+      action: 'failed' as const,
+      error: failure.error,
       client,
-      artifactType: 'agent',
-    }];
-  }
-  if (!dryRun) await mkdir(destDir, { recursive: true });
-
-  const files = await readdir(sourceDir);
-  const mdFiles = files.filter((f) => f.endsWith('.md'));
-
-  // Process files in parallel for better performance
-  const copyPromises = mdFiles
-    .filter(
-      (file) => !isExcluded(pluginPath, join(sourceDir, file), options.exclude),
-    )
-    .map(async (file): Promise<CopyResult> => {
-      const sourcePath = join(sourceDir, file);
-      const destPath = join(destDir, file);
-
-      if (dryRun) {
-        return { source: sourcePath, destination: destPath, action: 'copied' };
-      }
-
-      try {
-        const content = await readFile(sourcePath, 'utf-8');
-        await writeFile(destPath, content, 'utf-8');
-        return { source: sourcePath, destination: destPath, action: 'copied' };
-      } catch (error) {
-        return {
-          source: sourcePath,
-          destination: destPath,
-          action: 'failed',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        };
-      }
-    });
-
-  return Promise.all(copyPromises);
+      artifactType: 'agent' as const,
+    })),
+  ];
 }
 
 export type AgentOutputRoute = 'portable' | 'github';
@@ -937,7 +815,7 @@ export interface AgentOutputPlugin {
   readonly pluginPath: string;
   readonly clients: readonly ClientType[];
   readonly exclude?: string[];
-  readonly fileArtifacts?: MarketplaceFileArtifacts;
+  readonly components?: PluginComponents;
 }
 
 /**
@@ -996,20 +874,17 @@ function mergeAgentOutputConsumer(
 }
 
 async function readAgentSourceEntries(
-  sourceDir: string,
-): Promise<{ files: Dirent[]; error?: string }> {
-  if (!existsSync(sourceDir)) return { files: [] };
+  sourcePath: string,
+  pluginPath: string,
+  exclude?: string[],
+): Promise<{ files: ComponentFile[]; error?: string }> {
   try {
     return {
-      files: (await readdir(sourceDir, { withFileTypes: true }))
-        .filter((entry) => !entry.isDirectory() && entry.name.endsWith('.md'))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+      files: (await collectComponentFiles(sourcePath, pluginPath, exclude, false))
+        .filter((file) => file.source.endsWith('.md')),
     };
   } catch (error) {
-    return {
-      files: [],
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { files: [], error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
@@ -1046,49 +921,51 @@ export async function planAgentOutputs(
       clientMappings,
     );
     const candidates = new Map<string, AgentOutput>();
-    const includePortable = plugin.fileArtifacts?.agents ?? true;
-    const includeGithub = plugin.fileArtifacts?.github ?? true;
+    const components = plugin.components ?? resolvePluginComponents(plugin.pluginPath, undefined, { exclude: plugin.exclude });
+    const includeGithub = components.github;
 
     const portableDestination = plugin.clients
       .map((client) => resolvedPluginMappings[client]?.agentsPath)
       .find((path): path is string => path !== undefined);
-    if (includePortable && portableDestination) {
-      const sourceDir = join(plugin.pluginPath, 'agents');
-      const sourceEntries = await readAgentSourceEntries(sourceDir);
-      if (sourceEntries.error) {
-        failures.push({
-          configurationIndex: plugin.configurationIndex,
-          plugin: plugin.plugin,
-          source: sourceDir,
-          destination: join(workspacePath, portableDestination),
-          error: sourceEntries.error,
-        });
-      }
-      for (const entry of sourceEntries.files) {
-        const source = join(sourceDir, entry.name);
-        if (isExcluded(plugin.pluginPath, source, plugin.exclude)) continue;
-        const logicalName = await readAgentLogicalName(source, logicalNames);
-        for (const client of plugin.clients) {
-          const agentsPath = resolvedPluginMappings[client]?.agentsPath;
-          if (!agentsPath) continue;
-          const destination = join(
-            resolveMappedPath(workspacePath, agentsPath),
-            entry.name,
-          );
-          mergeAgentOutputConsumer(candidates, {
+    if (portableDestination) {
+      for (const sourceDir of components.agents) {
+        const sourceEntries = await readAgentSourceEntries(
+          sourceDir, plugin.pluginPath, plugin.exclude,
+        );
+        if (sourceEntries.error) {
+          failures.push({
             configurationIndex: plugin.configurationIndex,
             plugin: plugin.plugin,
-            pluginPath: plugin.pluginPath,
-            source,
-            destination,
-            workspaceRelativeDestination: workspaceRelativePath(
-              workspacePath,
-              destination,
-            ),
-            route: 'portable',
-            ...(logicalName && { logicalName }),
-            clients: [client],
+            source: sourceDir,
+            destination: join(workspacePath, portableDestination),
+            error: sourceEntries.error,
           });
+        }
+        for (const entry of sourceEntries.files) {
+          const source = entry.source;
+          const logicalName = await readAgentLogicalName(source, logicalNames);
+          for (const client of plugin.clients) {
+            const agentsPath = resolvedPluginMappings[client]?.agentsPath;
+            if (!agentsPath) continue;
+            const destination = join(
+              resolveMappedPath(workspacePath, agentsPath),
+              entry.relativePath,
+            );
+            mergeAgentOutputConsumer(candidates, {
+              configurationIndex: plugin.configurationIndex,
+              plugin: plugin.plugin,
+              pluginPath: plugin.pluginPath,
+              source,
+              destination,
+              workspaceRelativeDestination: workspaceRelativePath(
+                workspacePath,
+                destination,
+              ),
+              route: 'portable',
+              ...(logicalName && { logicalName }),
+              clients: [client],
+            });
+          }
         }
       }
     }
@@ -1098,7 +975,7 @@ export async function planAgentOutputs(
       .find((path): path is string => path !== undefined);
     if (includeGithub && githubDestination) {
       const sourceDir = join(plugin.pluginPath, '.github', 'agents');
-      const sourceEntries = await readAgentSourceEntries(sourceDir);
+      const sourceEntries = await readAgentSourceEntries(sourceDir, plugin.pluginPath, plugin.exclude);
       if (sourceEntries.error) {
         failures.push({
           configurationIndex: plugin.configurationIndex,
@@ -1109,7 +986,7 @@ export async function planAgentOutputs(
         });
       }
       for (const entry of sourceEntries.files) {
-        const source = join(sourceDir, entry.name);
+        const source = entry.source;
         if (isExcluded(plugin.pluginPath, source, plugin.exclude)) continue;
         const logicalName = await readAgentLogicalName(source, logicalNames);
         for (const client of plugin.clients) {
@@ -1119,7 +996,7 @@ export async function planAgentOutputs(
             workspacePath,
             githubPath,
             'agents',
-            entry.name,
+            entry.relativePath,
           );
           mergeAgentOutputConsumer(candidates, {
             configurationIndex: plugin.configurationIndex,
@@ -1309,6 +1186,9 @@ function githubContentExcludes(
   // Top-level Markdown definitions use the per-file ownership plan. Nested
   // files and companion assets retain the aggregate copy behavior.
   effectiveExclude.push('.github/agents/*.md', '.github/agents/.*.md');
+  // MCP configuration is reconciled server-by-server, never overlaid wholesale.
+  // Lower-priority conventional files are configuration too, not payloads.
+  effectiveExclude.push('.github/mcp.json');
 
   // Copilot plugin package metadata is used to discover a native plugin, but
   // it has no runtime role after file-mode content is overlaid into a project.
@@ -1514,6 +1394,7 @@ async function copyPlannedAgentOutputs(
     outputs.map(async (output): Promise<CopyResult> => {
       const client = output.clients[0];
       try {
+        await assertSafePluginSource(output.pluginPath, output.source);
         await assertSafeDestination(
           options.writeRoot ?? dirname(output.destination),
           output.destination,
@@ -1528,18 +1409,8 @@ async function copyPlannedAgentOutputs(
           artifactType: 'agent',
         };
       }
-      if (options.dryRun) {
-        return {
-          source: output.source,
-          destination: output.destination,
-          action: 'copied',
-          ...(client && { client }),
-          artifactType: 'agent',
-        };
-      }
 
       try {
-        await mkdir(dirname(output.destination), { recursive: true });
         let content = await readFile(output.source, 'utf-8');
         if (output.route === 'github') {
           const sourceRelativeToGithub = relative(
@@ -1556,10 +1427,14 @@ async function copyPlannedAgentOutputs(
             workspaceSkillsPath: skillsPath,
           });
         }
-        await writeFile(output.destination, content, 'utf-8');
+        if (!options.dryRun) {
+          await mkdir(dirname(output.destination), { recursive: true });
+          await writeFile(output.destination, content, 'utf-8');
+        }
         return {
           source: output.source,
           destination: output.destination,
+          content,
           action: 'copied',
           ...(client && { client }),
           artifactType: 'agent',
@@ -1593,6 +1468,8 @@ export async function copyGitHubContent(
   const mapping = getMapping(client, options);
   const mappings = options.clientMappings ?? CLIENT_MAPPINGS;
   const results: CopyResult[] = [];
+  const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude });
+  if (!components.github) return results;
   if (!mapping.githubPath) {
     return options.agentOutputs
       ? copyPlannedAgentOutputs(options.agentOutputs, {
@@ -1618,6 +1495,7 @@ export async function copyGitHubContent(
           pluginPath,
           clients: [client],
           ...(options.exclude && { exclude: options.exclude }),
+          components,
         },
       ],
       workspacePath,
@@ -1703,11 +1581,8 @@ export async function copyGitHubContent(
  * Options for copying a plugin to workspace
  */
 export interface PluginCopyOptions extends CopyOptions {
-  /**
-   * File artifacts explicitly exposed by a non-strict marketplace entry.
-   * Undefined preserves conventional plugin-directory discovery.
-   */
-  fileArtifacts?: MarketplaceFileArtifacts;
+  /** Selected component sources; direct callers resolve them by default. */
+  components?: PluginComponents;
   /**
    * Map of skill folder name to resolved name for this specific plugin.
    * When provided, skills will be copied using the resolved name instead of folder name.
@@ -1751,12 +1626,11 @@ export async function copyPluginToWorkspace(
     skillNameMap,
     syncMode,
     canonicalSkillsPath,
-    fileArtifacts,
+    components = resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude }),
     agentOutputs: providedAgentOutputs,
-    ...baseOptions
+    ...remainingOptions
   } = options;
-  const shouldCopy = (artifact: keyof MarketplaceFileArtifacts): boolean =>
-    fileArtifacts?.[artifact] ?? true;
+  const baseOptions: CopyOptions = { ...remainingOptions, components };
   const mappings = options.clientMappings ?? CLIENT_MAPPINGS;
 
   let agentOutputs = providedAgentOutputs;
@@ -1771,7 +1645,7 @@ export async function copyPluginToWorkspace(
           pluginPath,
           clients: [client],
           ...(baseOptions.exclude && { exclude: baseOptions.exclude }),
-          ...(fileArtifacts && { fileArtifacts }),
+          components,
         },
       ],
       workspacePath,
@@ -1784,34 +1658,29 @@ export async function copyPluginToWorkspace(
 
   const [commandResults, skillResults, hookResults, portableAgentResults] =
     await Promise.all([
-      shouldCopy('commands')
-        ? copyCommands(pluginPath, workspacePath, client, baseOptions)
-        : [],
-      shouldCopy('skills')
-        ? copySkills(pluginPath, workspacePath, client, {
-            ...baseOptions,
-            ...(skillNameMap && { skillNameMap }),
-            ...(syncMode && { syncMode }),
-            ...(canonicalSkillsPath && { canonicalSkillsPath }),
-          })
-        : [],
-      shouldCopy('hooks')
-        ? copyHooks(pluginPath, workspacePath, client, baseOptions)
-        : [],
+      copyCommands(pluginPath, workspacePath, client, baseOptions),
+      copySkills(pluginPath, workspacePath, client, {
+        ...baseOptions,
+        ...(skillNameMap && { skillNameMap }),
+        ...(syncMode && { syncMode }),
+        ...(canonicalSkillsPath && { canonicalSkillsPath }),
+      }),
+      copyHooks(pluginPath, workspacePath, client, baseOptions),
       copyPlannedAgentOutputs(
         agentOutputs.filter((output) => output.route === 'portable'),
         {
           dryRun: baseOptions.dryRun ?? false,
           clientMappings: mappings,
           ...(skillNameMap && { skillNameMap }),
-          ...(baseOptions.writeRoot && { writeRoot: baseOptions.writeRoot }),
+          writeRoot: baseOptions.writeRoot ?? workspacePath,
         },
       ),
     ]);
 
-  const githubResults = shouldCopy('github')
+  const githubResults = components.github
     ? await copyGitHubContent(pluginPath, workspacePath, client, {
         ...baseOptions,
+        writeRoot: baseOptions.writeRoot ?? workspacePath,
         ...(skillNameMap && { skillNameMap }),
         agentOutputs: agentOutputs.filter(
           (output) => output.route === 'github',

@@ -217,6 +217,24 @@ describe('syncUserMcpOnly', () => {
     expect(result).toEqual({ success: true, mcpResults: {}, warnings: [] });
   });
 
+  test.each([
+    ['MCP-only update', syncUserMcpOnly],
+    ['full user sync', syncUserWorkspace],
+  ] as const)('%s retains owned MCP and state when a selected source becomes invalid', async (_name, sync) => {
+    const plugin = join(home, 'plugin');
+    await mkdir(plugin);
+    await writeFile(join(plugin, '.mcp.json'), JSON.stringify({ mcpServers: { owned: { command: 'owned-mcp' } } }));
+    await writeUserConfig({ repositories: [], plugins: [plugin], clients: ['copilot'] });
+    expect((await sync({ offline: true })).success).toBe(true);
+    const original = await readFile(getCopilotMcpConfigPath(), 'utf8');
+    const state = await readFile(getSyncStatePath(home), 'utf8');
+    await writeFile(join(plugin, '.mcp.json'), '{invalid');
+    const result = await sync({ offline: true });
+    expect(result.success).toBe(false);
+    expect(await readFile(getCopilotMcpConfigPath(), 'utf8')).toBe(original);
+    expect(await readFile(getSyncStatePath(home), 'utf8')).toBe(state);
+  });
+
   test('keeps dry-run free of destination and state writes', async () => {
     await writeUserConfig({
       repositories: [],

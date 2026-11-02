@@ -177,7 +177,7 @@ clients:
       const result = await syncWorkspace(testDir);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('All plugins failed validation');
+      expect(result.error).toContain('Plugin validation failed');
       expect(result.error).toContain('workspace unchanged');
 
       // Verify existing files were NOT purged

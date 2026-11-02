@@ -538,6 +538,10 @@
                     ],
                     "additionalProperties": false
                   },
+                  "hooks": {
+                    "type": "boolean",
+                    "const": false
+                  },
                   "ref": {
                     "type": "string"
                   }

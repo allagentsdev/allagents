@@ -252,7 +252,7 @@ describe('planned agent output dedupe', () => {
     expect(outputPlan.conflicts[0]?.reason).toBe('logical-name');
   });
 
-  it('applies excludes and marketplace artifact gates while planning', async () => {
+  it('applies plugin-relative excludes and disables development overlays while planning', async () => {
     await writeAgent(pluginDir, 'agents/keep.md', 'keep', 'Keep');
     await writeAgent(pluginDir, 'agents/drop.md', 'drop', 'Drop');
     await writeAgent(
@@ -270,13 +270,13 @@ describe('planned agent output dedupe', () => {
           pluginPath: pluginDir,
           clients: ['copilot'],
           exclude: ['agents/drop.md'],
-          fileArtifacts: {
-            agents: true,
-            commands: true,
+          components: {
+            agents: [join(pluginDir, 'agents')],
+            commands: [],
             github: false,
-            hooks: true,
-            mcpServers: true,
-            skills: true,
+            hooks: [],
+            mcpServers: [],
+            skills: [],
           },
         },
       ],
@@ -287,6 +287,31 @@ describe('planned agent output dedupe', () => {
     expect(
       outputPlan.outputs.map((output) => output.workspaceRelativeDestination),
     ).toEqual(['.github/agents/keep.md']);
+  });
+
+  it('retains first-provider ownership for individually declared custom agents', async () => {
+    const pluginA = join(testDir, 'plugin-a');
+    const pluginB = join(testDir, 'plugin-b');
+    for (const pluginPath of [pluginA, pluginB]) {
+      await writeAgent(pluginPath, 'custom/reviewer.agent.md', 'reviewer', pluginPath);
+      await writeAgent(pluginPath, 'agents/ignored.md', 'ignored', 'Default');
+      await mkdir(join(pluginPath, '.claude-plugin'), { recursive: true });
+      await writeFile(join(pluginPath, '.claude-plugin/plugin.json'), JSON.stringify({
+        name: 'custom-plugin', agents: './custom/reviewer.agent.md',
+      }));
+    }
+    const outputPlan = await planAgentOutputs([
+      { configurationIndex: 0, plugin: 'plugin-a', pluginPath: pluginA, clients: ['copilot'] },
+      { configurationIndex: 1, plugin: 'plugin-b', pluginPath: pluginB, clients: ['copilot'] },
+    ], workspaceDir);
+    expect(outputPlan.outputs).toHaveLength(1);
+    expect(outputPlan.outputs[0]?.source).toBe(join(pluginA, 'custom/reviewer.agent.md'));
+    expect(outputPlan.conflicts).toHaveLength(1);
+    await copyPluginToWorkspace(pluginA, workspaceDir, 'copilot', { agentOutputs: outputPlan.outputs });
+    await copyPluginToWorkspace(pluginB, workspaceDir, 'copilot', { agentOutputs: [] });
+    expect(await readFile(join(workspaceDir, '.github/agents/reviewer.agent.md'), 'utf-8'))
+      .toBe(agent('reviewer', pluginA));
+    expect(existsSync(join(workspaceDir, '.github/agents/ignored.md'))).toBe(false);
   });
 
   it('uses the same ownership and dedupe decisions in dry-run without writing', async () => {

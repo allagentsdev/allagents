@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
-  type MarketplaceFileArtifacts,
   type MarketplaceManifest,
   MarketplaceManifestLenientSchema,
   MarketplaceManifestSchema,
@@ -10,8 +9,9 @@ import {
   MarketplacePluginEntrySchema,
   type PluginSourceRef,
   PluginSourceRefSchema,
-  getMarketplaceFileArtifacts,
 } from '../models/marketplace-manifest.js';
+import type { PluginComponentPolicy } from '../models/plugin-components.js';
+import { assertPluginComponentPath } from '../core/plugin-components.js';
 
 const MANIFEST_PATHS = [
   '.github/plugin/marketplace.json',
@@ -34,10 +34,17 @@ export type ParseResult =
 export async function parseMarketplaceManifest(
   marketplacePath: string,
   selectedPlugin?: string,
+  componentPolicy?: PluginComponentPolicy,
 ): Promise<ParseResult> {
   const manifestPath = MANIFEST_PATHS
     .map((path) => join(marketplacePath, path))
-    .find((path) => existsSync(path));
+    .find((path) => {
+      try { lstatSync(path); return true; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    });
 
   if (!manifestPath) {
     return {
@@ -48,6 +55,7 @@ export async function parseMarketplaceManifest(
 
   let raw: string;
   try {
+    assertPluginComponentPath(marketplacePath, manifestPath);
     raw = await readFile(manifestPath, 'utf-8');
   } catch (err) {
     return {
@@ -66,15 +74,26 @@ export async function parseMarketplaceManifest(
     };
   }
 
-  // A selected remote declaration must fail closed without preventing
-  // best-effort listing or resolution of other valid catalogue entries.
+  // Invalid selected declarations are not authoritative absence. Strict does
+  // not change which components load; catalogue shapes are checked in all modes.
   if (selectedPlugin && isRecord(json) && Array.isArray(json.plugins)) {
     for (const [index, entry] of json.plugins.entries()) {
-      if (!isRecord(entry) || entry.name !== selectedPlugin || !isRecord(entry.source)) continue;
+      if (isRecord(entry) && entry.name === selectedPlugin) {
+        for (const field of ['skills', 'commands', 'agents', 'hooks', 'mcpServers', 'strict'] as const) {
+          if (field === 'hooks' && componentPolicy?.hooks === false) continue;
+          const fieldSchema = MarketplacePluginEntrySchema.shape[field];
+          if (!fieldSchema.safeParse(entry[field]).success) {
+            return { success: false, error: `plugins[${index}]: invalid "${field}" declaration` };
+          }
+        }
+      }
+      if (!isRecord(entry) || entry.name !== selectedPlugin) continue;
       if (!PluginSourceRefSchema.safeParse(entry.source).success) {
         return {
           success: false,
-          error: `plugins[${index}]: invalid external source (SHA pins are not supported by file installations)`,
+          error: isRecord(entry.source)
+            ? `plugins[${index}]: invalid external source (SHA pins are not supported by file installations)`
+            : `plugins[${index}]: missing or invalid "source" declaration`,
         };
       }
     }
@@ -88,35 +107,6 @@ export async function parseMarketplaceManifest(
 
   // Tier 2: lenient parsing
   return parseLeniently(json, selectedPlugin);
-}
-
-/**
- * Read a plugin repository's own marketplace manifest and return the file
- * artifact boundary for the entry whose source is the repository root.
- *
- * A preferred name disambiguates repositories that expose multiple root
- * entries. When there is only one root entry, it is safe to use for direct
- * repository sources whose directory name differs from the plugin name.
- */
-export async function getEmbeddedMarketplaceFileArtifacts(
-  pluginPath: string,
-  preferredName?: string,
-): Promise<MarketplaceFileArtifacts | undefined> {
-  const manifestResult = await parseMarketplaceManifest(pluginPath);
-  if (!manifestResult.success) return undefined;
-
-  const pluginRoot = resolve(pluginPath);
-  const rootEntries = manifestResult.data.plugins.filter(
-    (entry) =>
-      typeof entry.source === 'string' &&
-      entry.source.length > 0 &&
-      resolve(pluginPath, entry.source) === pluginRoot,
-  );
-  const entry =
-    rootEntries.find((candidate) => candidate.name === preferredName) ??
-    (rootEntries.length === 1 ? rootEntries[0] : undefined);
-
-  return entry ? getMarketplaceFileArtifacts(entry) : undefined;
 }
 
 /**

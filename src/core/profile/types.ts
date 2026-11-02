@@ -1,4 +1,5 @@
 import type { ClientMapping } from '../../models/client-mapping.js';
+import type { PluginComponents } from '../../models/plugin-components.js';
 import type {
   ClientType,
   InstallMode,
@@ -68,6 +69,7 @@ export interface ProfileResolvedPlugin {
   readonly resolvedRef?: string;
   readonly resolvedSha?: string;
   readonly path?: string;
+  readonly components?: PluginComponents;
   readonly marketplace?: string;
   readonly pluginName?: string;
   readonly marketplaceSource?: string;

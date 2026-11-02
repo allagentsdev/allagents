@@ -132,6 +132,43 @@ description: pdf
 
     expect(skills.map((s) => s.folderName).sort()).toEqual(['llm-wiki', 'nano-pdf']);
   });
+
+  it('uses explicitly supplied components and nested allowlists instead of rediscovery', async () => {
+    const pluginDir = join(testDir, 'selected-plugin');
+    await mkdir(join(pluginDir, 'skills/default'), { recursive: true });
+    await mkdir(join(pluginDir, 'custom/category/keep'), { recursive: true });
+    await mkdir(join(pluginDir, 'custom/category/drop'), { recursive: true });
+    await writeFile(join(pluginDir, 'skills/default/SKILL.md'), '# Default');
+    await writeFile(join(pluginDir, 'custom/category/keep/SKILL.md'), '# Keep');
+    await writeFile(join(pluginDir, 'custom/category/drop/SKILL.md'), '# Drop');
+    const components = {
+      skills: [join(pluginDir, 'custom')], commands: [], agents: [],
+      hooks: [], mcpServers: [], github: false,
+    };
+    const skills = await collectPluginSkills(
+      pluginDir, 'selected', undefined, 'selected-plugin', undefined,
+      ['category/keep'], undefined, components,
+    );
+    expect(skills.map((skill) => skill.folderName)).toEqual(['keep']);
+    expect(skills[0]?.skillPath).toBe(join(pluginDir, 'custom/category/keep'));
+    components.skills = [];
+    expect(await collectPluginSkills(
+      pluginDir, 'selected', undefined, undefined, undefined, undefined, undefined, components,
+    )).toEqual([]);
+  });
+
+  it('does not reinterpret an explicitly selected SKILL.md file as a skill directory', async () => {
+    const pluginDir = join(testDir, 'file-skill-plugin');
+    await mkdir(join(pluginDir, 'custom/skill'), { recursive: true });
+    await writeFile(join(pluginDir, 'custom/skill/SKILL.md'), '# Skill');
+    const components = {
+      skills: [join(pluginDir, 'custom/skill/SKILL.md')], commands: [], agents: [],
+      hooks: [], mcpServers: [], github: false,
+    };
+    expect(await collectPluginSkills(
+      pluginDir, 'selected', undefined, undefined, undefined, undefined, undefined, components,
+    )).toEqual([]);
+  });
 });
 
 describe('skill name resolution in sync', () => {

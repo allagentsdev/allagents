@@ -170,6 +170,8 @@ const PluginEntryObjectSchema = z
     exclude: z.array(z.string()).optional(),
     skills: PluginSkillsConfigSchema.optional(),
     mcpServers: PluginMcpServersConfigSchema.optional(),
+    /** Disable distributed component hooks without suppressing other components. */
+    hooks: z.literal(false).optional(),
     /**
      * Optional Git ref (tag or branch). Equivalent to passing the
      * `owner/repo@<ref>` shorthand on install. When set, every sync resolves

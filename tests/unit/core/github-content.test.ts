@@ -39,6 +39,34 @@ describe('copyGitHubContent', () => {
     expect(content).toBe('# Test Prompt');
   });
 
+  for (const preferRoot of [false, true]) {
+    it(`preserves user MCP configuration during raw overlays${preferRoot ? ' with root MCP precedence' : ''}`, async () => {
+      await mkdir(join(pluginDir, '.github/prompts'), { recursive: true });
+      await writeFile(join(pluginDir, '.github/mcp.json'), JSON.stringify({
+        mcpServers: { plugin_server: { command: 'plugin-command' } },
+      }));
+      await writeFile(join(pluginDir, '.github/prompts/keep.md'), '# Keep');
+      if (preferRoot) {
+        await writeFile(join(pluginDir, '.mcp.json'), JSON.stringify({
+          mcpServers: { preferred_server: { command: 'preferred-command' } },
+        }));
+      }
+      await mkdir(join(workspaceDir, '.github'), { recursive: true });
+      const userConfig = JSON.stringify({
+        servers: { user_server: { command: 'user-command' } },
+      });
+      await writeFile(join(workspaceDir, '.github/mcp.json'), userConfig);
+      const results = await copyGitHubContent(pluginDir, workspaceDir, 'copilot');
+      expect(results.every((result) => result.action === 'copied')).toBe(true);
+      expect(await readFile(join(workspaceDir, '.github/mcp.json'), 'utf-8')).toBe(userConfig);
+      expect(await readFile(join(workspaceDir, '.github/prompts/keep.md'), 'utf-8')).toBe('# Keep');
+
+      await rm(join(workspaceDir, '.github/mcp.json'));
+      await copyGitHubContent(pluginDir, workspaceDir, 'copilot');
+      expect(existsSync(join(workspaceDir, '.github/mcp.json'))).toBe(false);
+    });
+  }
+
   it('copies .github/agents/ for copilot client', async () => {
     await mkdir(join(pluginDir, '.github', 'agents'), { recursive: true });
     await writeFile(join(pluginDir, '.github', 'agents', 'reviewer.agent.md'), '# Reviewer');
@@ -112,7 +140,7 @@ describe('copyGitHubContent', () => {
     expect(content).toBe('{"hooks":[]}');
   });
 
-  it('does not copy Copilot package metadata into the project overlay', async () => {
+  it('does not copy development GitHub content from manifest-bearing plugins', async () => {
     await mkdir(join(pluginDir, '.github', 'plugin'), { recursive: true });
     await mkdir(join(pluginDir, '.github', 'prompts'), { recursive: true });
     await writeFile(
@@ -123,12 +151,12 @@ describe('copyGitHubContent', () => {
 
     const results = await copyGitHubContent(pluginDir, workspaceDir, 'copilot');
 
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(0);
     expect(
       existsSync(join(workspaceDir, '.github', 'plugin', 'plugin.json')),
     ).toBe(false);
     expect(existsSync(join(workspaceDir, '.github', 'prompts', 'keep.md'))).toBe(
-      true,
+      false,
     );
   });
 

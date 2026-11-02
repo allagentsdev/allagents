@@ -70,48 +70,113 @@ in the usual directories of plugins installed directly from local paths or
 GitHub. A missing hook configuration or one with `disableAllHooks: true` adds no
 hooks to the generated file.
 
-AllAgents warns and skips a hook configuration if it cannot read or parse the
-JSON, or if the file does not contain `version: 1` and a `hooks` object. Unless
-hooks are disabled, each event's value must also be an array. AllAgents does not
-fully validate individual hook entries. Skipping one plugin's hook configuration
-still allows its other eligible files, including files under `.github/hooks/`,
-and valid hooks from other plugins to sync. Client selection and file exclusions
-still apply.
+Selected hook files must contain a `hooks` object whose event values are arrays.
+The plugin input may omit `version`; if supplied for Copilot it must be `1`.
+AllAgents emits its managed project file with `version: 1`. Unreadable, malformed,
+or unsafe selected hook configuration fails file-plugin validation before owned
+artifacts are removed. It is not silently skipped while other plugins are
+partially reconciled. Individual hook entries still follow the target adapter's
+supported format. Client selection, file exclusions, and `hooks: false` apply.
 
 At user scope, root `hooks/` entries sync to the client's user hook directory.
 Repository hooks under `.github/hooks/` stay project-scoped and are not copied
 to `~/.copilot/hooks/`. Potential copies from older versions are left untouched
 and reported for manual review because their ownership was not tracked.
-## Marketplace Component Boundaries
+## Marketplace component discovery
 
-AllAgents recognizes marketplace manifests at both
-`.claude-plugin/marketplace.json` and `.github/plugin/marketplace.json`. The
-GitHub Copilot location takes precedence when a repository contains both.
+AllAgents prefers `.github/plugin/marketplace.json` over
+`.claude-plugin/marketplace.json`. An invalid preferred marketplace fails
+resolution; it does not fall back to the other file.
 
-A marketplace entry with `strict: false` limits copied skills, commands, agents,
-and hooks to the declared component kinds. For example, this entry syncs the
-repository's top-level skills without treating its top-level hooks or `.github/`
-development configuration as plugin artifacts:
+`strict` is not a component allowlist. Omitted components are discovered from
+their conventional locations under `strict: false`, `strict: true`, and the
+default mode. The [Copilot CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference#marketplacejson)
+describes `strict` as a validation mode. Copilot 1.0.103 fixture installs showed
+no install-time distinction between these modes; malformed marketplace
+component fields were rejected in every mode. AllAgents never relaxes source
+containment or user exclusions based on `strict`.
 
-```json
-{
-  "name": "skills-only",
-  "source": "./",
-  "strict": false,
-  "skills": ["./skills/"]
-}
+For legacy plugins, the first plugin manifest is selected in this order:
+`.plugin/plugin.json`, `plugin.json`, `.github/plugin/plugin.json`, then
+`.claude-plugin/plugin.json`. Invalid preferred manifests and escaping paths
+fail closed in AllAgents, even where native feature loading falls back.
+
+| Component | Conventional source | Explicit plugin-manifest form |
+|---|---|---|
+| Skills | `skills/`, with a root `SKILL.md` fallback | A path or array of skill directories |
+| Commands | `commands/` | A path or array of directories or Markdown files |
+| Agents | `agents/` | A path or array of directories or agent files |
+| Hooks | `hooks.json`, then `hooks/hooks.json` | A configuration path or inline event map |
+| MCP | `.mcp.json`, then `.github/mcp.json` | A configuration path or inline server map |
+
+Explicit skill, command, and agent paths replace the conventional sources.
+An empty array disables that component. An explicit hook map replaces default
+hooks; an empty map disables them. A missing hook configuration path falls back
+to the conventional hook declaration. Paths resolve from the plugin root and
+must stay inside it, including through symlinks.
+
+Conventional MCP files take precedence over `mcpServers` in the plugin manifest.
+The marketplace entry's `mcpServers` is used only when neither a conventional
+file nor a plugin-manifest MCP declaration supplies configuration. This matches
+the [legacy file locations](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference#file-locations).
+Marketplace skill, command, agent, and hook declarations do not override the
+plugin's component discovery in the observed Copilot 1.0.103 loader. Put custom
+paths for those components in the plugin manifest.
+
+Marketplace and plugin manifests do not expose the whole repository's
+`.github/` directory. Development instructions, hooks, workflows, and package
+metadata are not copied as plugin components. An explicitly declared component
+path inside `.github/` is still eligible. Ordinary AllAgents file sources with
+no marketplace or plugin manifest retain their repository-overlay behavior;
+use `exclude` to filter that content.
+
+### Migrating from the component allowlist
+
+Older AllAgents versions treated `strict: false` as a list of component kinds to
+distribute. It no longer suppresses undeclared root hooks, commands, agents, or
+MCP. Keep development-only configuration outside the plugin's distributable
+root, or exclude it in the workspace declaration:
+
+```yaml
+plugins:
+  - source: /path/to/plugin
+    install: file
+    hooks: false
+    exclude:
+      - commands/**
+      - agents/**
+      - .github/**
+    mcpServers:
+      exclude: [development-server]
 ```
 
-Root `.mcp.json` is discovered even when the entry omits `mcpServers`, matching
-native Copilot and Codex plugin discovery. This MCP exception does not enable
-undeclared hooks, commands, agents, skills, or repository `.github/` content.
-Keep development-only MCP configuration outside the distributable plugin root.
+`hooks: false` disables copied and generated plugin hook components without
+disabling inline MCP from the same manifest. File exclusions remain relative
+to the original plugin root, including custom component paths. Excluding the
+manifest that declares an inline configuration also excludes that inline
+configuration. Individual inline hook events are not selectable.
 
-Without `strict: false`, AllAgents retains conventional plugin-directory
-discovery for compatibility. Top-level `hooks/` remains the portable hook
-location; `.github/` represents repository-scoped GitHub content. Component
-kind filtering currently uses AllAgents' conventional root directories, so
-custom marketplace component paths are not yet remapped.
+Hook command dependencies are not inferred from arbitrary shell text. If an
+excluded script is outside the selected hook resources, use `hooks: false` to
+prevent the declaration from invoking it.
+
+A missing, invalid, or unsafe configured file-plugin source fails sync before
+existing owned artifacts are removed. Previously installed files and tracking
+remain intact; repair or remove the declaration before retrying. AllAgents does
+not partially purge a workspace when another configured source cannot resolve.
+
+Client support, project/user scope, and JSON schema translation still apply.
+Commands and hook formats are only installed where the existing client adapter
+supports them; a Claude hook event map is not automatically a Copilot hook map.
+LSP declarations and other unsupported manifest components are not installed.
+This legacy discovery support does not adopt the portable Agent Plugins
+`mcp.json` format or its schemas.
+
+AllAgents does not supply native MCP `PLUGIN_ROOT` environment variables,
+substitute them in commands/arguments, or implicitly set the plugin working
+directory. Use an executable on `PATH` or explicit paths and environment values
+supported by the target adapter. This discovery change does not add those
+runtime conventions; user CLI adapters also do not forward MCP `cwd`.
 
 ## Duplicate Skill Handling
 

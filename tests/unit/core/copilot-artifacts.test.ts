@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { copyAgents, copyHooks, copyPluginToWorkspace } from '../../../src/core/transform.js';
+import { copyAgents, copyCommands, copyHooks, copySkills, copyPluginToWorkspace, collectPluginSkills } from '../../../src/core/transform.js';
+import { resolvePluginComponents } from '../../../src/core/plugin-components.js';
+import { USER_CLIENT_MAPPINGS } from '../../../src/models/client-mapping.js';
 
 describe('copilot agents and hooks sync', () => {
   let testDir: string;
@@ -58,14 +60,235 @@ describe('copilot agents and hooks sync', () => {
       expect(content).toBe('{"hooks":[]}');
     });
 
+    it('never copies a lower-priority hook declaration as a resource payload', async () => {
+      await mkdir(join(pluginDir, 'hooks'), { recursive: true });
+      const rootConfig = '{"hooks":{"SessionStart":[]},"source":"root"}';
+      await writeFile(join(pluginDir, 'hooks.json'), rootConfig);
+      await writeFile(join(pluginDir, 'hooks/hooks.json'), '{"hooks":{"SessionStart":[]},"source":"fallback"}');
+      await writeFile(join(pluginDir, 'hooks/safety.sh'), 'echo safe');
+      await copyHooks(pluginDir, workspaceDir, 'copilot');
+      await copyHooks(pluginDir, workspaceDir, 'claude');
+      expect(existsSync(join(workspaceDir, '.github/hooks/hooks.json'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/hooks/safety.sh'))).toBe(true);
+      expect(await readFile(join(workspaceDir, '.claude/hooks/hooks.json'), 'utf-8')).toBe(rootConfig);
+    });
+
     it('returns empty when plugin has no hooks/ directory', async () => {
       const results = await copyHooks(pluginDir, workspaceDir, 'copilot');
       expect(results).toHaveLength(0);
     });
+    it('does not rediscover portable hooks when resolved sources are empty', async () => {
+      await mkdir(join(pluginDir, 'hooks'), { recursive: true });
+      await writeFile(join(pluginDir, 'hooks/portable.json'), '{"hooks":[]}');
+      const components = resolvePluginComponents(pluginDir);
+      components.hooks = [];
+      components.hookResources = [];
+      expect(await copyHooks(pluginDir, workspaceDir, 'copilot', { components })).toEqual([]);
+      expect(existsSync(join(workspaceDir, '.github/hooks/portable.json'))).toBe(false);
+    });
+  });
+  describe('manifest-selected components', () => {
+    async function manifest(components: Record<string, unknown>): Promise<void> {
+      await mkdir(join(pluginDir, '.claude-plugin'), { recursive: true });
+      await writeFile(join(pluginDir, '.claude-plugin', 'plugin.json'),
+        JSON.stringify({ name: 'selected-plugin', version: '1.0.0', ...components }));
+    }
+
+    it('replaces conventional components and honors original-root exclusions', async () => {
+      for (const path of ['skills/default', 'commands', 'agents', 'custom/skills/category/keep',
+        'custom/skills/category/drop', 'custom/commands/nested', 'custom/agents/nested', '.github/workflows']) {
+        await mkdir(join(pluginDir, path), { recursive: true });
+      }
+      await writeFile(join(pluginDir, 'skills/default/SKILL.md'), '# Default');
+      await writeFile(join(pluginDir, 'commands/default.md'), '# Default');
+      await writeFile(join(pluginDir, 'agents/default.agent.md'), '# Default');
+      await writeFile(join(pluginDir, 'custom/skills/category/keep/SKILL.md'), '# Keep');
+      await writeFile(join(pluginDir, 'custom/skills/category/keep/private.txt'), 'private');
+      await writeFile(join(pluginDir, 'custom/skills/category/drop/SKILL.md'), '# Drop');
+      await writeFile(join(pluginDir, 'custom/commands/keep.md'), '# Keep');
+      await writeFile(join(pluginDir, 'custom/commands/drop.md'), '# Drop');
+      await writeFile(join(pluginDir, 'custom/commands/nested/ignored.md'), '# Nested');
+      await writeFile(join(pluginDir, 'custom/agents/keep.agent.md'), '# Keep');
+      await writeFile(join(pluginDir, 'custom/agents/nested/ignored.agent.md'), '# Nested');
+      await writeFile(join(pluginDir, '.github/workflows/dev.yml'), 'development');
+      await manifest({ skills: './custom/skills', commands: './custom/commands', agents: './custom/agents' });
+
+      const results = await copyPluginToWorkspace(pluginDir, workspaceDir, 'claude', {
+        exclude: ['custom/commands/drop.md', 'custom/skills/category/drop', 'custom/skills/category/keep/private.txt'],
+        skillNameMap: new Map([['category/keep', 'renamed']]),
+      });
+      expect(results.every((result) => result.action === 'copied')).toBe(true);
+      expect(await readFile(join(workspaceDir, '.claude/skills/renamed/SKILL.md'), 'utf-8')).toBe('# Keep');
+      expect(existsSync(join(workspaceDir, '.claude/skills/renamed/private.txt'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/commands/keep.md'))).toBe(true);
+      expect(existsSync(join(workspaceDir, '.claude/commands/drop.md'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/commands/nested'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/agents/keep.agent.md'))).toBe(true);
+      expect(existsSync(join(workspaceDir, '.claude/agents/nested'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/skills/default'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/commands/default.md'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/agents/default.agent.md'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/workflows/dev.yml'))).toBe(false);
+    });
+
+    it('copies an explicit plugin-root skill collection without a root definition', async () => {
+      await mkdir(join(pluginDir, 'category/keep/scripts'), { recursive: true });
+      await mkdir(join(pluginDir, 'category/drop'), { recursive: true });
+      await writeFile(join(pluginDir, 'category/keep/SKILL.md'), '# Keep');
+      await writeFile(join(pluginDir, 'category/keep/scripts/run.sh'), 'echo keep');
+      await writeFile(join(pluginDir, 'category/drop/SKILL.md'), '# Drop');
+      await manifest({ skills: '.' });
+      const components = resolvePluginComponents(pluginDir);
+      expect(components.github).toBe(false);
+      const exclude = ['category/drop/**'];
+      const inventory = await collectPluginSkills(
+        pluginDir, 'selected', undefined, undefined, undefined, undefined, undefined, components, exclude,
+      );
+      expect(inventory.map((skill) => skill.folderName)).toEqual(['keep']);
+      const results = await copyPluginToWorkspace(pluginDir, workspaceDir, 'claude', {
+        components, exclude, skillNameMap: new Map([['category/keep', 'selected']]),
+      });
+      expect(results.map((result) => result.action)).toEqual(['copied']);
+      expect(await readFile(join(workspaceDir, '.claude/skills/selected/SKILL.md'), 'utf-8')).toBe('# Keep');
+      expect(await readFile(join(workspaceDir, '.claude/skills/selected/scripts/run.sh'), 'utf-8')).toBe('echo keep');
+      expect(existsSync(join(workspaceDir, '.claude/skills/drop'))).toBe(false);
+    });
+
+    it('copies individual command and agent files and a direct skill directory', async () => {
+      await mkdir(join(pluginDir, 'custom/direct-skill'), { recursive: true });
+      await writeFile(join(pluginDir, 'custom/direct-skill/SKILL.md'), '---\nname: frontmatter-name\n---\n# Skill');
+      await writeFile(join(pluginDir, 'custom/command.md'), '# Command');
+      await writeFile(join(pluginDir, 'custom/agent.agent.md'), '# Agent');
+      await manifest({ skills: './custom/direct-skill', commands: './custom/command.md', agents: './custom/agent.agent.md' });
+      const inventory = await collectPluginSkills(pluginDir, 'test');
+      expect(inventory.map((skill) => skill.folderName)).toEqual(['direct-skill']);
+      await copyPluginToWorkspace(pluginDir, workspaceDir, 'claude');
+      expect(existsSync(join(workspaceDir, '.claude/skills/direct-skill/SKILL.md'))).toBe(true);
+      expect(await readFile(join(workspaceDir, '.claude/commands/command.md'), 'utf-8')).toBe('# Command');
+      expect(await readFile(join(workspaceDir, '.claude/agents/agent.agent.md'), 'utf-8')).toBe('# Agent');
+    });
+
+    it('uses selected skill paths in both canonical copy and client symlink modes', async () => {
+      await mkdir(join(pluginDir, 'custom/selected'), { recursive: true });
+      await writeFile(join(pluginDir, 'custom/selected/SKILL.md'), '# Selected');
+      await manifest({ skills: './custom/selected' });
+      const components = resolvePluginComponents(pluginDir);
+      const skillNameMap = new Map([['selected', 'renamed']]);
+      await copySkills(pluginDir, workspaceDir, 'universal', { components, skillNameMap });
+      await copySkills(pluginDir, workspaceDir, 'claude', {
+        components, skillNameMap, syncMode: 'symlink', canonicalSkillsPath: '.agents/skills/',
+      });
+      const destination = join(workspaceDir, '.claude/skills/renamed');
+      expect(await readFile(join(destination, 'SKILL.md'), 'utf-8')).toBe('# Selected');
+      expect(await readlink(destination)).toContain('renamed');
+    });
+
+    it('copies custom hook configuration without copying unrelated parent resources', async () => {
+      await mkdir(join(pluginDir, 'custom-hooks/nested'), { recursive: true });
+      await mkdir(join(pluginDir, 'hooks'), { recursive: true });
+      await writeFile(join(pluginDir, 'hooks/old.json'), '{"old":true}');
+      await writeFile(join(pluginDir, 'custom-hooks/config.json'), '{"hooks":{"SessionStart":[]}}');
+      await writeFile(join(pluginDir, 'custom-hooks/nested/keep.sh'), 'echo keep');
+      await writeFile(join(pluginDir, 'custom-hooks/nested/drop.sh'), 'echo drop');
+      await manifest({ hooks: './custom-hooks/config.json' });
+      await copyHooks(pluginDir, workspaceDir, 'claude', { exclude: ['custom-hooks/nested/drop.sh'] });
+      await copyHooks(pluginDir, workspaceDir, 'copilot', { exclude: ['custom-hooks/nested/drop.sh'] });
+      expect(existsSync(join(workspaceDir, '.claude/hooks/hooks.json'))).toBe(true);
+      expect(existsSync(join(workspaceDir, '.github/hooks/config.json'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/hooks/hooks.json'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/hooks/nested/keep.sh'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/hooks/nested/drop.sh'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github/hooks/old.json'))).toBe(false);
+    });
+    it.each(['file', 'inline'] as const)(
+      'does not copy %s hook declarations when a known payload is excluded',
+      async (kind) => {
+        await mkdir(join(pluginDir, 'hooks'), { recursive: true });
+        await writeFile(join(pluginDir, 'hooks/keep.sh'), 'echo keep');
+        await writeFile(join(pluginDir, 'hooks/drop.sh'), 'echo drop');
+        const hooks = { SessionStart: [{ type: 'command', command: 'sh hooks/drop.sh' }] };
+        if (kind === 'file') {
+          await writeFile(join(pluginDir, 'hooks/config.json'), JSON.stringify({ hooks }));
+          await manifest({ hooks: './hooks/config.json' });
+        } else {
+          await manifest({ hooks });
+        }
+        const components = resolvePluginComponents(pluginDir);
+        components.hookResources = [join(pluginDir, 'hooks')];
+        for (const client of ['claude', 'omp', 'copilot'] as const) {
+          const clientMappings = client === 'copilot' ? USER_CLIENT_MAPPINGS : undefined;
+          const results = await copyHooks(pluginDir, workspaceDir, client, {
+            components, clientMappings, exclude: ['hooks/drop.sh'],
+          });
+          const hooksDir = client === 'claude' ? '.claude/hooks'
+            : client === 'omp' ? '.omp/hooks' : '.copilot/hooks';
+          expect(results.map((result) => result.source)).toEqual([join(pluginDir, 'hooks/keep.sh')]);
+          expect(await readFile(join(workspaceDir, hooksDir, 'keep.sh'), 'utf-8')).toBe('echo keep');
+          expect(existsSync(join(workspaceDir, hooksDir, 'drop.sh'))).toBe(false);
+          expect(existsSync(join(workspaceDir, hooksDir, 'config.json'))).toBe(false);
+          expect(existsSync(join(workspaceDir, hooksDir, 'hooks.json'))).toBe(false);
+        }
+      },
+    );
+
+    it('omits a declaration before inspecting an excluded unsafe payload directory', async () => {
+      await mkdir(join(pluginDir, 'hooks/unsafe'), { recursive: true });
+      await writeFile(join(pluginDir, 'hooks/keep.sh'), 'echo keep');
+      await writeFile(join(pluginDir, 'hooks/unsafe/run.sh'), 'echo initial');
+      await manifest({ hooks: { SessionStart: [{ type: 'command', command: 'sh hooks/unsafe/run.sh' }] } });
+      const components = resolvePluginComponents(pluginDir);
+      components.hookResources = [join(pluginDir, 'hooks')];
+      const outside = join(testDir, 'outside-hooks');
+      await mkdir(outside);
+      await writeFile(join(outside, 'run.sh'), 'echo outside');
+      await rm(join(pluginDir, 'hooks/unsafe'), { recursive: true });
+      await symlink(outside, join(pluginDir, 'hooks/unsafe'), process.platform === 'win32' ? 'junction' : 'dir');
+      const results = await copyHooks(pluginDir, workspaceDir, 'claude', {
+        components, exclude: ['hooks/unsafe/**'],
+      });
+      expect(results.map((result) => result.action)).toEqual(['copied']);
+      expect(await readFile(join(workspaceDir, '.claude/hooks/keep.sh'), 'utf-8')).toBe('echo keep');
+      expect(existsSync(join(workspaceDir, '.claude/hooks/hooks.json'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.claude/hooks/unsafe'))).toBe(false);
+    });
+
+    it('materializes inline hooks for file-supported clients and honors origin exclusions', async () => {
+      await manifest({ hooks: { SessionStart: [{ type: 'command', command: 'echo safe' }] } });
+      const [planned] = await copyHooks(pluginDir, workspaceDir, 'claude', { dryRun: true });
+      expect(JSON.parse(planned?.content ?? '{}').hooks.SessionStart[0].command).toBe('echo safe');
+      expect(existsSync(join(workspaceDir, '.claude/hooks/hooks.json'))).toBe(false);
+      await copyHooks(pluginDir, workspaceDir, 'claude');
+      const hooks = JSON.parse(await readFile(join(workspaceDir, '.claude/hooks/hooks.json'), 'utf-8'));
+      expect(hooks.hooks.SessionStart[0].command).toBe('echo safe');
+      expect(await copyHooks(pluginDir, workspaceDir, 'copilot')).toEqual([]);
+      expect(await copyHooks(pluginDir, workspaceDir, 'omp', { exclude: ['.claude-plugin/plugin.json'] })).toEqual([]);
+    });
+
+    it('never copies repository-root siblings of a custom hook declaration', async () => {
+      await writeFile(join(pluginDir, 'custom-hooks.json'), '{"hooks":{"SessionStart":[]}}');
+      await writeFile(join(pluginDir, 'private.txt'), 'private');
+      await manifest({ hooks: './custom-hooks.json' });
+      await copyHooks(pluginDir, workspaceDir, 'claude');
+      expect(existsSync(join(workspaceDir, '.claude/hooks/hooks.json'))).toBe(true);
+      expect(existsSync(join(workspaceDir, '.claude/hooks/private.txt'))).toBe(false);
+    });
+
+    it('rechecks contained component sources after resolution', async () => {
+      await mkdir(join(pluginDir, 'custom'), { recursive: true });
+      await writeFile(join(pluginDir, 'custom/command.md'), '# Initial');
+      await manifest({ commands: './custom/command.md' });
+      const components = resolvePluginComponents(pluginDir);
+      const outside = join(testDir, 'outside.md');
+      await writeFile(outside, '# Outside');
+      await rm(join(pluginDir, 'custom/command.md'));
+      await symlink(outside, join(pluginDir, 'custom/command.md'));
+      await expect(copyCommands(pluginDir, workspaceDir, 'claude', { components })).rejects.toThrow('escapes plugin root');
+      expect(existsSync(join(workspaceDir, '.claude/commands/command.md'))).toBe(false);
+    });
   });
 
   describe('github override precedence', () => {
-    it('copies only declared artifacts for a non-strict marketplace entry', async () => {
+    it('copies resolved portable defaults without development GitHub overlays', async () => {
       await mkdir(join(pluginDir, 'skills', 'public-skill'), { recursive: true });
       await writeFile(
         join(pluginDir, 'skills', 'public-skill', 'SKILL.md'),
@@ -80,20 +303,22 @@ describe('copilot agents and hooks sync', () => {
       );
 
       await copyPluginToWorkspace(pluginDir, workspaceDir, 'copilot', {
-        fileArtifacts: {
-          agents: false,
-          commands: false,
+        components: {
+          agents: [],
+          commands: [],
           github: false,
-          hooks: false,
-          mcpServers: false,
-          skills: true,
+          hooks: [],
+          hookResources: [join(pluginDir, 'hooks')],
+          mcpServers: [],
+          skills: [join(pluginDir, 'skills')],
         },
       });
 
       expect(
         existsSync(join(workspaceDir, '.github', 'skills', 'public-skill', 'SKILL.md')),
       ).toBe(true);
-      expect(existsSync(join(workspaceDir, '.github', 'hooks'))).toBe(false);
+      expect(existsSync(join(workspaceDir, '.github', 'hooks', 'portable.json'))).toBe(true);
+      expect(existsSync(join(workspaceDir, '.github', 'hooks', 'repository.json'))).toBe(false);
     });
 
     it('.github/agents/ overrides root agents/ on name conflict', async () => {

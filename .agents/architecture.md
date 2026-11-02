@@ -65,6 +65,24 @@ when changing client targets.
 - Ordinary file Git sources use the shared remote descriptor for transport, requested ref, cache path and provenance. Keep generic host/port/path/ref identities distinct; interpret `ref` and `subdir` metadata before Git transport, and resolve subdirectories inside the checkout. Determine native versus file status from the declaration's effective install modes.
 - The Plugins menu selects individual resources. Bulk updates remain under Workspace → Status → Update all.
 
+## Plugin component sources
+
+Resolve supported legacy component sources once in
+`src/core/plugin-components.ts` and carry `PluginComponents` through marketplace
+resolution, validation, copying, inventories, MCP-only updates, and profile file
+planning. Consumers must not interpret `strict` as a component allowlist or
+independently choose a different manifest.
+
+Keep conventional MCP precedence, plugin-manifest custom paths, and inline
+configuration provenance aligned with the
+[marketplace discovery contract](../docs/src/content/docs/docs/guides/plugins.mdx#marketplace-component-discovery).
+Check lexical and canonical source containment before reading components, and
+retain original plugin-relative exclusions even when a component uses a custom
+directory. `hooks: false` is the explicit file-install hook opt-out; it must not
+disable MCP or other components. Never copy development `.github/` overlays from
+a manifest-bearing plugin unless a supported component explicitly selects that
+path. Failed source resolution must preserve previously owned output and state.
+
 ## Root skill resources
 
 Keep root skill copying and profile plan expansion aligned with the

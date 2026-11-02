@@ -14,6 +14,8 @@ import {
   validatePluginSource,
 } from '../../utils/plugin-path.js';
 import type { ProfileResolvedPlugin } from './types.js';
+import type { PluginComponents } from '../../models/plugin-components.js';
+import { assertPluginComponentPath, resolvePluginComponents } from '../plugin-components.js';
 
 export interface ProfileSourceRuntime {
   readonly workspaceDirectory: string;
@@ -23,6 +25,7 @@ export interface ProfileSourceRuntime {
 
 export interface ResolvedProfileFileSource {
   readonly path: string;
+  readonly components: PluginComponents;
   readonly source: string;
   readonly requestedRef?: string;
   readonly resolvedRef?: string;
@@ -56,8 +59,11 @@ async function resolveRemoteRepository(
     } catch {
       resolvedSha = undefined;
     }
+    const pluginPath = parsed.subpath ? join(cachePath, parsed.subpath) : cachePath;
+    assertPluginComponentPath(cachePath, pluginPath);
     return {
-      path: parsed.subpath ? join(cachePath, parsed.subpath) : cachePath,
+      path: pluginPath,
+      components: resolvePluginComponents(pluginPath),
       source,
       ...(requestedRef && { requestedRef }),
       ...(ref && { resolvedRef: ref }),
@@ -76,14 +82,22 @@ async function resolveRemoteRepository(
   } catch {
     resolvedSha = undefined;
   }
-  return {
-    path: parsed.subpath ? join(temporary, parsed.subpath) : temporary,
-    source,
-    ...(requestedRef && { requestedRef }),
-    ...(ref && { resolvedRef: ref }),
-    ...(resolvedSha && { resolvedSha }),
-    cleanup: () => rm(temporary, { recursive: true, force: true }),
-  };
+  try {
+    const pluginPath = parsed.subpath ? join(temporary, parsed.subpath) : temporary;
+    assertPluginComponentPath(temporary, pluginPath);
+    return {
+      path: pluginPath,
+      components: resolvePluginComponents(pluginPath),
+      source,
+      ...(requestedRef && { requestedRef }),
+      ...(ref && { resolvedRef: ref }),
+      ...(resolvedSha && { resolvedSha }),
+      cleanup: () => rm(temporary, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export async function resolveProfileFileSource(
@@ -108,6 +122,7 @@ export async function resolveProfileFileSource(
     }
     return {
       path: resolved.path,
+      components: resolved.components ?? resolvePluginComponents(resolved.path),
       source: plugin.source,
       ...(plugin.requestedRef && { requestedRef: plugin.requestedRef }),
       marketplace: resolved.marketplace,
@@ -138,6 +153,7 @@ export async function resolveProfileFileSource(
   }
   return {
     path: candidate,
+    components: resolvePluginComponents(candidate),
     source: plugin.source,
     ...(plugin.requestedRef && { requestedRef: plugin.requestedRef }),
   };

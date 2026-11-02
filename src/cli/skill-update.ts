@@ -47,6 +47,8 @@ import {
   type DiscoveredSkillEntry,
   discoverSkillEntriesFromPluginRoot,
 } from '../core/skills.js';
+import { resolvePluginComponents } from '../core/plugin-components.js';
+import type { MarketplacePluginEntry } from '../models/marketplace-manifest.js';
 import { buildPluginSyncPlans } from '../core/sync.js';
 import { getUserWorkspaceConfigPath } from '../core/user-workspace.js';
 import type {
@@ -494,7 +496,12 @@ async function inventoryMarketplace(
   if (!existsSync(root)) {
     throw new Error(`Installed marketplace plugin root not found: ${root}`);
   }
-  const discovered = await discoverSkillEntriesFromPluginRoot(root);
+  const components = resolvePluginComponents(root, manifestPlugin ?? {
+    name: spec.plugin,
+    description: spec.plugin,
+    source: root,
+  });
+  const discovered = await discoverSkillEntriesFromPluginRoot(root, [], components);
   const skills = enabledSkills(
     discovered,
     spec.plugin,
@@ -690,6 +697,7 @@ async function inspectInstallation(
   checkoutPaths: Map<string, string>,
 ): Promise<InstallationInspection> {
   let root: string;
+  let marketplaceEntry: MarketplacePluginEntry | undefined;
   if (installation.marketplace) {
     const marketplaceCheckout = checkoutPaths.get(
       installation.marketplace.nodeId,
@@ -720,6 +728,7 @@ async function inspectInstallation(
     if (!entry) {
       return { installationId: installation.id, outcome: 'plugin-removed' };
     }
+    marketplaceEntry = entry;
     if (typeof entry.source === 'object') {
       const parsed = parseRemotePluginSource(entry.source.url);
       if (!parsed) {
@@ -765,7 +774,8 @@ async function inspectInstallation(
     };
   }
   const warnings: string[] = [];
-  const discovered = await discoverSkillEntriesFromPluginRoot(root, warnings);
+  const components = resolvePluginComponents(root, marketplaceEntry);
+  const discovered = await discoverSkillEntriesFromPluginRoot(root, warnings, components);
   if (warnings.length > 0) {
     return {
       installationId: installation.id,

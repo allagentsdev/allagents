@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stringify as dump, parse as load } from 'yaml';
+import { addMarketplace } from '../../../src/core/marketplace.js';
 import {
   CLACK_CANCEL as CANCEL,
+  autocompleteMock,
   installClientResponses as clientResponses,
   installConfirmationResponses as confirmationResponses,
   installConfirmMock as confirmMock,
@@ -15,14 +17,14 @@ import {
 } from '../../helpers/clack-prompts-mock.js';
 
 
-// Load after the Clack mock so the action captures deterministic prompt functions.
 
-const { installSelectedPlugin } = await import(
+const { installSelectedPlugin, runInstallPlugin } = await import(
   '../../../src/cli/tui/actions/plugins.js'
 );
 const { formatInstallTargetSummary } = await import(
   '../../../src/cli/tui/install-target-prompts.js'
 );
+const { runSkills } = await import('../../../src/cli/tui/actions/skills.js');
 
 const originalHome = process.env.HOME;
 const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
@@ -201,4 +203,66 @@ test('a blocked legacy repository import reports failure after saving the explic
   expect(config.plugins).toHaveLength(1);
   expect(errorNoteMock.mock.calls.flat().join('\n')).toContain('--yes');
   expect(noteMock.mock.calls.some(call => String(call[1]).startsWith('Installed:'))).toBe(false);
+});
+
+describe('marketplace TUI inventory', () => {
+  async function catalogue() {
+    const marketplace = join(root, 'marketplace');
+    await mkdir(join(marketplace, '.claude-plugin'), { recursive: true });
+    for (const [path, name] of [
+      ['plugins/collection/skills/actual', 'actual'],
+      ['plugins/custom/skills/stale', 'stale'],
+      ['plugins/custom/library/selected', 'selected'],
+      ['plugins/empty/skills/hidden', 'hidden'],
+      ['plugins/flat/rogue', 'rogue'],
+    ]) {
+      await mkdir(join(marketplace, path!), { recursive: true });
+      await writeFile(join(marketplace, path!, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} description\n---\n# ${name}\n`);
+    }
+    await writeFile(join(marketplace, 'plugins/custom/plugin.json'), JSON.stringify({ name: 'custom', skills: './library/' }));
+    await writeFile(join(marketplace, 'plugins/empty/plugin.json'), JSON.stringify({ name: 'empty', skills: [] }));
+    await writeFile(join(marketplace, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+      name: 'inventory', description: 'Inventory fixture', plugins: [
+        { name: 'collection', description: 'Collection', source: './plugins/collection', skills: './skills/' },
+        { name: 'custom', description: 'Custom', source: './plugins/custom', skills: './skills/' },
+        { name: 'empty', description: 'Empty', source: './plugins/empty', skills: './skills/' },
+        { name: 'flat', description: 'Flat', source: './plugins/flat', skills: './rogue/' },
+        { name: 'unresolved', description: 'Unresolved', source: { source: 'github', repo: 'fixtures/unresolved-inventory' }, skills: './phantom/' },
+      ],
+    }));
+    expect((await addMarketplace(marketplace, 'inventory', undefined, { scope: 'user' })).success).toBe(true);
+    return {
+      hasWorkspace: true, workspacePath: workspace, projectPluginCount: 0,
+      userPluginCount: 0, needsSync: false, hasUserConfig: false, marketplaceCount: 1,
+    };
+  }
+
+  test('plugin picker previews resolved custom/default names and leaves unresolved inventory unknown', async () => {
+    const context = await catalogue();
+    const picker = autocompleteMock;
+    picker.mockClear();
+    picker.mockResolvedValueOnce('__back__');
+    await runInstallPlugin(context);
+    expect(picker.mock.calls[0]?.[0].options).toEqual([
+      { label: 'collection - Collection (inventory)', value: 'collection@inventory', hint: '1 skills: actual' },
+      { label: 'custom - Custom (inventory)', value: 'custom@inventory', hint: '1 skills: selected' },
+      { label: 'empty - Empty (inventory)', value: 'empty@inventory' },
+      { label: 'flat - Flat (inventory)', value: 'flat@inventory' },
+      { label: 'unresolved - Unresolved (inventory)', value: 'unresolved@inventory' },
+      { label: 'Back', value: '__back__' },
+    ]);
+  });
+
+  test('skill browser groups the same authoritative names as plugin installation', async () => {
+    const context = await catalogue();
+    const picker = autocompleteMock;
+    picker.mockClear();
+    picker.mockResolvedValueOnce('__back__');
+    await runSkills(context);
+    expect(picker.mock.calls[0]?.[0].options).toEqual([
+      { label: 'collection@inventory - Collection', value: 'collection@inventory', hint: '1 skills: actual' },
+      { label: 'custom@inventory - Custom', value: 'custom@inventory', hint: '1 skills: selected' },
+      { label: 'Back', value: '__back__' },
+    ]);
+  });
 });

@@ -254,7 +254,7 @@ description: Blog watcher
     }
   });
 
-  it('discovers root MCP from non-strict marketplace entries without leaking hooks or GitHub config', async () => {
+  it('discovers conventional hooks and MCP without distributing development GitHub config', async () => {
     const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
     const fakeHome = join(tmpDir, 'home');
     const marketplaceDir = join(tmpDir, 'ediprod-marketplace');
@@ -332,7 +332,11 @@ description: Blog watcher
       expect(
         existsSync(join(tmpDir, '.github', 'skills', 'ediprod', 'SKILL.md')),
       ).toBe(true);
-      expect(existsSync(join(tmpDir, '.github', 'hooks'))).toBe(false);
+      const hooks = JSON.parse(await readFile(join(tmpDir, '.github', 'hooks', 'allagents.json'), 'utf-8'));
+      expect(hooks.hooks.sessionStart).toEqual([
+        expect.objectContaining({ type: 'command', bash: 'echo undeclared' }),
+      ]);
+      expect(existsSync(join(tmpDir, '.github', 'hooks', 'repository.json'))).toBe(false);
       expect(existsSync(join(tmpDir, '.codex', 'hooks.json'))).toBe(false);
       expect(existsSync(join(tmpDir, '.github', 'plugin'))).toBe(false);
       for (const [path, key] of [
@@ -347,7 +351,7 @@ description: Blog watcher
       }
       const codexConfig = Bun.TOML.parse(
         await readFile(join(tmpDir, '.codex', 'config.toml'), 'utf-8'),
-      );
+      ) as Record<string, unknown>;
       expect(codexConfig.mcp_servers).toEqual({
         undeclared: { url: 'https://undeclared.test' },
       });

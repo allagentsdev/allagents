@@ -50,7 +50,7 @@ export const GitSubdirSourceSchema = z.object({
 }).transform((value) => externalSource(value.url, value.ref, value.path));
 
 export const PluginSourceRefSchema = z.union([
-  z.string(), UrlSourceSchema, GitHubSourceSchema, GitSubdirSourceSchema,
+  z.string().min(1), UrlSourceSchema, GitHubSourceSchema, GitSubdirSourceSchema,
 ]).refine((source) => {
   if (typeof source === 'string') return true;
   try { return parseRemotePluginSource(source.url) !== null; }
@@ -111,36 +111,6 @@ export const MarketplacePluginEntrySchema = z.object({
 });
 
 export type MarketplacePluginEntry = z.infer<typeof MarketplacePluginEntrySchema>;
-
-/** File artifact kinds AllAgents can copy from a plugin source. */
-export interface MarketplaceFileArtifacts {
-  commands: boolean;
-  skills: boolean;
-  hooks: boolean;
-  agents: boolean;
-  mcpServers: boolean;
-  github: boolean;
-}
-
-/**
- * Non-strict entries limit copied component kinds to their declarations.
- * Root MCP configuration is still discovered, matching native clients.
- */
-export function getMarketplaceFileArtifacts(
-  entry: MarketplacePluginEntry,
-): MarketplaceFileArtifacts | undefined {
-  if (entry.strict !== false) return undefined;
-
-  return {
-    commands: entry.commands !== undefined,
-    skills: entry.skills !== undefined,
-    hooks: entry.hooks !== undefined,
-    agents: entry.agents !== undefined,
-    mcpServers: true,
-    // .github is repository configuration, not a marketplace component kind.
-    github: false,
-  };
-}
 
 /**
  * Top-level marketplace.json schema

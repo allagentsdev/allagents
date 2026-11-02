@@ -102,6 +102,42 @@ describe('plugin exclude patterns', () => {
     });
   });
 
+  it('does not read excluded unsafe skill definitions or supporting resources', async () => {
+    await mkdir(join(pluginDir, 'custom/keep'), { recursive: true });
+    await mkdir(join(pluginDir, 'custom/hidden'), { recursive: true });
+    await writeFile(join(pluginDir, 'custom/keep/SKILL.md'), '# Keep');
+    const outside = join(testDir, 'outside.md');
+    await writeFile(outside, '# Outside');
+    await symlink(outside, join(pluginDir, 'SKILL.md'), 'file');
+    await symlink(outside, join(pluginDir, 'custom/hidden/SKILL.md'), 'file');
+    await symlink(outside, join(pluginDir, 'custom/keep/private.txt'), 'file');
+    const components = {
+      skills: [pluginDir], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+    };
+    const results = await copySkills(pluginDir, workspaceDir, 'claude', {
+      components, exclude: ['SKILL.md', 'custom/hidden/SKILL.md', 'custom/keep/private.txt'],
+    });
+    expect(results.map((result) => result.action)).toEqual(['copied']);
+    expect(await readFile(join(workspaceDir, '.claude/skills/keep/SKILL.md'), 'utf-8')).toBe('# Keep');
+    expect(existsSync(join(workspaceDir, '.claude/skills/keep/private.txt'))).toBe(false);
+    expect(existsSync(join(workspaceDir, '.claude/skills/hidden'))).toBe(false);
+  });
+
+  it.each([
+    { name: 'commands', copy: copyCommands, filename: 'keep.md' },
+    { name: 'agents', copy: copyAgents, filename: 'keep.agent.md' },
+  ])('applies $name excludes before direct resolver validation', async ({ name, copy, filename }) => {
+    await mkdir(join(pluginDir, name), { recursive: true });
+    await writeFile(join(pluginDir, name, filename), '# Keep');
+    const outside = join(testDir, 'outside.md');
+    await writeFile(outside, '# Outside');
+    await symlink(outside, join(pluginDir, name, 'private.md'), 'file');
+    const results = await copy(pluginDir, workspaceDir, 'claude', { exclude: [`${name}/private.md`] });
+    expect(results.map((result) => result.action)).toEqual(['copied']);
+    expect(await readFile(join(workspaceDir, '.claude', name, filename), 'utf-8')).toBe('# Keep');
+    expect(existsSync(join(workspaceDir, '.claude', name, 'private.md'))).toBe(false);
+  });
+
   describe('copyCommands', () => {
     it('excludes commands matching exclude patterns', async () => {
       await mkdir(join(pluginDir, 'commands'), { recursive: true });

@@ -63,8 +63,9 @@ function assertCopilotContext(context: ProfileClientContext): void {
 
 function serializeCopilotMcp(
   input: ProfileSerializationInput,
+  profile: string,
 ): Readonly<Record<string, unknown>> | null {
-  const selected = serializeProfileMcpServers(input, 'copilot');
+  const selected = serializeProfileMcpServers(input, 'copilot', profile);
   if (selected === null) return null;
   const mcpServers: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(selected)) {
@@ -412,7 +413,7 @@ export class CopilotProfileAdapter implements NativeProfileAdapter {
     input: ProfileSerializationInput,
   ): ProfilePlannedFile | null {
     assertCopilotContext(context);
-    const mcpServers = serializeCopilotMcp(input);
+    const mcpServers = serializeCopilotMcp(input, context.profileName);
     if (mcpServers === null) return null;
     return Object.freeze({
       key: 'copilot:mcp',

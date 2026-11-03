@@ -11,6 +11,12 @@ import {
   WorkspaceConfigSchema,
 } from '../../../src/models/workspace-config.js';
 import packageJson from '../../../package.json';
+import { connectToMcpProxy } from '../../helpers/mcp-proxy-client.js';
+import {
+  FIXTURE_ANSWER,
+  FIXTURE_TOOL_NAME,
+  startDummyMcpOAuthServer,
+} from '../../helpers/dummy-mcp-oauth-server.js';
 
 const packageRef = `allagents@${packageJson.version}`;
 
@@ -102,6 +108,82 @@ describe('shouldProxy', () => {
 });
 
 describe('applyMcpProxy', () => {
+  test('keeps ordinary Pi HTTP servers native unless explicitly proxied', () => {
+    const server = { url: 'https://example.com/mcp' };
+    const servers = new Map([['figma', server]]);
+    expect(applyMcpProxy(servers, 'pi').get('figma')).toBe(server);
+    expect(
+      applyMcpProxy(servers, 'pi', { clients: ['pi'] }).get('figma'),
+    ).toMatchObject({ command: 'npx' });
+  });
+
+  test.each([
+    { clients: [] },
+    { clients: [], servers: { figma: { proxy: ['pi'] } } },
+  ] satisfies McpProxyConfig[])(
+    'Pi bridges isolate authorization when the configured identity changes (%j)',
+    async (proxyConfig) => {
+      const home = makeTempDir();
+      const server = await startDummyMcpOAuthServer({
+        allowedClientNames: ['Codex', 'Claude Code'],
+      });
+      let codexBearer: string | undefined;
+      try {
+        for (const [index, clientName] of ['Codex', 'Claude Code', 'Codex'].entries()) {
+          const generated = applyMcpProxy(
+            new Map([
+              ['figma', { url: server.mcpUrl, oauth: { clientName } }],
+            ]),
+            'pi',
+            proxyConfig,
+          ).get('figma');
+          if (!generated || !('command' in generated) || !generated.args) {
+            throw new Error('Pi identity override must use the managed stdio bridge');
+          }
+          const previousRequests = server.mcpRequestHeaders.length;
+          const connection = await connectToMcpProxy({
+            serverUrl: server.mcpUrl,
+            proxyArgs: generated.args.slice(2),
+            env: {
+              HOME: home,
+              ALLAGENTS_TEST_HOME: home,
+              ALLAGENTS_MCP_OAUTH_NO_BROWSER: '1',
+            },
+            onAuthorizationUrl: (url) => { void fetch(url); },
+          });
+          try {
+            const result = await connection.client.callTool({
+              name: FIXTURE_TOOL_NAME,
+              arguments: { question: 'Pi OAuth identity isolation' },
+            });
+            expect(result.content).toEqual([{ type: 'text', text: FIXTURE_ANSWER }]);
+          } finally {
+            await connection.close();
+          }
+          expect(server.authorizeCallCount).toBe(index === 0 ? 1 : 2);
+          const identityRequests = server.mcpRequestHeaders.slice(previousRequests);
+          if (index === 0) {
+            codexBearer = identityRequests.find((headers) => headers.authorization)?.authorization;
+            expect(codexBearer).toBeDefined();
+          } else if (index === 1) {
+            expect(identityRequests.some(
+              (headers) => headers.authorization === codexBearer,
+            )).toBe(false);
+          } else {
+            expect(identityRequests.some(
+              (headers) => headers.authorization === codexBearer,
+            )).toBe(true);
+          }
+        }
+        expect(server.tokenCallCounts.refresh_token).toBe(0);
+      } finally {
+        await server.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
   test('rewrites HTTP server config to stdio for proxied client', () => {
     const servers = new Map<string, unknown>([
       ['deepwiki', { url: 'https://mcp.deepwiki.com/mcp' }],

@@ -162,6 +162,8 @@ export interface StartDummyMcpOAuthServerOptions {
   requireAuth?: boolean;
   /** Expose the richer paginated catalog used by runtime CLI tests. */
   runtimeTools?: boolean;
+  /** Reject dynamic registrations which do not use a compatible client name. */
+  allowedClientNames?: string[];
 }
 
 export interface DummyMcpOAuthServer {
@@ -303,6 +305,13 @@ export async function startDummyMcpOAuthServer(
     if (req.method === 'POST' && url.pathname === '/register') {
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      if (
+        options.allowedClientNames !== undefined &&
+        !options.allowedClientNames.includes(String(body.client_name))
+      ) {
+        sendJson(res, 403, { error: 'invalid_client_metadata' });
+        return;
+      }
       const clientId = randomUUID();
       registeredClientIds.add(clientId);
       sendJson(res, 201, {

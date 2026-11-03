@@ -36,9 +36,11 @@ import { getHomeDir } from '../constants.js';
 import { ProfileNameSchema } from '../models/workspace-config.js';
 
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_OAUTH_CLIENT_NAME = 'AllAgents';
 export const AUTH_URL_LOG_PREFIX = 'If the browser does not open, visit: ';
 
 const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const ENCODED_ENVIRONMENT_REFERENCE_PREFIX = /(?:\$|%24)(?:\{|%7b)/i;
 
 export class McpCredentialReflectionError extends Error {
   constructor() {
@@ -270,11 +272,28 @@ export function hashServerUrl(serverUrl: string): string {
   return createHash('sha256').update(serverUrl).digest('hex').slice(0, 16);
 }
 
+function resolveOAuthClientName(clientName?: string): string {
+  if (clientName === undefined) return DEFAULT_OAUTH_CLIENT_NAME;
+  const resolved = clientName.trim();
+  if (!resolved) throw new Error('OAuth client name must not be empty');
+  return resolved;
+}
+
 export function getMcpOAuthCacheDir(
   serverUrl: string,
   profile?: string,
+  clientName?: string,
 ): string {
-  const hash = hashServerUrl(serverUrl);
+  const effectiveClientName = resolveOAuthClientName(clientName);
+  const serverHash = hashServerUrl(serverUrl);
+  // Keep the legacy default location and place aliases beside it, so resetting
+  // one identity never removes credentials belonging to another identity.
+  const hash =
+    effectiveClientName === DEFAULT_OAUTH_CLIENT_NAME
+      ? serverHash
+      : `${serverHash}-client-${createHash('sha256')
+          .update(effectiveClientName)
+          .digest('hex')}`;
   if (!profile) {
     return join(getHomeDir(), '.allagents', 'oauth-proxy', hash);
   }
@@ -540,6 +559,7 @@ interface OAuthProviderOptions {
   authorizationOutput?: (message: string) => void;
   allowAuthorization?: boolean;
   profile?: string;
+  clientName?: string;
   credentialValues?: Set<string>;
   signal?: AbortSignal;
 }
@@ -550,6 +570,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   private readonly verifierPath: string;
   private readonly discoveryPath: string;
   private readonly redirectUriValue: string;
+  private readonly clientName: string;
   private clientInfo: OAuthClientInformationMixed | undefined = undefined;
   private tokenSet: OAuthTokens | undefined = undefined;
   private discovery: OAuthDiscoveryState | undefined = undefined;
@@ -568,7 +589,12 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     serverUrl: string,
     options: OAuthProviderOptions = {},
   ) {
-    const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
+    this.clientName = resolveOAuthClientName(options.clientName);
+    const cacheDir = getMcpOAuthCacheDir(
+      serverUrl,
+      options.profile,
+      this.clientName,
+    );
     this.clientInfoPath = join(cacheDir, 'client-info.json');
     this.tokensPath = join(cacheDir, 'tokens.json');
     this.verifierPath = join(cacheDir, 'code-verifier.txt');
@@ -587,7 +613,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
 
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: 'AllAgents',
+      client_name: this.clientName,
       redirect_uris: [this.redirectUriValue],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
@@ -866,7 +892,11 @@ async function buildOAuthProvider(
   serverUrl: string,
   options: OAuthProviderOptions = {},
 ): Promise<FileOAuthClientProvider> {
-  const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
+  const cacheDir = getMcpOAuthCacheDir(
+    serverUrl,
+    options.profile,
+    options.clientName,
+  );
   const cachedClientInfo = await readJsonFile<OAuthClientInformationMixed>(
     join(cacheDir, 'client-info.json'),
   );
@@ -887,6 +917,7 @@ export interface ConnectMcpHttpClientOptions {
   authorizationOutput?: (message: string) => void;
   allowAuthorization?: boolean;
   profile?: string;
+  clientName?: string;
   environment?: NodeJS.ProcessEnv;
   fetch?: FetchLike;
   maxResponseBytes?: number;
@@ -900,11 +931,61 @@ export interface McpHttpClientConnection {
   close(): Promise<void>;
 }
 
+function resolveMcpQueryReferences(
+  serverUrl: string,
+  environment: NodeJS.ProcessEnv,
+  credentialValues: Set<string>,
+): string {
+  if (
+    !serverUrl.includes('${') &&
+    !ENCODED_ENVIRONMENT_REFERENCE_PREFIX.test(serverUrl)
+  ) {
+    return serverUrl;
+  }
+
+  const url = new URL(serverUrl);
+  let changed = false;
+  const query = url.search
+    .slice(1)
+    .split('&')
+    .map((parameter) => {
+      const separator = parameter.indexOf('=');
+      if (separator === -1) return parameter;
+      const value = new URLSearchParams(parameter).values().next().value ?? '';
+      const reference = ENVIRONMENT_REFERENCE.exec(value);
+      if (!reference) return parameter;
+
+      const variable = reference[1] as string;
+      const resolved = environment[variable];
+      if (resolved === undefined) {
+        throw new Error(
+          `MCP URL query parameter references missing environment variable '${variable}'`,
+        );
+      }
+      const encoded = encodeURIComponent(resolved);
+      credentialValues.add(resolved);
+      credentialValues.add(encoded);
+      // HTTP URL serialization additionally percent-encodes apostrophes.
+      credentialValues.add(encoded.replaceAll("'", '%27'));
+      changed = true;
+      return `${parameter.slice(0, separator + 1)}${encoded}`;
+    })
+    .join('&');
+  if (!changed) return serverUrl;
+  url.search = query;
+  return url.toString();
+}
+
 export async function connectMcpHttpClient(
   serverUrl: string,
   options: ConnectMcpHttpClientOptions = {},
 ): Promise<McpHttpClientConnection> {
   const credentialValues = new Set<string>();
+  const resolvedServerUrl = resolveMcpQueryReferences(
+    serverUrl,
+    options.environment ?? process.env,
+    credentialValues,
+  );
   const headers = resolveMcpHeaderReferences(
     options.headers ?? {},
     options.environment,
@@ -931,6 +1012,7 @@ export async function connectMcpHttpClient(
       ? {}
       : { allowAuthorization: options.allowAuthorization }),
     ...(options.profile === undefined ? {} : { profile: options.profile }),
+    ...(options.clientName === undefined ? {} : { clientName: options.clientName }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     credentialValues,
   });
@@ -946,13 +1028,13 @@ export async function connectMcpHttpClient(
       Object.keys(headers).length > 0 ||
       options.fetch ||
       options.maxResponseBytes !== undefined
-        ? createOriginSafeMcpFetch(serverUrl, headers, options.fetch, {
+        ? createOriginSafeMcpFetch(resolvedServerUrl, headers, options.fetch, {
             ...(options.maxResponseBytes === undefined
               ? {}
               : { maxResponseBytes: options.maxResponseBytes }),
           })
         : undefined;
-    return new StreamableHTTPClientTransport(new URL(serverUrl), {
+    return new StreamableHTTPClientTransport(new URL(resolvedServerUrl), {
       authProvider: provider,
       ...(mcpFetch && { fetch: mcpFetch }),
     });
@@ -1015,6 +1097,7 @@ export interface ConnectHttpMcpServerOptions {
   resetCredentials?: boolean;
   allowAuthorization?: boolean;
   profile?: string;
+  clientName?: string;
   signal?: AbortSignal;
 }
 
@@ -1022,7 +1105,11 @@ export async function connectHttpMcpServer(
   serverUrl: string,
   options: ConnectHttpMcpServerOptions = {},
 ): Promise<void> {
-  const cacheDir = getMcpOAuthCacheDir(serverUrl, options.profile);
+  const cacheDir = getMcpOAuthCacheDir(
+    serverUrl,
+    options.profile,
+    options.clientName,
+  );
   const backupDir = options.resetCredentials
     ? `${cacheDir}.reauth-backup-${randomUUID()}`
     : undefined;

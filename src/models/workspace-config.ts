@@ -330,6 +330,10 @@ export const McpProxyConfigSchema = z.object({
 
 export type McpProxyConfig = z.infer<typeof McpProxyConfigSchema>;
 
+const McpOAuthConfigSchema = z
+  .object({ clientName: z.string().trim().min(1).optional() })
+  .strict();
+
 /**
  * Workspace-level MCP server definition (top-level `mcpServers:` field in
  * workspace.yaml). Allows declaring ad-hoc MCP servers without authoring a
@@ -344,6 +348,7 @@ const McpHttpServerConfigSchema = z
     type: z.enum(['http']).optional(),
     url: z.string(),
     headers: z.record(z.string(), z.string()).optional(),
+    oauth: McpOAuthConfigSchema.optional(),
     clients: ClientTypeListSchema.optional(),
   })
   .strict();
@@ -612,84 +617,128 @@ function isProfileSecretReference(value: string | undefined): boolean {
   return value !== undefined && PROFILE_SECRET_REFERENCE_PATTERN.test(value);
 }
 
-const ProfileMcpArgumentsSchema = z
-  .array(z.string())
-  .superRefine((arguments_, ctx) => {
-    const invalidIndexes = new Set<number>();
-    const reject = (index: number) => {
-      if (invalidIndexes.has(index)) return;
-      invalidIndexes.add(index);
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [index],
-        message: `Secret arguments must be exact \${ENV_VAR} references`,
-      });
-    };
-
-    for (const [index, argument] of arguments_.entries()) {
-      if (arguments_[index - 1] === '--header-env') {
-        if (!/^[^=:\s]+=[A-Za-z_][A-Za-z0-9_]*$/.test(argument)) {
-          reject(index);
-        }
-        continue;
-      }
-      const separateOption = argument.match(/^(?:--?|\/)([^=:\s]+)$/);
-      const separateOptionName = separateOption?.[1];
+function isPortableProfileBridgeUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      [url.origin, url.pathname, url.hash].some((part) =>
+        decodeURIComponent(part).includes('${'),
+      )
+    ) {
+      return false;
+    }
+    for (const [key, queryValue] of url.searchParams) {
       if (
-        separateOptionName &&
-        PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(separateOptionName)
+        key.includes('${') ||
+        (queryValue.includes('${') && !isProfileSecretReference(queryValue)) ||
+        (PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(key) &&
+          !isProfileSecretReference(queryValue))
       ) {
-        const credentialIndex = index + 1;
-        if (!isProfileSecretReference(arguments_[credentialIndex])) {
-          reject(credentialIndex < arguments_.length ? credentialIndex : index);
-        }
-        continue;
-      }
-
-      if (/^bearer$/i.test(argument)) {
-        const credentialIndex = index + 1;
-        if (!isProfileSecretReference(arguments_[credentialIndex])) {
-          reject(credentialIndex < arguments_.length ? credentialIndex : index);
-        }
-        continue;
-      }
-
-      const assignment = argument.match(/^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/);
-      const assignmentName = assignment?.[1];
-      const inlineCredential =
-        assignmentName &&
-        PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(assignmentName)
-          ? assignment[2]
-          : undefined;
-      const bearerCredential = argument.match(/\bbearer\s+(.+)$/i)?.[1];
-
-      if (
-        inlineCredential !== undefined &&
-        !isProfileSecretReference(inlineCredential) &&
-        !isProfileSecretReference(bearerCredential)
-      ) {
-        reject(index);
-        continue;
-      }
-
-      if (
-        bearerCredential !== undefined &&
-        !isProfileSecretReference(bearerCredential)
-      ) {
-        reject(index);
-        continue;
-      }
-
-      if (
-        argument.includes('${') &&
-        !isProfileSecretReference(argument) &&
-        !isProfileSecretReference(inlineCredential) &&
-        !isProfileSecretReference(bearerCredential)
-      ) {
-        reject(index);
+        return false;
       }
     }
-  });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateProfileMcpArguments(
+  arguments_: string[],
+  command: string,
+  ctx: z.RefinementCtx,
+): void {
+  const invalidIndexes = new Set<number>();
+  const reject = (index: number) => {
+    if (invalidIndexes.has(index)) return;
+    invalidIndexes.add(index);
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['args', index],
+      message: `Secret arguments must be exact \${ENV_VAR} references`,
+    });
+  };
+
+  const hasBridgePrefix =
+    command === 'npx' &&
+    arguments_[0] === '-y' &&
+    /^allagents@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+      arguments_[1] ?? '',
+    ) &&
+    arguments_[2] === 'mcp' &&
+    arguments_[3] === 'proxy';
+
+  for (const [index, argument] of arguments_.entries()) {
+    if (hasBridgePrefix && index === 4) {
+      if (!isPortableProfileBridgeUrl(argument)) reject(index);
+      continue;
+    }
+    if (arguments_[index - 1] === '--header-env') {
+      if (!/^[^=:\s]+=[A-Za-z_][A-Za-z0-9_]*$/.test(argument)) {
+        reject(index);
+      }
+      continue;
+    }
+    const separateOption = argument.match(/^(?:--?|\/)([^=:\s]+)$/);
+    const separateOptionName = separateOption?.[1];
+    if (
+      separateOptionName &&
+      PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(separateOptionName)
+    ) {
+      const credentialIndex = index + 1;
+      if (!isProfileSecretReference(arguments_[credentialIndex])) {
+        reject(credentialIndex < arguments_.length ? credentialIndex : index);
+      }
+      continue;
+    }
+
+    if (/^bearer$/i.test(argument)) {
+      const credentialIndex = index + 1;
+      if (!isProfileSecretReference(arguments_[credentialIndex])) {
+        reject(credentialIndex < arguments_.length ? credentialIndex : index);
+      }
+      continue;
+    }
+
+    const assignment = argument.match(/^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/);
+    const assignmentName = assignment?.[1];
+    const inlineCredential =
+      assignmentName &&
+      PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(assignmentName)
+        ? assignment[2]
+        : undefined;
+    const bearerCredential = argument.match(/\bbearer\s+(.+)$/i)?.[1];
+
+    if (
+      inlineCredential !== undefined &&
+      !isProfileSecretReference(inlineCredential) &&
+      !isProfileSecretReference(bearerCredential)
+    ) {
+      reject(index);
+      continue;
+    }
+
+    if (
+      bearerCredential !== undefined &&
+      !isProfileSecretReference(bearerCredential)
+    ) {
+      reject(index);
+      continue;
+    }
+
+    if (
+      argument.includes('${') &&
+      !isProfileSecretReference(argument) &&
+      !isProfileSecretReference(inlineCredential) &&
+      !isProfileSecretReference(bearerCredential)
+    ) {
+      reject(index);
+    }
+  }
+}
 
 export const ProfileMcpServerConfigSchema = z.union([
   z
@@ -697,6 +746,7 @@ export const ProfileMcpServerConfigSchema = z.union([
       type: z.enum(['http']).optional(),
       url: z.string(),
       headers: z.record(z.string(), ProfileSecretReferenceSchema).optional(),
+      oauth: McpOAuthConfigSchema.optional(),
       clients: z.array(UserClientTypeSchema).optional(),
     })
     .strict(),
@@ -704,11 +754,16 @@ export const ProfileMcpServerConfigSchema = z.union([
     .object({
       type: z.enum(['stdio']).optional(),
       command: z.string(),
-      args: ProfileMcpArgumentsSchema.optional(),
+      args: z.array(z.string()).optional(),
       env: z.record(z.string(), ProfileSecretReferenceSchema).optional(),
       clients: z.array(UserClientTypeSchema).optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((config, ctx) => {
+      if (config.args) {
+        validateProfileMcpArguments(config.args, config.command, ctx);
+      }
+    }),
 ]);
 
 export type ProfileMcpServerConfig = z.infer<

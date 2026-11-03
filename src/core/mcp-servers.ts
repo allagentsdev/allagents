@@ -517,12 +517,17 @@ export function buildMcpServerConfigFromFlags(options: {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   clients?: ClientType[];
+  oauthClientName?: string;
 }): { config: McpServerConfig } | { error: string } {
   const { commandOrUrl, args, env, headers, clients } = options;
   const transport =
     options.transport ??
     (/^https?:\/\//i.test(commandOrUrl) ? 'http' : 'stdio');
 
+  const clientName = options.oauthClientName?.trim();
+  if (clientName === '') {
+    return { error: '--oauth-client-name must not be empty' };
+  }
   if (transport === 'http') {
     if (!/^https?:\/\//i.test(commandOrUrl)) {
       return {
@@ -540,6 +545,7 @@ export function buildMcpServerConfigFromFlags(options: {
       url: commandOrUrl,
       ...(headers && Object.keys(headers).length > 0 && { headers }),
       ...(clients && clients.length > 0 && { clients }),
+      ...(clientName === undefined ? {} : { oauth: { clientName } }),
     };
     return { config };
   }
@@ -551,6 +557,9 @@ export function buildMcpServerConfigFromFlags(options: {
   }
   if (headers && Object.keys(headers).length > 0) {
     return { error: '--header is not supported for stdio transport' };
+  }
+  if (clientName !== undefined) {
+    return { error: '--oauth-client-name is not supported for stdio transport' };
   }
   const config: McpServerConfig = {
     type: 'stdio',

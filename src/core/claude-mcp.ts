@@ -165,53 +165,71 @@ export async function syncClaudeMcpServersViaCli(
     ).test(`${result.output}\n${result.error ?? ''}`.trim());
   }
 
-  // Process plugin servers: add new, skip existing user-managed
+  // Process plugin servers: reconcile owned entries, preserve user-managed ones
   for (const [name, config] of pluginServers) {
     // Check if server already exists via `claude mcp get <name>`
     const getResult = await exec('claude', ['mcp', 'get', name]);
     const exists = getResult.success;
 
-    if (exists) {
-      if (hasTracking && previouslyTracked.has(name)) {
-        // We own this server - keep tracking
-        result.trackedServers.push(name);
-      } else {
-        // User-managed server - skip (do not track)
-        result.skipped++;
-        result.skippedServers.push(name);
-      }
-    } else {
-      // New server - add it
-      const addArgs = buildClaudeMcpAddArgs(
-        name,
-        config as Record<string, unknown>,
-        'user',
+    if (exists && !previouslyTracked.has(name)) {
+      result.skipped++;
+      result.skippedServers.push(name);
+      continue;
+    }
+
+    // Prepare the replacement before removing an owned server.
+    const addArgs = buildClaudeMcpAddArgs(
+      name,
+      config as Record<string, unknown>,
+      'user',
+    );
+    if (!addArgs) {
+      result.warnings.push(
+        `Unsupported MCP server config for '${name}', skipping`,
       );
-      if (!addArgs) {
+      result.authoritative = false;
+      if (previouslyTracked.has(name)) result.trackedServers.push(name);
+      continue;
+    }
+
+    if (!dryRun) {
+      if (exists) {
+        const removeResult = await exec('claude', [
+          'mcp',
+          'remove',
+          name,
+          '--scope',
+          'user',
+        ]);
+        if (!removeResult.success) {
+          result.warnings.push(
+            `Failed to remove MCP server '${name}': ${removeResult.error ?? 'unknown error'}`,
+          );
+          result.authoritative = false;
+          result.trackedServers.push(name);
+          continue;
+        }
+      }
+
+      const addResult = await exec('claude', addArgs);
+      if (!addResult.success) {
         result.warnings.push(
-          `Unsupported MCP server config for '${name}', skipping`,
+          `Failed to add MCP server '${name}': ${addResult.error ?? 'unknown error'}`,
         );
         result.authoritative = false;
         if (previouslyTracked.has(name)) result.trackedServers.push(name);
         continue;
       }
+    }
 
-      if (!dryRun) {
-        const addResult = await exec('claude', addArgs);
-        if (!addResult.success) {
-          result.warnings.push(
-            `Failed to add MCP server '${name}': ${addResult.error ?? 'unknown error'}`,
-          );
-          result.authoritative = false;
-          if (previouslyTracked.has(name)) result.trackedServers.push(name);
-          continue;
-        }
-      }
-
+    if (exists) {
+      result.overwritten++;
+      result.overwrittenServers.push(name);
+    } else {
       result.added++;
       result.addedServers.push(name);
-      result.trackedServers.push(name);
     }
+    result.trackedServers.push(name);
   }
 
   // Remove orphaned tracked servers

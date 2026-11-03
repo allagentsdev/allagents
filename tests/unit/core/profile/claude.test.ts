@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { ClaudeProfileAdapter } from '../../../../src/core/profile/adapters/claude.js';
+import { serializeProfileMcpServers } from '../../../../src/core/profile/adapters/mcp.js';
 
 describe('Claude profile adapter', () => {
   it('isolates the Claude config and plugin roots while preserving cwd', () => {
@@ -254,5 +255,51 @@ describe('Claude profile adapter', () => {
     expect(
       adapter.serializeMcp(context, { plugins: [] }).content,
     ).toBe('{\n  "mcpServers": {}\n}\n');
+  });
+
+  it('round-trips an OAuth bridge without resolving exact URL query references', () => {
+    const adapter = new ClaudeProfileAdapter();
+    const context = adapter.resolveContext('markets', {
+      homeDir: '/home/test',
+      workspaceDirectory: '/work/project',
+    });
+    const url =
+      'https://example.invalid/mcp?token=${FIXTURE_TOKEN}&tag=one&tag=two';
+    const previousToken = process.env.FIXTURE_TOKEN;
+    process.env.FIXTURE_TOKEN = 'fixture-secret-never-serialize';
+    try {
+      const bridged = serializeProfileMcpServers(
+        {
+          plugins: [],
+          mcpServers: {
+            fixture: { url, oauth: { clientName: 'Codex' } },
+          },
+        },
+        'claude',
+        'markets',
+      );
+      expect(bridged).not.toBeNull();
+      const planned = adapter.serializeMcp(context, {
+        plugins: [],
+        mcpServers: bridged ?? {},
+      });
+      const fixture = JSON.parse(planned.content).mcpServers.fixture;
+      expect(fixture.command).toBe('npx');
+      expect(fixture.args).toEqual([
+        '-y',
+        expect.stringMatching(/^allagents@\d+\.\d+\.\d+/),
+        'mcp',
+        'proxy',
+        url,
+        '--profile',
+        'markets',
+        '--oauth-client-name',
+        'Codex',
+      ]);
+      expect(planned.content).not.toContain('fixture-secret-never-serialize');
+    } finally {
+      if (previousToken === undefined) delete process.env.FIXTURE_TOKEN;
+      else process.env.FIXTURE_TOKEN = previousToken;
+    }
   });
 });

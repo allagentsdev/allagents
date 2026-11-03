@@ -79,6 +79,55 @@ Generated profile bridge arguments store the header-to-variable binding, not
 the resolved secret. AllAgents resolves the variable immediately before the MCP
 connection and fails clearly when it is missing.
 
+### OAuth Client-Name Compatibility
+
+Some OAuth servers accept dynamic registration only for recognized client names.
+AllAgents registers as `AllAgents` by default. Override the OAuth registration
+name for one HTTP server when the provider requires a compatible name:
+
+```bash
+allagents mcp add figma https://mcp.figma.com/mcp \
+  --oauth-client-name 'Claude Code'
+```
+
+The declaration records the setting, so direct CLI calls and generated bridges
+use the same identity:
+
+```yaml
+mcpServers:
+  figma:
+    url: https://mcp.figma.com/mcp
+    oauth:
+      clientName: Claude Code
+```
+
+`Codex` is another supported name value. This option changes OAuth
+`client_name`, not AllAgents' MCP initialization identity. It does not import
+another application's tokens, client secret, or existing grant. It is not a
+guarantee that a provider will accept registration or grant access.
+
+OAuth credentials are isolated by effective client name, server URL and profile.
+Changing the name requires fresh registration and consent; it does not reuse
+the previous identity's tokens. After editing a declaration, run the matching
+`mcp reauth` command and sync the destination with `mcp update` so existing
+client bridges receive the setting. Removing the override selects the original
+AllAgents identity and its separate cache.
+
+The setting is available in project, user and named-profile HTTP declarations.
+It is not valid for stdio servers. Every configured identity uses AllAgents'
+bridge, including Pi, so registration, reauthentication and token reuse share
+the same identity-isolated cache. Without an override, native HTTP routing is
+unchanged.
+
+URL query values may be exact `${ENV_VAR}` references. AllAgents resolves them
+from the connection environment, not while generating client configuration.
+Missing variables fail before connecting. Partial references and references in
+the URL host or path are not supported.
+
+Figma registration probes accepted both `Claude Code` and `Codex`, while the
+default AllAgents name was rejected. Those probes stopped before consent;
+registration success alone does not establish authenticated tool access.
+
 ## Reauthenticate
 
 Use the configured server name, not its URL:
@@ -194,6 +243,11 @@ Both contain `client-info.json`, `tokens.json`, `code-verifier.txt`, and
 `discovery.json`. Clients inside one profile share those files; different
 profiles do not. Later connections reuse valid tokens and refresh expired access
 tokens when possible. `mcp reauth --profile <name>` resets only that profile.
+
+These paths describe the default AllAgents identity. Explicit compatibility
+names use separate caches beneath the corresponding URL/profile scope.
+`mcp reauth` resets only the effective identity selected by the declaration;
+it does not clear or borrow another identity's credentials.
 Removing an installed or declared-only profile removes its OAuth subtree with
 its other profile-owned runtime state. Cleanup rejects symbolic-link or
 non-directory OAuth roots and retains retryable state on failure.

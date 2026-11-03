@@ -954,16 +954,14 @@ export async function planProfileOperation(
       const effectiveMcpServers =
         selectedMcpServers === null
           ? undefined
-          : declaration.mcpProxy
-            ? Object.fromEntries(
-                applyMcpProxy(
-                  new Map(Object.entries(selectedMcpServers)),
-                  client,
-                  declaration.mcpProxy,
-                  { profile },
-                ),
-              )
-            : selectedMcpServers;
+          : Object.fromEntries(
+              applyMcpProxy(
+                new Map(Object.entries(selectedMcpServers)),
+                client,
+                declaration.mcpProxy,
+                { profile },
+              ),
+            );
       const hasMcp = Object.keys(effectiveMcpServers ?? {}).length > 0;
 
       const requiresMcpPrerequisite =

@@ -5,6 +5,7 @@ import {
   ProfileMcpServerNameSchema,
 } from '../../../models/workspace-config.js';
 import { flattenZodIssues } from '../../../utils/zod-issues.js';
+import { applyMcpProxy } from '../../mcp-proxy.js';
 import type { ProfileSerializationInput } from '../types.js';
 
 const SENSITIVE_QUERY_KEY =
@@ -15,6 +16,7 @@ const SECRET_REFERENCE_PATTERN = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 export function serializeProfileMcpServers(
   input: ProfileSerializationInput,
   client: ClientType,
+  profile?: string,
 ): Record<string, McpServerConfig> | null {
   if (input.mcpServers === undefined) return null;
   const selected: Record<string, McpServerConfig> = {};
@@ -67,6 +69,7 @@ export function serializeProfileMcpServers(
         ...(config.type && { type: config.type }),
         url: config.url,
         ...(headers && { headers }),
+        ...(config.oauth && { oauth: config.oauth }),
       };
       continue;
     }
@@ -83,5 +86,9 @@ export function serializeProfileMcpServers(
       ...(env && { env }),
     };
   }
-  return selected;
+  return profile === undefined
+    ? selected
+    : Object.fromEntries(
+        applyMcpProxy(new Map(Object.entries(selected)), client, undefined, { profile }),
+      );
 }

@@ -7,6 +7,7 @@ import {
   syncClaudeMcpConfig,
   syncClaudeMcpServersViaCli,
 } from '../../../src/core/claude-mcp.js';
+import { applyMcpProxy } from '../../../src/core/mcp-proxy.js';
 import type { NativeCommandResult } from '../../../src/core/native/types.js';
 import type { ValidatedPlugin } from '../../../src/core/sync.js';
 
@@ -219,6 +220,48 @@ describe('syncClaudeMcpServersViaCli (user-scoped via CLI)', () => {
     return { fn, calls };
   }
 
+  function bridgeServers(clientName: string) {
+    return applyMcpProxy(new Map([
+      ['figma', { url: 'https://mcp.figma.com/mcp', oauth: { clientName } }],
+    ]), 'claude');
+  }
+
+  function fakeClaudeCli(
+    initialServers: Map<string, unknown>,
+    failedOperation?: 'remove' | 'add',
+  ) {
+    const servers = new Map(initialServers);
+    const mutations: string[] = [];
+    const execute = (_binary: string, args: string[]): NativeCommandResult => {
+      if (args[0] === '--version') return { success: true, output: '1.0.0' };
+      if (args[0] !== 'mcp') throw new Error('Unexpected Claude command');
+      if (args[1] === 'get') {
+        return servers.has(args[2]!)
+          ? { success: true, output: 'Configured server' }
+          : { success: false, output: '', error: `No MCP server found with name: ${args[2]}` };
+      }
+      if (args[1] === failedOperation) {
+        return { success: false, output: '', error: 'temporary failure' };
+      }
+      if (args[1] === 'remove' && args[3] === '--scope' && args[4] === 'user') {
+        servers.delete(args[2]!);
+        mutations.push('remove');
+        return { success: true, output: 'Removed' };
+      }
+      if (args[1] === 'add' && args[2] === '--scope' && args[3] === 'user' && args[5] === '--') {
+        const name = args[4]!;
+        if (servers.has(name)) {
+          return { success: false, output: '', error: 'Server already exists' };
+        }
+        servers.set(name, { command: args[6], args: args.slice(7) });
+        mutations.push('add');
+        return { success: true, output: 'Added' };
+      }
+      throw new Error('Unexpected Claude MCP command');
+    };
+    return { servers, mutations, execute };
+  }
+
   test('adds new server when not already present', async () => {
     writeFileSync(
       join(pluginDir, '.mcp.json'),
@@ -248,45 +291,92 @@ describe('syncClaudeMcpServersViaCli (user-scoped via CLI)', () => {
     expect(addCall!.args).toContain('user');
   });
 
-  test('skips server that already exists and is not tracked', async () => {
-    writeFileSync(
-      join(pluginDir, '.mcp.json'),
-      JSON.stringify({ mcpServers: { deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' } } }),
-    );
+  test('preserves an untracked bridge when the desired OAuth identity changes', async () => {
+    const original = bridgeServers('Claude Code');
+    const cli = fakeClaudeCli(original);
 
-    const { fn } = mockExec({
-      'claude --version': { success: true, output: '1.0.0' },
-      'claude mcp get deepwiki': { success: true, output: 'deepwiki: ...' },
-    });
-
-    const result = await syncClaudeMcpServersViaCli([makePlugin(pluginDir)], {
+    const result = await syncClaudeMcpServersViaCli([], {
       trackedServers: [],
-      _mockExecute: fn,
+      serverOverrides: bridgeServers('Codex'),
+      _mockExecute: cli.execute,
     });
 
-    expect(result.skipped).toBe(1);
-    expect(result.added).toBe(0);
+    expect(cli.servers).toEqual(original);
+    expect(result.skippedServers).toEqual(['figma']);
     expect(result.trackedServers).toEqual([]);
+    expect(result.authoritative).toBe(true);
   });
 
-  test('keeps tracking server that exists and was previously tracked', async () => {
-    writeFileSync(
-      join(pluginDir, '.mcp.json'),
-      JSON.stringify({ mcpServers: { deepwiki: { type: 'http', url: 'https://mcp.deepwiki.com/mcp' } } }),
-    );
+  test('updates an owned bridge to the newly configured OAuth identity', async () => {
+    const cli = fakeClaudeCli(bridgeServers('Claude Code'));
+    const desired = bridgeServers('Codex');
 
-    const { fn } = mockExec({
-      'claude --version': { success: true, output: '1.0.0' },
-      'claude mcp get deepwiki': { success: true, output: 'deepwiki: ...' },
+    const result = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['figma'],
+      serverOverrides: desired,
+      _mockExecute: cli.execute,
     });
 
-    const result = await syncClaudeMcpServersViaCli([makePlugin(pluginDir)], {
-      trackedServers: ['deepwiki'],
-      _mockExecute: fn,
+    expect(cli.servers).toEqual(desired);
+    expect(result.overwrittenServers).toEqual(['figma']);
+    expect(result.overwritten).toBe(1);
+    expect(result.added).toBe(0);
+    expect(result.removed).toBe(0);
+    expect(result.trackedServers).toEqual(['figma']);
+    expect(result.authoritative).toBe(true);
+  });
+
+  test.each(['remove', 'add'] as const)('retains ownership when updating an owned bridge fails during %s', async (operation) => {
+    const original = bridgeServers('Claude Code');
+    const cli = fakeClaudeCli(original, operation);
+
+    const result = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['figma'],
+      serverOverrides: bridgeServers('Codex'),
+      _mockExecute: cli.execute,
     });
 
-    expect(result.skipped).toBe(0);
-    expect(result.trackedServers).toEqual(['deepwiki']);
+    expect(cli.servers).toEqual(operation === 'remove' ? original : new Map());
+    expect(result.overwritten).toBe(0);
+    expect(result.trackedServers).toEqual(['figma']);
+    expect(result.authoritative).toBe(false);
+    expect(result.warnings[0]).toContain(`Failed to ${operation}`);
+  });
+
+  test('previews an owned bridge update without mutating Claude configuration', async () => {
+    const original = bridgeServers('Claude Code');
+    const cli = fakeClaudeCli(original);
+
+    const result = await syncClaudeMcpServersViaCli([], {
+      dryRun: true,
+      trackedServers: ['figma'],
+      serverOverrides: bridgeServers('Codex'),
+      _mockExecute: cli.execute,
+    });
+
+    expect(cli.servers).toEqual(original);
+    expect(cli.mutations).toEqual([]);
+    expect(result.overwrittenServers).toEqual(['figma']);
+    expect(result.trackedServers).toEqual(['figma']);
+    expect(result.authoritative).toBe(true);
+  });
+
+  test('preserves an owned bridge when the replacement configuration is unsupported', async () => {
+    const original = bridgeServers('Claude Code');
+    const cli = fakeClaudeCli(original);
+
+    const result = await syncClaudeMcpServersViaCli([], {
+      trackedServers: ['figma'],
+      serverOverrides: new Map([['figma', { type: 'sse' }]]),
+      _mockExecute: cli.execute,
+    });
+
+    expect(cli.servers).toEqual(original);
+    expect(cli.mutations).toEqual([]);
+    expect(result.overwritten).toBe(0);
+    expect(result.trackedServers).toEqual(['figma']);
+    expect(result.authoritative).toBe(false);
+    expect(result.warnings[0]).toContain('Unsupported MCP server config');
   });
 
   test('removes orphaned tracked server', async () => {

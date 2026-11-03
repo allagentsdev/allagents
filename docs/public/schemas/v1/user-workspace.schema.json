@@ -941,6 +941,16 @@
                       "type": "string"
                     }
                   },
+                  "oauth": {
+                    "type": "object",
+                    "properties": {
+                      "clientName": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "clients": {
                     "type": "array",
                     "items": {
@@ -2155,6 +2165,16 @@
                             "type": "string",
                             "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
                           }
+                        },
+                        "oauth": {
+                          "type": "object",
+                          "properties": {
+                            "clientName": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
                         },
                         "clients": {
                           "type": "array",

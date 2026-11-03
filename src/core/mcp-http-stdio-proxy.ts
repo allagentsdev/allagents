@@ -46,7 +46,7 @@ function parseCallToolResponse(result: CompatibilityCallToolResult) {
 export async function runHttpMcpStdioProxy(
   serverUrl: string,
   headers: Record<string, string> = {},
-  options: { profile?: string } = {},
+  options: { profile?: string; clientName?: string } = {},
 ): Promise<void> {
   const { client: remote } = await connectMcpHttpClient(serverUrl, {
     headers,

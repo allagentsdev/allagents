@@ -91,6 +91,7 @@ clients:
       'add',
       'deepwiki',
       dummy.mcpUrl,
+      '--oauth-client-name', '  Codex  ',
     ]);
 
     expect(result.exitCode).toBe(0);
@@ -99,7 +100,7 @@ clients:
 
     const workspace = readWorkspaceConfig(workspaceDir);
     expect(workspace.mcpServers).toEqual({
-      deepwiki: { type: 'http', url: dummy.mcpUrl },
+      deepwiki: { type: 'http', url: dummy.mcpUrl, oauth: { clientName: 'Codex' } },
     });
     expect(workspace.mcpProxy).toEqual({
       servers: {
@@ -117,6 +118,7 @@ clients:
       'mcp',
       'proxy',
       dummy.mcpUrl,
+      '--oauth-client-name', 'Codex',
     ]);
 
     const codexConfig = readFileSync(join(workspaceDir, '.codex', 'config.toml'), 'utf-8');

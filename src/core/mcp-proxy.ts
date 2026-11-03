@@ -33,7 +33,7 @@ export function shouldProxy(
  */
 function isHttpServer(
   config: unknown,
-): config is { url: string; headers?: Record<string, string> } {
+): config is Extract<McpServerConfig, { url: string }> {
   return (
     typeof config === 'object' &&
     config !== null &&
@@ -50,11 +50,15 @@ function toProxiedConfig(
   url: string,
   headers?: Record<string, string>,
   profile?: string,
+  clientName?: string,
 ): McpServerConfig {
   const args = ['-y', `allagents@${packageJson.version}`, 'mcp', 'proxy', url];
   const env: Record<string, string> = {};
   if (profile) {
     args.push('--profile', ProfileNameSchema.parse(profile));
+  }
+  if (clientName !== undefined) {
+    args.push('--oauth-client-name', clientName);
   }
   if (headers) {
     for (const [key, value] of Object.entries(headers)) {
@@ -84,18 +88,23 @@ function toProxiedConfig(
 export function applyMcpProxy<T>(
   servers: Map<string, T>,
   client: string,
-  config: McpProxyConfig,
+  config: McpProxyConfig = { clients: [] },
   options: { profile?: string } = {},
 ): Map<string, T | McpServerConfig> {
   const result = new Map<string, T | McpServerConfig>();
   for (const [name, serverConfig] of servers) {
-    if (isHttpServer(serverConfig) && shouldProxy(name, client, config)) {
+    if (
+      isHttpServer(serverConfig) &&
+      (shouldProxy(name, client, config) ||
+        serverConfig.oauth?.clientName !== undefined)
+    ) {
       result.set(
         name,
         toProxiedConfig(
           serverConfig.url,
           serverConfig.headers,
           options.profile,
+          serverConfig.oauth?.clientName,
         ),
       );
     } else {

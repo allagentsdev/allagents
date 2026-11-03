@@ -55,6 +55,37 @@ describe('destination-aware MCP declarations', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  for (const kind of ['project', 'user', 'profile'] as const) {
+    test(`persists a trimmed HTTP OAuth identity in the ${kind} destination`, async () => {
+      writeFileSync(configPath, JSON.stringify({
+        repositories: [], plugins: [], clients: [],
+        ...(kind === 'profile' ? { profiles: { work: { clients: [{ name: 'codex' }] } } } : {}),
+      }));
+      const destination: McpDestination = kind === 'profile'
+        ? { kind, name: 'work', configPath }
+        : kind === 'project'
+          ? { kind, workspacePath: dir, configPath }
+          : { kind, configPath };
+      const result = await addMcpServer(destination, 'remote', {
+        url: 'https://mcp.example.com',
+        oauth: { clientName: '  Codex  ' },
+      });
+      expect(result.success).toBe(true);
+      expect(await getMcpServer(destination, 'remote')).toEqual({
+        url: 'https://mcp.example.com', oauth: { clientName: 'Codex' },
+      });
+      const persisted = readFileSync(configPath, 'utf8');
+      for (const invalid of [
+        { url: 'https://mcp.example.com', oauth: { clientName: '   ' } },
+        { command: 'echo', oauth: { clientName: 'Codex' } },
+      ]) {
+        const rejected = await addMcpServer(destination, 'invalid', invalid);
+        expect(rejected.success).toBe(false);
+        expect(readFileSync(configPath, 'utf8')).toBe(persisted);
+      }
+    });
+  }
+
   test('rejects simultaneous scope and profile selectors', () => {
     expect(() =>
       resolveMcpDestination({
@@ -409,6 +440,26 @@ profiles:
 });
 
 describe('buildMcpServerConfigFromFlags', () => {
+  test('trims an HTTP OAuth identity', () => {
+    expect(buildMcpServerConfigFromFlags({
+      commandOrUrl: 'https://mcp.example.com', oauthClientName: '  Claude Code  ',
+    })).toEqual({ config: {
+      type: 'http', url: 'https://mcp.example.com', oauth: { clientName: 'Claude Code' },
+    } });
+  });
+
+  test('rejects an empty OAuth identity', () => {
+    expect(buildMcpServerConfigFromFlags({
+      commandOrUrl: 'https://mcp.example.com', oauthClientName: '   ',
+    })).toEqual({ error: '--oauth-client-name must not be empty' });
+  });
+
+  test('rejects OAuth identities for stdio transport', () => {
+    expect(buildMcpServerConfigFromFlags({
+      commandOrUrl: 'npx', oauthClientName: 'Codex',
+    })).toEqual({ error: '--oauth-client-name is not supported for stdio transport' });
+  });
+
   test('auto-detects http transport from URL', () => {
     const result = buildMcpServerConfigFromFlags({
       commandOrUrl: 'https://mcp.example.com',

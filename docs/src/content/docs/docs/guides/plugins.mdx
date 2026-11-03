@@ -14,12 +14,15 @@ my-plugin/
 ├── hooks/           # Hook definitions (Claude, Copilot, Factory)
 ├── hooks.json       # Copilot hook configuration (optional)
 ├── commands/        # Commands (Claude, OpenCode)
-├── .github/         # Project-scoped GitHub overrides (Copilot, VSCode)
+├── .github/         # Project-scoped assistant resources (Copilot, VSCode)
 │   ├── copilot-instructions.md
 │   ├── instructions/    # Pattern-based instructions
-│   ├── prompts/         # Prompt files
-│   ├── agents/          # GitHub agent overrides
-│   └── hooks/           # Project Copilot hooks
+│   ├── prompts/         # Reusable prompt files
+│   ├── agents/          # Custom agents and GitHub agent overrides
+│   ├── skills/          # Assistant skills
+│   ├── hooks/           # Project Copilot hooks
+│   ├── scripts/         # Supporting assistant scripts
+│   └── tools/           # Supporting assistant tools
 └── AGENTS.md
 ```
 
@@ -123,12 +126,36 @@ Marketplace skill, command, agent, and hook declarations do not override the
 plugin's component discovery in the observed Copilot 1.0.103 loader. Put custom
 paths for those components in the plugin manifest.
 
-Marketplace and plugin manifests do not expose the whole repository's
-`.github/` directory. Development instructions, hooks, workflows, and package
-metadata are not copied as plugin components. An explicitly declared component
-path inside `.github/` is still eligible. Ordinary AllAgents file sources with
-no marketplace or plugin manifest retain their repository-overlay behavior;
-use `exclude` to filter that content.
+AllAgents discovers supported `.github/` assistant resources independently of
+marketplace/plugin manifests and `strict`: `agents/`, `instructions/`, `prompts/`,
+`skills/`, `hooks/`, `scripts/`, `tools/`, and `copilot-instructions.md`. These
+resources remain eligible on both fresh installs and existing-workspace updates;
+an omitted manifest component does not suppress them. Supporting scripts and
+tools remain available for assistant resources, and GitHub agents retain their
+existing precedence over root agent definitions.
+
+The directory name alone does not make its contents development-only:
+[GitHub documents repository-wide instructions in `.github/copilot-instructions.md`
+and path-specific instructions in `.github/instructions/`](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions).
+These files provide Copilot with repository guidance rather than CI jobs.
+[GitHub identifies `.github/prompts/*.prompt.md` as reusable prompt templates](https://docs.github.com/en/copilot/concepts/prompting-and-context/prompt-files),
+and [VS Code documents `.github/prompts/` as their workspace location](https://code.visualstudio.com/docs/agent-customization/prompt-files#_prompt-file-locations).
+[GitHub creates custom agent profiles in `.github/agents/*.agent.md`](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/create-custom-agents#creating-a-custom-agent-profile-in-a-repository-on-github);
+[VS Code likewise uses `.github/agents/` for custom agent configurations](https://code.visualstudio.com/docs/agent-customization/custom-agents#_custom-agent-file-locations).
+These are assistant configuration, not workflow definitions.
+
+This is a supported assistant-root boundary, not a whole-directory copy.
+[GitHub Actions workflows](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows)
+in `.github/workflows/`, package metadata in `.github/plugin/`, and other
+unsupported `.github/` entries are not copied as repository overlays, whether or
+not a manifest is present. Use `exclude` to filter assistant resources you do
+not want distributed. Client/scope support, original plugin-relative exclusions,
+ownership tracking and cleanup, source containment, and copy-time source safety
+checks are unchanged. Preflight validates selected supported roots without
+traversing unrelated workflows. Recognized package manifests are still validated
+as declaration metadata. Previously untracked metadata from older installations
+is left untouched; this boundary prevents new distribution rather than claiming
+ownership of existing user files.
 
 ### Migrating from the component allowlist
 
@@ -150,9 +177,11 @@ plugins:
       exclude: [development-server]
 ```
 
-`hooks: false` disables copied and generated plugin hook components without
-disabling inline MCP from the same manifest. File exclusions remain relative
-to the original plugin root, including custom component paths. Excluding the
+`hooks: false` disables copied and generated plugin hook components, including
+raw `.github/hooks/` files. It does not disable instructions, prompts, agents,
+skills, supporting scripts/tools, or inline MCP from the same manifest. File
+exclusions remain relative to the original plugin root, including custom
+component paths. Excluding the
 manifest that declares an inline configuration also excludes that inline
 configuration. Individual inline hook events are not selectable.
 

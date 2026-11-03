@@ -72,16 +72,27 @@ Resolve supported legacy component sources once in
 resolution, validation, copying, inventories, MCP-only updates, and profile file
 planning. Consumers must not interpret `strict` as a component allowlist or
 independently choose a different manifest.
+Keep `PluginComponents.legacyRepository` separate from GitHub overlay eligibility:
+ordinary manifest-free repositories retain nested-skill precedence, while a
+marketplace root skill stays authoritative over unsupported flat children.
 
 Keep conventional MCP precedence, plugin-manifest custom paths, and inline
 configuration provenance aligned with the
 [marketplace discovery contract](../docs/src/content/docs/docs/guides/plugins.mdx#marketplace-component-discovery).
 Check lexical and canonical source containment before reading components, and
 retain original plugin-relative exclusions even when a component uses a custom
-directory. `hooks: false` is the explicit file-install hook opt-out; it must not
-disable MCP or other components. Never copy development `.github/` overlays from
-a manifest-bearing plugin unless a supported component explicitly selects that
-path. Failed source resolution must preserve previously owned output and state.
+directory. `hooks: false` is the explicit file-install hook opt-out, including raw
+`.github/hooks/`; it must not disable MCP or other assistant components.
+Use `GITHUB_ASSISTANT_ENTRIES` in `src/models/plugin-components.ts` as the shared
+boundary for `.github/` discovery, preflight, copying, and inventory: `agents/`,
+`instructions/`, `prompts/`, `skills/`, `hooks/`, `scripts/`, `tools/`, and
+`copilot-instructions.md`. Preserve these assistant resources regardless of
+marketplace/plugin manifests or `strict`, including supporting scripts/tools
+and existing GitHub-agent precedence. Do not copy workflows, plugin metadata,
+or other unsupported `.github/` entries as repository overlays. Preflight only
+selected supported roots, retaining exclusions, lexical/canonical containment,
+and copy-time source safety checks. Preserve existing ownership and cleanup
+rules; failed source resolution must preserve previously owned output and state.
 
 ## Root skill resources
 

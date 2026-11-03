@@ -1,8 +1,8 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import JSON5 from 'json5';
 import { MarketplacePluginEntrySchema, type MarketplacePluginEntry } from '../models/marketplace-manifest.js';
-import { ROOT_SKILL_EXCLUDED_ENTRIES, type PluginComponentPolicy, type PluginComponents, type PluginConfigSource } from '../models/plugin-components.js';
+import { GITHUB_ASSISTANT_ENTRIES, ROOT_SKILL_EXCLUDED_ENTRIES, type PluginComponentPolicy, type PluginComponents, type PluginConfigSource } from '../models/plugin-components.js';
 import picomatch from 'picomatch';
 
 const PLUGIN_MANIFEST_PATHS = [
@@ -139,7 +139,7 @@ export function resolvePluginComponents(pluginPath: string, entry?: MarketplaceP
   const selectedEntry = entry ?? ownEntry;
   const manifestPath = firstExisting(root, PLUGIN_MANIFEST_PATHS);
   const manifest = manifestPath ? readObject(root, manifestPath) : undefined;
-  const github = !manifestPath && !marketplacePath && !entry;
+  const legacyRepository = !manifestPath && !marketplacePath && !entry;
   const warnings: string[] = [];
 
   const paths = (kind: 'skills' | 'commands' | 'agents'): string[] => {
@@ -174,7 +174,7 @@ export function resolvePluginComponents(pluginPath: string, entry?: MarketplaceP
       assertPluginComponentTree(root, root, policy.exclude);
       return [root];
     }
-    return kind === 'skills' && github ? [root] : [];
+    return kind === 'skills' && legacyRepository ? [root] : [];
   };
 
   const conventionalHooks = (): PluginConfigSource[] => {
@@ -213,8 +213,7 @@ export function resolvePluginComponents(pluginPath: string, entry?: MarketplaceP
   } else if (isRecord(manifest.hooks)) hooks = configDeclaration(manifest.hooks, manifestPath, 'hooks');
   else hooks = configDeclaration(manifest.hooks, manifestPath, 'hooks');
   const hooksDirectory = join(root, 'hooks');
-  const conventionalHookSelection = hooks.some((source) => source.path === join(root, 'hooks.json') || source.path === join(hooksDirectory, 'hooks.json'));
-  const hookResources = policy.hooks !== false && (github || conventionalHookSelection) && !excluded(root, hooksDirectory, policy.exclude) && exists(hooksDirectory) && statSync(hooksDirectory).isDirectory()
+  const hookResources = policy.hooks !== false && !excluded(root, hooksDirectory, policy.exclude) && exists(hooksDirectory) && statSync(hooksDirectory).isDirectory()
     ? [hooksDirectory] : [];
   for (const path of hookResources) assertPluginComponentTree(root, path, policy.exclude);
 
@@ -250,8 +249,16 @@ export function resolvePluginComponents(pluginPath: string, entry?: MarketplaceP
     }
     return true;
   });
-  if (github && existsSync(join(root, '.github'))) {
-    assertPluginComponentTree(root, join(root, '.github'), [...(policy.exclude ?? []), '.github/mcp.json', '.github/plugin/**']);
+  const githubRoot = join(root, '.github');
+  if (!excluded(root, githubRoot, policy.exclude) && exists(githubRoot)) {
+    assertPluginComponentPath(root, githubRoot, policy.exclude);
+    for (const entry of GITHUB_ASSISTANT_ENTRIES) {
+      if (entry === 'hooks' && policy.hooks === false) continue;
+      const source = join(githubRoot, entry);
+      if (!excluded(root, source, policy.exclude) && exists(source)) {
+        assertPluginComponentTree(root, source, policy.exclude);
+      }
+    }
   }
-  return { skills: paths('skills'), commands: paths('commands'), agents: paths('agents'), hooks, hookResources, mcpServers, github, ...(warnings.length > 0 && { warnings }) };
+  return { skills: paths('skills'), commands: paths('commands'), agents: paths('agents'), hooks, hookResources, mcpServers, github: true, legacyRepository, ...(warnings.length > 0 && { warnings }) };
 }

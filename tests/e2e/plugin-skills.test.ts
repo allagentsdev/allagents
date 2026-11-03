@@ -254,7 +254,7 @@ description: Blog watcher
     }
   });
 
-  it('discovers conventional hooks and MCP without distributing development GitHub config', async () => {
+  it('discovers conventional hooks and MCP while preserving assistant GitHub configuration', async () => {
     const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
     const fakeHome = join(tmpDir, 'home');
     const marketplaceDir = join(tmpDir, 'ediprod-marketplace');
@@ -313,8 +313,7 @@ description: Blog watcher
 
       const config: WorkspaceConfig = {
         repositories: [],
-        // Direct repository sources should honor their embedded marketplace
-        // boundary instead of treating repository configuration as plugin data.
+        // Embedded marketplace metadata does not suppress assistant artifacts.
         plugins: [marketplaceDir],
         clients: ['copilot', 'claude', 'codex', 'vscode'],
         syncMode: 'copy',
@@ -336,7 +335,7 @@ description: Blog watcher
       expect(hooks.hooks.sessionStart).toEqual([
         expect.objectContaining({ type: 'command', bash: 'echo undeclared' }),
       ]);
-      expect(existsSync(join(tmpDir, '.github', 'hooks', 'repository.json'))).toBe(false);
+      expect(await readFile(join(tmpDir, '.github', 'hooks', 'repository.json'), 'utf-8')).toBe('{"hooks":{}}');
       expect(existsSync(join(tmpDir, '.codex', 'hooks.json'))).toBe(false);
       expect(existsSync(join(tmpDir, '.github', 'plugin'))).toBe(false);
       for (const [path, key] of [

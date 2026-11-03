@@ -113,6 +113,7 @@ describe('plugin exclude patterns', () => {
     await symlink(outside, join(pluginDir, 'custom/keep/private.txt'), 'file');
     const components = {
       skills: [pluginDir], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
     };
     const results = await copySkills(pluginDir, workspaceDir, 'claude', {
       components, exclude: ['SKILL.md', 'custom/hidden/SKILL.md', 'custom/keep/private.txt'],

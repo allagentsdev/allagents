@@ -631,6 +631,35 @@ describe('profile lifecycle manager', () => {
     } });
   });
 
+  it('materializes selected GitHub assistant files without expanding workflows or manifest metadata', async () => {
+    const test = await fixture();
+    const local = join(test.workspaceDirectory, 'github-assistant');
+    await mkdir(join(local, '.github/prompts'), { recursive: true });
+    await mkdir(join(local, '.github/instructions'), { recursive: true });
+    await mkdir(join(local, '.github/workflows'), { recursive: true });
+    await writeFile(join(local, 'plugin.json'), '{"name":"github-assistant"}');
+    await writeFile(join(local, '.github/prompts/review.prompt.md'), '# Review\n');
+    await writeFile(join(local, '.github/instructions/review.instructions.md'), '# Instructions\n');
+    await writeFile(join(local, '.github/workflows/ci.yml'), 'name: Build\n');
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'copilot', install: 'file' }], plugins: [{ source: local, install: 'file' }] },
+    });
+    const adapter = new class extends MemoryProfileAdapter {
+      override resolveContext(profileName: string, options: { workspaceDirectory: string }): ProfileClientContext {
+        const context = super.resolveContext(profileName, options);
+        return { ...context, fileMapping: { ...context.fileMapping, githubPath: '.github/' } };
+      }
+    }('copilot', test.home);
+    const deps = dependencies(adapter);
+    const plan = await planProfileOperation('work', 'install', test.options, deps);
+    expect((await applyProfilePlan(plan, test.options, deps)).success).toBe(true);
+    const root = adapter.resolveContext('work', test.options).root;
+    expect(await readFile(join(root, '.github/prompts/review.prompt.md'), 'utf8')).toBe('# Review\n');
+    expect(await readFile(join(root, '.github/instructions/review.instructions.md'), 'utf8')).toBe('# Instructions\n');
+    await expect(stat(join(root, '.github/workflows'))).rejects.toThrow();
+    await expect(stat(join(root, 'plugin.json'))).rejects.toThrow();
+  });
+
   it('plans inline hook configuration bytes rather than copying the plugin manifest', async () => {
     const test = await fixture();
     const local = join(test.workspaceDirectory, 'inline-hooks');

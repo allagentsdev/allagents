@@ -141,7 +141,7 @@ export async function discoverSkillEntriesFromPluginRoot(
     let entries: DiscoveredSkillEntry[];
     // Preserve the ordinary repository layout: nested skills take priority over
     // a root SKILL.md. Explicit skill directories select that skill directly.
-    const nested = scanRoot === pluginPath && selectedComponents.github
+    const nested = scanRoot === pluginPath && selectedComponents.legacyRepository
       ? await discoverNestedSkillEntries(scanRoot, warnings, exclude, pluginPath)
       : [];
     if (nested.length > 0) {
@@ -159,7 +159,7 @@ export async function discoverSkillEntriesFromPluginRoot(
       }
       entries = [{ name, subpath: name, skillPath: scanRoot }];
     } else {
-      entries = scanRoot === pluginPath && selectedComponents.github
+      entries = scanRoot === pluginPath && selectedComponents.legacyRepository
         ? nested
         : await discoverNestedSkillEntries(scanRoot, warnings, exclude, pluginPath);
     }

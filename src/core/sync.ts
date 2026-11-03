@@ -1929,6 +1929,7 @@ async function copyValidatedPlugin(
             syncMode: 'copy',
             agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
             ...(exclude && { exclude }),
+            ...(validatedPlugin.hooks === false && { hooks: false as const }),
             ...(validatedPlugin.components && { components: validatedPlugin.components }),
           },
         );
@@ -1949,6 +1950,7 @@ async function copyValidatedPlugin(
             canonicalSkillsPath: CANONICAL_SKILLS_PATH,
             agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
             ...(exclude && { exclude }),
+            ...(validatedPlugin.hooks === false && { hooks: false as const }),
             ...(validatedPlugin.components && { components: validatedPlugin.components }),
           },
         );
@@ -1976,6 +1978,7 @@ async function copyValidatedPlugin(
           syncMode: 'copy',
           agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
           ...(exclude && { exclude }),
+          ...(validatedPlugin.hooks === false && { hooks: false as const }),
           ...(validatedPlugin.components && { components: validatedPlugin.components }),
         },
       );

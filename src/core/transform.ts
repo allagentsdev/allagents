@@ -25,7 +25,11 @@ import {
   type ClientMapping,
   type ClientMappings,
 } from '../models/client-mapping.js';
-import { ROOT_SKILL_EXCLUDED_ENTRIES, type PluginComponents } from '../models/plugin-components.js';
+import {
+  GITHUB_ASSISTANT_ENTRIES,
+  ROOT_SKILL_EXCLUDED_ENTRIES,
+  type PluginComponents,
+} from '../models/plugin-components.js';
 import type {
   ClientType,
   PluginSkillsConfig,
@@ -117,6 +121,8 @@ export interface CopyOptions {
   writeRoot?: string;
   /** Selected contained component sources; direct callers resolve them by default. */
   components?: PluginComponents;
+  /** Disable portable hooks and raw GitHub hook resources. */
+  hooks?: false;
   /**
    * Glob patterns of files to exclude during sync.
    * Paths are relative to the plugin root (e.g., ".github/instructions/file.md",
@@ -684,7 +690,7 @@ export async function copyHooks(
   options: CopyOptions = {},
 ): Promise<CopyResult[]> {
   const mapping = getMapping(client, options);
-  if (!mapping.hooksPath) return [];
+  if (!mapping.hooksPath || options.hooks === false) return [];
   const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude });
   const files: ComponentFile[] = [];
   // Conventional declaration files are never resource payloads, even when a
@@ -1190,12 +1196,6 @@ function githubContentExcludes(
   // Lower-priority conventional files are configuration too, not payloads.
   effectiveExclude.push('.github/mcp.json');
 
-  // Copilot plugin package metadata is used to discover a native plugin, but
-  // it has no runtime role after file-mode content is overlaid into a project.
-  if (!relocatesGitHubContent(mapping)) {
-    effectiveExclude.push('.github/plugin');
-  }
-
   // .github/hooks is repository-owned. Root hooks/ remains the portable
   // plugin artifact that can be installed into a client's user hook path.
   if (relocatesGitHubContent(mapping)) {
@@ -1294,91 +1294,6 @@ export async function findRelocatedGitHubHooks(
   return { found: found.filter((path) => path !== undefined) };
 }
 
-/**
- * Recursively process a directory, copying files and adjusting links in markdown.
- * Single-pass approach: read source → transform if markdown → write to dest.
- */
-function isMalformedGitHubAgentsEntry(
-  pluginPath: string,
-  sourcePath: string,
-  entry: Dirent,
-): boolean {
-  return (
-    !entry.isDirectory() &&
-    relative(pluginPath, sourcePath).replaceAll('\\', '/') === '.github/agents'
-  );
-}
-
-async function copyAndAdjustDirectory(
-  sourceDir: string,
-  destDir: string,
-  sourceBase: string,
-  pluginPath: string,
-  skillsPath: string,
-  skillNameMap?: Map<string, string>,
-  exclude?: string[],
-): Promise<void> {
-  await mkdir(destDir, { recursive: true });
-  const entries = await readdir(sourceDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const sourcePath = join(sourceDir, entry.name);
-    const destPath = join(destDir, entry.name);
-    if (isMalformedGitHubAgentsEntry(pluginPath, sourcePath, entry)) continue;
-
-    if (isExcluded(pluginPath, sourcePath, exclude)) {
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      await copyAndAdjustDirectory(
-        sourcePath,
-        destPath,
-        sourceBase,
-        pluginPath,
-        skillsPath,
-        skillNameMap,
-        exclude,
-      );
-    } else {
-      const relativePath = relative(sourceBase, sourcePath).replaceAll(
-        '\\',
-        '/',
-      );
-      const isMarkdown =
-        entry.name.endsWith('.md') || entry.name.endsWith('.markdown');
-
-      if (isMarkdown) {
-        // Read, transform, write in one pass
-        let content = await readFile(sourcePath, 'utf-8');
-        content = adjustLinksInContent(content, relativePath, {
-          ...(skillNameMap && { skillNameMap }),
-          workspaceSkillsPath: skillsPath,
-        });
-        await writeFile(destPath, content, 'utf-8');
-      } else {
-        // Copy non-markdown files directly
-        await cp(sourcePath, destPath);
-      }
-    }
-  }
-}
-
-async function hasIncludedFiles(
-  sourceDir: string,
-  pluginPath: string,
-  exclude?: string[],
-): Promise<boolean> {
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    const sourcePath = join(sourceDir, entry.name);
-    if (isMalformedGitHubAgentsEntry(pluginPath, sourcePath, entry)) continue;
-    if (isExcluded(pluginPath, sourcePath, exclude)) continue;
-    if (!entry.isDirectory()) return true;
-    if (await hasIncludedFiles(sourcePath, pluginPath, exclude)) return true;
-  }
-  return false;
-}
-
 interface PlannedAgentCopyOptions {
   dryRun: boolean;
   clientMappings: ClientMappings;
@@ -1454,9 +1369,9 @@ async function copyPlannedAgentOutputs(
 }
 
 /**
- * Copy GitHub-specific content from plugin to workspace. Agent files always
- * use the immutable per-file ownership plan and are excluded from aggregate
- * traversal.
+ * Copy supported GitHub assistant roots from plugin to workspace. Top-level
+ * agent definitions use the immutable per-file ownership plan and are excluded
+ * from aggregate traversal; repository configuration is never traversed.
  */
 export async function copyGitHubContent(
   pluginPath: string,
@@ -1468,7 +1383,7 @@ export async function copyGitHubContent(
   const mapping = getMapping(client, options);
   const mappings = options.clientMappings ?? CLIENT_MAPPINGS;
   const results: CopyResult[] = [];
-  const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude });
+  const components = options.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude, hooks: options.hooks });
   if (!components.github) return results;
   if (!mapping.githubPath) {
     return options.agentOutputs
@@ -1509,13 +1424,43 @@ export async function copyGitHubContent(
 
   const destDir = resolveMappedPath(workspacePath, mapping.githubPath);
   const effectiveExclude = githubContentExcludes(mapping, options.exclude);
-  let hasAggregateContent = false;
   try {
-    hasAggregateContent = await hasIncludedFiles(
-      sourceDir,
-      pluginPath,
-      effectiveExclude,
-    );
+    const files: ComponentFile[] = [];
+    if (!isExcluded(pluginPath, sourceDir, effectiveExclude)) {
+      for (const entry of GITHUB_ASSISTANT_ENTRIES) {
+        const source = join(sourceDir, entry);
+        if (entry === 'hooks' && options.hooks === false) continue;
+        if (isExcluded(pluginPath, source, effectiveExclude)) continue;
+        if (entry === 'agents' && existsSync(source)) {
+          await assertSafePluginSource(pluginPath, source);
+          if (!(await stat(source)).isDirectory()) continue;
+        }
+        for (const file of await collectComponentFiles(source, pluginPath, effectiveExclude)) {
+          files.push({ source: file.source, relativePath: relative(sourceDir, file.source) });
+        }
+      }
+    }
+    if (files.length > 0) {
+      await assertSafeDestination(options.writeRoot ?? workspacePath, destDir);
+      for (const file of files) {
+        const destination = join(destDir, file.relativePath);
+        await assertSafePluginSource(pluginPath, file.source);
+        await assertSafeDestination(options.writeRoot ?? workspacePath, destination);
+        const content = file.source.endsWith('.md') || file.source.endsWith('.markdown')
+          ? adjustLinksInContent(await readFile(file.source, 'utf-8'), file.relativePath.replaceAll('\\', '/'), {
+              ...(skillNameMap && { skillNameMap }),
+              workspaceSkillsPath: mapping.skillsPath,
+            })
+          : undefined;
+        if (!dryRun) {
+          await mkdir(dirname(destination), { recursive: true });
+          if (content !== undefined) await writeFile(destination, content, 'utf-8');
+          else await cp(file.source, destination, { dereference: true });
+        }
+        results.push({ source: file.source, destination, action: 'copied', client,
+          ...(content !== undefined && { content }) });
+      }
+    }
   } catch (error) {
     results.push({
       source: sourceDir,
@@ -1523,39 +1468,6 @@ export async function copyGitHubContent(
       action: 'failed',
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-  }
-  if (hasAggregateContent) {
-    if (dryRun) {
-      results.push({
-        source: sourceDir,
-        destination: destDir,
-        action: 'copied',
-      });
-    } else {
-      try {
-        await copyAndAdjustDirectory(
-          sourceDir,
-          destDir,
-          sourceDir,
-          pluginPath,
-          mapping.skillsPath,
-          skillNameMap,
-          effectiveExclude,
-        );
-        results.push({
-          source: sourceDir,
-          destination: destDir,
-          action: 'copied',
-        });
-      } catch (error) {
-        results.push({
-          source: sourceDir,
-          destination: destDir,
-          action: 'failed',
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
-    }
   }
 
   results.push(
@@ -1626,7 +1538,7 @@ export async function copyPluginToWorkspace(
     skillNameMap,
     syncMode,
     canonicalSkillsPath,
-    components = resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude }),
+    components = resolvePluginComponents(pluginPath, undefined, { exclude: options.exclude, hooks: options.hooks }),
     agentOutputs: providedAgentOutputs,
     ...remainingOptions
   } = options;

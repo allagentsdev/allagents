@@ -144,6 +144,7 @@ description: pdf
     const components = {
       skills: [join(pluginDir, 'custom')], commands: [], agents: [],
       hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
     };
     const skills = await collectPluginSkills(
       pluginDir, 'selected', undefined, 'selected-plugin', undefined,
@@ -164,6 +165,7 @@ description: pdf
     const components = {
       skills: [join(pluginDir, 'custom/skill/SKILL.md')], commands: [], agents: [],
       hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
     };
     expect(await collectPluginSkills(
       pluginDir, 'selected', undefined, undefined, undefined, undefined, undefined, components,

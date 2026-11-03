@@ -126,7 +126,7 @@ describe('marketplace component resolution', () => {
   });
 
   for (const strict of [false, undefined, true]) {
-    it(`discovers omitted components without copying development GitHub content (strict=${strict})`, async () => {
+    it(`discovers components and preserves assistant GitHub content without workflows (strict=${strict})`, async () => {
       await mkdir(join(plugin, 'skills/default'), { recursive: true });
       await mkdir(join(plugin, 'commands'), { recursive: true });
       await mkdir(join(plugin, 'agents'), { recursive: true });
@@ -135,7 +135,9 @@ describe('marketplace component resolution', () => {
       await writeFile(join(plugin, 'commands/default.md'), 'Default command.\n');
       await writeFile(join(plugin, 'agents/default.agent.md'), '---\nname: default\ndescription: Default\n---\nDefault agent.\n');
       await writeFile(join(plugin, '.github/hooks/dev.json'), '{"version":1,"hooks":{}}');
-      await writeFile(join(plugin, '.github/copilot-instructions.md'), 'Development-only instructions.');
+      await writeFile(join(plugin, '.github/copilot-instructions.md'), 'Repository-wide assistant instructions.');
+      await mkdir(join(plugin, '.github/workflows'), { recursive: true });
+      await writeFile(join(plugin, '.github/workflows/ci.yml'), 'name: Build\n');
       await writeFile(join(plugin, '.github/plugin/marketplace.json'), JSON.stringify({
         name: 'components', owner: { name: 'Fixture' }, description: 'Components',
         plugins: [{ name: 'default', description: 'Default', source: './', strict }],
@@ -146,11 +148,52 @@ describe('marketplace component resolution', () => {
       expect(await readFile(join(project, '.github/skills/default/SKILL.md'), 'utf-8')).toContain('Default skill.');
       expect(await readFile(join(project, '.claude/commands/default.md'), 'utf-8')).toBe('Default command.\n');
       expect(await readFile(join(project, '.github/agents/default.agent.md'), 'utf-8')).toContain('Default agent.');
-      expect(existsSync(join(project, '.github/hooks/dev.json'))).toBe(false);
-      expect(existsSync(join(project, '.github/copilot-instructions.md'))).toBe(false);
+      expect(await readFile(join(project, '.github/hooks/dev.json'), 'utf-8')).toBe('{"version":1,"hooks":{}}');
+      expect(await readFile(join(project, '.github/copilot-instructions.md'), 'utf-8')).toBe('Repository-wide assistant instructions.');
+      expect(existsSync(join(project, '.github/workflows'))).toBe(false);
       expect(existsSync(join(project, '.github/plugin'))).toBe(false);
     });
   }
+  it('preserves installed GitHub agents instructions prompts and supporting assets when manifests are added', async () => {
+    const assets = {
+      'agents/reviewer.agent.md': '---\nname: reviewer\ndescription: Copilot reviewer\n---\nReview the change.\n',
+      'instructions/repository.instructions.md': '---\napplyTo: "**"\n---\nRepository instructions.\n',
+      'prompts/review.prompt.md': 'Review this change with the repository instructions.\n',
+      'scripts/helper.ps1': 'Write-Output "Helper"\n',
+      'tools/helper/config.json': '{"enabled":true}\n',
+      'copilot-instructions.md': 'Repository-wide instructions.\n',
+    };
+    for (const [path, content] of Object.entries(assets)) {
+      await mkdir(join(plugin, '.github', path, '..'), { recursive: true });
+      await writeFile(join(plugin, '.github', path), content);
+    }
+    expect((await syncWorkspace(project)).success).toBe(true);
+    await writeFile(join(plugin, '.github/plugin/plugin.json'), JSON.stringify({ name: 'assistant' }));
+    await writeFile(join(plugin, '.github/plugin/marketplace.json'), JSON.stringify({
+      name: 'components', owner: { name: 'Fixture' }, plugins: [{ name: 'assistant', description: 'Assistant', source: './', strict: false }],
+    }));
+    expect((await syncWorkspace(project)).success).toBe(true);
+    for (const [path, content] of Object.entries(assets)) {
+      expect(await readFile(join(project, '.github', path), 'utf-8')).toBe(content);
+    }
+    expect(existsSync(join(project, '.github/plugin'))).toBe(false);
+  });
+
+  it('disables raw GitHub hooks independently of assistant instructions', async () => {
+    await mkdir(join(plugin, '.github/hooks'), { recursive: true });
+    await writeFile(join(plugin, '.github/hooks/assistant.json'), '{"version":1,"hooks":{"sessionStart":[]}}');
+    await writeFile(join(plugin, '.github/copilot-instructions.md'), 'Keep these instructions.\n');
+    await writeFile(join(plugin, '.github/plugin/plugin.json'), JSON.stringify({ name: 'assistant' }));
+    expect((await syncWorkspace(project)).success).toBe(true);
+    expect(existsSync(join(project, '.github/hooks/assistant.json'))).toBe(true);
+    await writeFile(join(project, '.allagents/workspace.yaml'), stringify({
+      version: 2, repositories: [], clients: ['copilot'], plugins: [{ source: plugin, install: 'file', hooks: false }],
+    }));
+    expect((await syncWorkspace(project)).success).toBe(true);
+    expect(existsSync(join(project, '.github/hooks/assistant.json'))).toBe(false);
+    expect(await readFile(join(project, '.github/copilot-instructions.md'), 'utf-8')).toBe('Keep these instructions.\n');
+  });
+
   it('updates and removes declared components while preserving personal MCP configuration', async () => {
     await mkdir(join(plugin, 'custom/kept'), { recursive: true });
     await mkdir(join(plugin, 'custom/excluded'), { recursive: true });

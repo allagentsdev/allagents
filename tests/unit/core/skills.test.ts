@@ -115,6 +115,7 @@ describe('getAllSkillsFromPlugins', () => {
   it('retains supplied root-collection components and exclusion policy in discovery wrappers', async () => {
     const components = {
       skills: [pluginDir], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
     };
     const exclude = ['skills/skill-b/**'];
     expect(await discoverSkillNames(pluginDir, components, exclude)).toEqual(['skill-a']);
@@ -128,6 +129,7 @@ describe('getAllSkillsFromPlugins', () => {
     await writeFile(join(selected, 'SKILL.md'), '# Initial');
     const components = {
       skills: [selected], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
     };
     const outside = join(tmpDir, 'outside-skill');
     await mkdir(outside);

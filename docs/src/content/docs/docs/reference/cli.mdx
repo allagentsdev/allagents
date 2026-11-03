@@ -315,8 +315,9 @@ allagents plugin validate ./my-plugin --json=path,valid
 ```
 
 Supports conventional plugin resources (`skills/`, `commands/`, `agents/`,
-`hooks/`, `.github/` content, `.mcp.json`, `hooks.json`, and root instruction
-files), nested skill collections, and [single-skill repositories](/docs/guides/plugins/#single-skill-repositories).
+`hooks/`, [supported `.github/` assistant resources](/docs/guides/plugins/#marketplace-component-discovery),
+`.mcp.json`, `hooks.json`, and root instruction files), nested skill collections,
+and [single-skill repositories](/docs/guides/plugins/#single-skill-repositories).
 Manifests are optional. Skill discovery uses the same precedence as installation:
 `skills/` first, otherwise nested skills, otherwise root `SKILL.md`.
 Links to contained resource files, such as `commands/review.md`, are supported.

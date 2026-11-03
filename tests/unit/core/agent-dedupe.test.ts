@@ -274,6 +274,7 @@ describe('planned agent output dedupe', () => {
             agents: [join(pluginDir, 'agents')],
             commands: [],
             github: false,
+            legacyRepository: false,
             hooks: [],
             mcpServers: [],
             skills: [],

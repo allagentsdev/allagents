@@ -5,6 +5,18 @@ export const ROOT_SKILL_EXCLUDED_ENTRIES = [
   '.allagents',
 ] as const;
 
+/** Assistant configuration and supporting resources, never GitHub Actions metadata. */
+export const GITHUB_ASSISTANT_ENTRIES = [
+  'agents',
+  'instructions',
+  'prompts',
+  'skills',
+  'hooks',
+  'scripts',
+  'tools',
+  'copilot-instructions.md',
+] as const;
+
 /** A contained plugin configuration file or an inline manifest value. */
 export type PluginConfigSource =
   | { path: string; inline?: never; declaredIn?: string }
@@ -25,8 +37,10 @@ export interface PluginComponents {
   /** Portable hook payload directories, separate from hook configuration. */
   hookResources?: string[];
   mcpServers: PluginConfigSource[];
-  /** AllAgents repository overlays are separate from native plugin components. */
+  /** Supported GitHub assistant artifacts, independent of native manifest membership. */
   github: boolean;
+  /** Manifest-free repository skill layout, independent of assistant overlays. */
+  legacyRepository: boolean;
   /** Native-compatible relaxed component errors, surfaced by lifecycle callers. */
   warnings?: string[];
 }

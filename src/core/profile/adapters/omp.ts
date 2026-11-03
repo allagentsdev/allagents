@@ -363,7 +363,7 @@ export class OmpProfileAdapter implements NativeProfileAdapter {
     input: ProfileSerializationInput,
   ): ProfilePlannedFile | null {
     assertOmpContext(context);
-    const mcpServers = serializeProfileMcpServers(input, this.client);
+    const mcpServers = serializeProfileMcpServers(input, this.client, context.profileName);
     if (mcpServers === null) return null;
     return Object.freeze({
       key: 'omp:mcp',

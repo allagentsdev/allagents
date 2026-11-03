@@ -932,6 +932,16 @@
                       "type": "string"
                     }
                   },
+                  "oauth": {
+                    "type": "object",
+                    "properties": {
+                      "clientName": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "clients": {
                     "type": "array",
                     "items": {

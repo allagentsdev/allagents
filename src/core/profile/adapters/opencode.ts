@@ -57,8 +57,9 @@ function openCodeReference(value: string): string {
 
 function serializeOpenCodeMcp(
   input: ProfileSerializationInput,
+  profile: string,
 ): Readonly<Record<string, unknown>> | undefined {
-  const selected = serializeProfileMcpServers(input, 'opencode');
+  const selected = serializeProfileMcpServers(input, 'opencode', profile);
   if (selected === null) return undefined;
   const mcp: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(selected)) {
@@ -153,7 +154,7 @@ export class OpenCodeProfileAdapter implements FileOnlyProfileAdapter {
   ): ProfilePlannedFile | null {
     assertOpenCodeContext(context);
     const settings = OpenCodeProfileSettingsSchema.parse(input.settings ?? {});
-    const mcp = serializeOpenCodeMcp(input);
+    const mcp = serializeOpenCodeMcp(input, context.profileName);
     if (Object.keys(settings).length === 0 && mcp === undefined) return null;
     return Object.freeze({
       key: 'opencode:config',

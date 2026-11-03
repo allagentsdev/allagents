@@ -31,6 +31,18 @@ describe('mcp public command help', () => {
     expect(result.stdout).not.toContain('- proxy-stdio -');
   });
 
+  test('documents the HTTP OAuth name override in live add and hidden proxy help', () => {
+    for (const command of ['add', 'proxy']) {
+      const help = runCli(['mcp', command, '--help']);
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).toContain('--oauth-client-name');
+      expect(help.stdout).toContain('AllAgents');
+    }
+    const invalid = runCli(['--json', 'mcp', 'add', 'local', 'echo', '--oauth-client-name', 'Codex']);
+    expect(invalid.exitCode).toBe(1);
+    expect(JSON.parse(invalid.stdout).error).toContain('not supported for stdio');
+  });
+
   test('keeps proxy hidden when help uses ANSI color', () => {
     const result = runCli(['mcp', '--help'], { FORCE_COLOR: '1' });
 
@@ -91,6 +103,7 @@ describe('mcp public command help', () => {
       options: expect.arrayContaining([
         expect.objectContaining({ flag: '--scope' }),
         expect.objectContaining({ flag: '--profile' }),
+        expect.objectContaining({ flag: '--oauth-client-name' }),
       ]),
       examples: expect.arrayContaining([
         expect.stringContaining('allagents mcp add'),

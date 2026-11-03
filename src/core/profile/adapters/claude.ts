@@ -108,8 +108,9 @@ function claudeMarketplaceSetting(
 
 function serializeClaudeMcp(
   input: ProfileSerializationInput,
+  profile: string,
 ): Readonly<Record<string, unknown>> {
-  const selected = serializeProfileMcpServers(input, 'claude') ?? {};
+  const selected = serializeProfileMcpServers(input, 'claude', profile) ?? {};
   const servers: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(selected)) {
     const server = ProfileMcpServerConfigSchema.parse(value);
@@ -481,7 +482,7 @@ export class ClaudeProfileAdapter implements NativeProfileAdapter {
     input: ProfileSerializationInput,
   ): ProfilePlannedFile {
     assertClaudeContext(context);
-    const mcpServers = serializeClaudeMcp(input);
+    const mcpServers = serializeClaudeMcp(input, context.profileName);
     return Object.freeze({
       key: 'claude:mcp',
       client: this.client,

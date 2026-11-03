@@ -253,12 +253,23 @@ function exitWithError(command: string, error: string): never {
  */
 function buildConfigFromAddFlags(
   commandName: string,
-  commandOrUrl: string,
-  transport: string | undefined,
-  args: string[],
-  env: string[],
-  header: string[],
-  client: string[],
+  {
+    commandOrUrl,
+    transport,
+    args,
+    env,
+    header,
+    client,
+    oauthClientName,
+  }: {
+    commandOrUrl: string;
+    transport: string | undefined;
+    args: string[];
+    env: string[];
+    header: string[];
+    client: string[];
+    oauthClientName: string | undefined;
+  },
 ): McpServerConfig {
   if (transport && transport !== 'http' && transport !== 'stdio') {
     exitWithError(
@@ -286,6 +297,7 @@ function buildConfigFromAddFlags(
     env: envResult.values,
     headers: headerResult.values,
   };
+  if (oauthClientName !== undefined) buildOpts.oauthClientName = oauthClientName;
   if (transport) buildOpts.transport = transport as 'http' | 'stdio';
   if (clients) buildOpts.clients = clients;
 
@@ -429,6 +441,9 @@ function serverToDisplay(name: string, config: McpServerConfig): string[] {
   lines.push(`  transport: ${isHttp ? 'http' : 'stdio'}`);
   if (isHttp) {
     lines.push(`  url: ${config.url}`);
+    if (config.oauth?.clientName !== undefined) {
+      lines.push(`  oauth client name: ${config.oauth.clientName}`);
+    }
     if (config.headers && Object.keys(config.headers).length > 0) {
       lines.push('  headers:');
       for (const [k, v] of Object.entries(config.headers)) {
@@ -1397,6 +1412,11 @@ const addArgs = {
     long: 'header',
     description: 'HTTP header KEY=VALUE (repeatable)',
   }),
+  oauthClientName: option({
+    type: optional(string),
+    long: 'oauth-client-name',
+    description: 'OAuth registration client name for HTTP transport (default: AllAgents)',
+  }),
   client: multioption({
     type: array(string),
     long: 'client',
@@ -1423,6 +1443,7 @@ const mcpAddCmd = command({
     args,
     env,
     header,
+    oauthClientName,
     client,
     force,
     scope,
@@ -1432,15 +1453,15 @@ const mcpAddCmd = command({
       scope,
       profile,
     });
-    const config = buildConfigFromAddFlags(
-      'mcp add',
+    const config = buildConfigFromAddFlags('mcp add', {
       commandOrUrl,
       transport,
       args,
       env,
       header,
       client,
-    );
+      oauthClientName,
+    });
     const authorization =
       !isJsonMode() && process.stdin.isTTY
         ? createAuthorizationInteraction()
@@ -1557,8 +1578,16 @@ const mcpProxyCmd = command({
       long: 'profile',
       description: 'Profile-owned OAuth credential scope',
     }),
+    oauthClientName: option({
+      type: optional(string),
+      long: 'oauth-client-name',
+      description: 'OAuth registration client name (default: AllAgents)',
+    }),
   },
-  handler: async ({ serverUrl, header, headerEnv, profile }) => {
+  handler: async ({ serverUrl, header, headerEnv, profile, oauthClientName }) => {
+    if (oauthClientName !== undefined && !oauthClientName.trim()) {
+      exitWithError('mcp proxy', '--oauth-client-name must not be empty');
+    }
     const headerResult = parseKeyValuePairs(header, '--header');
     if ('error' in headerResult) {
       exitWithError('mcp proxy', headerResult.error);
@@ -1587,6 +1616,7 @@ const mcpProxyCmd = command({
       serverUrl,
       { ...headerResult.values, ...environmentHeaders },
       {
+        ...(oauthClientName === undefined ? {} : { clientName: oauthClientName.trim() }),
         ...(destination?.kind === 'profile'
           ? { profile: destination.name }
           : {}),

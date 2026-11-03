@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,6 +17,14 @@ import {
   connectToMcpProxy,
   type McpProxyConnection,
 } from '../helpers/mcp-proxy-client.ts';
+import { addManagedMcpServer, reauthenticateManagedMcpServer } from '../../src/core/mcp-management.js';
+import { connectManagedMcpServer } from '../../src/core/mcp-runtime.js';
+import { getMcpServer, type McpDestination } from '../../src/core/mcp-servers.js';
+import { ClaudeProfileAdapter } from '../../src/core/profile/adapters/claude.js';
+import { CodexProfileAdapter } from '../../src/core/profile/adapters/codex.js';
+import { CopilotProfileAdapter } from '../../src/core/profile/adapters/copilot.js';
+import { OmpProfileAdapter } from '../../src/core/profile/adapters/omp.js';
+import { OpenCodeProfileAdapter } from '../../src/core/profile/adapters/opencode.js';
 
 function connectAndAutoAuthorize(
   serverUrl: string,
@@ -66,6 +74,100 @@ describe('mcp proxy OAuth e2e', () => {
       process.env.ALLAGENTS_MCP_OAUTH_NO_BROWSER = originalNoBrowser;
     }
   });
+
+  for (const kind of ['project', 'user', 'profile'] as const) {
+    test(`authenticates, persists, calls and reauthenticates the ${kind} OAuth identity`, async () => {
+      dummy = await startDummyMcpOAuthServer({ allowedClientNames: ['Codex'] });
+      const workspacePath = kind === 'project' ? join(homeDir, 'project') : homeDir;
+      const configPath = join(workspacePath, '.allagents', 'workspace.yaml');
+      mkdirSync(join(workspacePath, '.allagents'), { recursive: true });
+      writeFileSync(configPath, JSON.stringify({
+        repositories: [], plugins: [], clients: [],
+        ...(kind === 'profile' ? { profiles: { work: { clients: [{ name: 'codex' }] } } } : {}),
+      }));
+      const destination: McpDestination = kind === 'profile'
+        ? { kind, name: 'work', configPath }
+        : kind === 'project' ? { kind, workspacePath, configPath } : { kind, configPath };
+      const authorization = {
+        output() {},
+        async readCallback({ authorizationUrl }: { authorizationUrl: URL }) {
+          const response = await fetch(authorizationUrl, { redirect: 'manual' });
+          const location = response.headers.get('location');
+          if (!location) throw new Error('Missing fixture callback');
+          return new URL(location, authorizationUrl).toString();
+        },
+      };
+      await expect(connectHttpMcpServer(dummy.mcpUrl, {
+        callbackUrlReader: authorization.readCallback,
+        authorizationOutput: authorization.output,
+      })).rejects.toThrow();
+      expect(dummy.authorizeCallCount).toBe(0);
+      await addManagedMcpServer({
+        destination, name: 'remote',
+        config: { url: dummy.mcpUrl, oauth: { clientName: 'Codex' } },
+        authorization,
+      });
+      expect(await getMcpServer(destination, 'remote')).toMatchObject({
+        oauth: { clientName: 'Codex' },
+      });
+      const session = await connectManagedMcpServer(destination, 'remote');
+      try {
+        const result = await session.client.callTool({
+          name: FIXTURE_TOOL_NAME, arguments: { question: 'managed identity' },
+        });
+        expect(result.content).toEqual([{ type: 'text', text: FIXTURE_ANSWER }]);
+      } finally {
+        await session.close();
+      }
+      expect(dummy.authorizeCallCount).toBe(1);
+      await reauthenticateManagedMcpServer(destination, 'remote', authorization);
+      expect(dummy.authorizeCallCount).toBe(2);
+      expect(dummy.activeSessionCount).toBe(0);
+    }, 15_000);
+  }
+
+  test('runs standalone profile adapter bridges against a name-gated OAuth server', async () => {
+    dummy = await startDummyMcpOAuthServer({ allowedClientNames: ['Claude Code'] });
+    const adapters = [
+      new ClaudeProfileAdapter(), new CodexProfileAdapter(), new CopilotProfileAdapter(),
+      new OmpProfileAdapter(), new OpenCodeProfileAdapter(),
+    ];
+    for (const adapter of adapters) {
+      const context = adapter.resolveContext('bridge', {
+        homeDir, workspaceDirectory: homeDir,
+      });
+      const input = { plugins: [], mcpServers: {
+        remote: { url: dummy.mcpUrl, oauth: { clientName: 'Claude Code' } },
+      } };
+      const planned = adapter.client === 'codex' || adapter.client === 'opencode'
+        ? adapter.serializeSettings(context, input)
+        : adapter.serializeMcp(context, input);
+      if (!planned) throw new Error(`Missing ${adapter.client} MCP configuration`);
+      const document = adapter.client === 'codex'
+        ? Bun.TOML.parse(planned.content)
+        : JSON.parse(planned.content);
+      const generated = adapter.client === 'codex' ? document.mcp_servers.remote
+        : adapter.client === 'opencode' ? document.mcp.remote : document.mcpServers.remote;
+      const args: string[] = adapter.client === 'opencode'
+        ? generated.command.slice(1) : generated.args;
+      const connection = await connectToMcpProxy({
+        serverUrl: dummy.mcpUrl,
+        proxyArgs: args.slice(2),
+        env: { HOME: homeDir, ALLAGENTS_TEST_HOME: homeDir, ALLAGENTS_MCP_OAUTH_NO_BROWSER: '1' },
+        onAuthorizationUrl: (url) => { void fetch(url); },
+      });
+      try {
+        const result = await connection.client.callTool({
+          name: FIXTURE_TOOL_NAME, arguments: { question: adapter.client },
+        });
+        expect(result.content).toEqual([{ type: 'text', text: FIXTURE_ANSWER }]);
+      } finally {
+        await connection.close();
+      }
+    }
+    expect(dummy.authorizeCallCount).toBe(1);
+    expect(dummy.callToolCount).toBe(adapters.length);
+  }, 30_000);
 
   test('completes OAuth and calls a tool on the first connection', async () => {
     dummy = await startDummyMcpOAuthServer();

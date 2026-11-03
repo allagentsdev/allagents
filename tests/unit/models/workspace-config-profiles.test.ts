@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  ProfileMcpServerConfigSchema,
   ProfileNameSchema,
   ProjectWorkspaceConfigSchema,
   UserWorkspaceConfigSchema,
@@ -540,6 +541,84 @@ describe('profile workspace declarations', () => {
       ['--header', 'Authorization: Bearer plaintext'],
       1,
     );
+  });
+
+  it('scans OAuth client names for bearer and assignment credentials', () => {
+    for (const credential of [
+      'Authorization: Bearer fixture-secret',
+      'Bearer fixture-secret',
+      '--token=fixture-secret',
+      'password=fixture-secret',
+    ]) {
+      expectProfileMcpArgsRejected(
+        ['server.js', '--oauth-client-name', credential],
+        2,
+      );
+    }
+    for (const clientName of ['Codex', 'Claude Code']) {
+      expect(
+        ProfileMcpServerConfigSchema.safeParse({
+          command: 'node',
+          args: ['server.js', '--oauth-client-name', clientName],
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts exact query references only in the AllAgents bridge URL position', () => {
+    const url = 'https://mcp.example/mcp?token=${MCP_TOKEN}&tag=a&tag=b';
+    const args = ['-y', 'allagents@1.2.3', 'mcp', 'proxy', url];
+    expect(
+      ProfileMcpServerConfigSchema.parse({ command: 'npx', args }),
+    ).toEqual({ command: 'npx', args });
+    expect(
+      ProfileMcpServerConfigSchema.safeParse({
+        command: 'npx',
+        args: [
+          '-y',
+          'allagents@1.2.3',
+          'mcp',
+          'proxy',
+          'https://mcp.example/mcp?token=%24%7BMCP_TOKEN%7D',
+        ],
+      }).success,
+    ).toBe(true);
+    for (const server of [
+      { command: 'node', args },
+      { command: 'npx', args: [url] },
+      { command: 'npx', args: ['-y', 'other@1.2.3', 'mcp', 'proxy', url] },
+      { command: 'npx', args: ['-y', 'allagents@latest', 'mcp', 'proxy', url] },
+      { command: 'npx', args: ['-y', 'allagents@1.2.3', 'mcp', 'other', url] },
+      { command: 'npx', args: [...args, url] },
+    ]) {
+      expect(ProfileMcpServerConfigSchema.safeParse(server).success).toBe(false);
+    }
+  });
+
+  it('rejects credentials and malformed references in AllAgents bridge URLs', () => {
+    for (const url of [
+      'https://user:fixture-secret@mcp.example/mcp?token=${MCP_TOKEN}',
+      'https://user@mcp.example/mcp',
+      'https://mcp.example/mcp?token=fixture-secret',
+      'https://mcp.example/mcp?api_key=fixture-secret',
+      'https://mcp.example/mcp?token=${BAD-NAME}',
+      'https://mcp.example/mcp?token=${MCP_TOKEN',
+      'https://mcp.example/mcp?token=prefix-${MCP_TOKEN}',
+      'https://mcp.example/mcp?label=${MCP_TOKEN}-suffix',
+      'https://${MCP_HOST}/mcp?token=${MCP_TOKEN}',
+      'https://mcp.example/mcp?token=prefix-%24%7BMCP_TOKEN%7D',
+      'https://mcp.example/${MCP_PATH}?token=${MCP_TOKEN}',
+      'https://mcp.example/%24%7BMCP_PATH%7D?token=${MCP_TOKEN}',
+      'https://mcp.example/mcp?${MCP_KEY}=value',
+      'https://mcp.example/mcp?token=${MCP_TOKEN}#${MCP_FRAGMENT}',
+    ]) {
+      expect(
+        ProfileMcpServerConfigSchema.safeParse({
+          command: 'npx',
+          args: ['-y', 'allagents@1.2.3', 'mcp', 'proxy', url],
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('accepts exact references at profile MCP credential positions', () => {

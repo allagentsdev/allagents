@@ -528,6 +528,7 @@ async function authorizeRuntimeFixture(
   serverUrl: string,
   homeDir: string,
   profile?: string,
+  clientName?: string,
 ): Promise<void> {
   const previousHome = process.env.ALLAGENTS_TEST_HOME;
   const previousNoBrowser = process.env.ALLAGENTS_MCP_OAUTH_NO_BROWSER;
@@ -536,6 +537,7 @@ async function authorizeRuntimeFixture(
   try {
     await connectHttpMcpServer(serverUrl, {
       ...(profile === undefined ? {} : { profile }),
+      ...(clientName === undefined ? {} : { clientName }),
       authorizationOutput: () => {},
       callbackUrlReader: async ({ authorizationUrl }) => {
         const response = await fetch(authorizationUrl, {
@@ -969,8 +971,9 @@ describe('MCP runtime CLI real HTTP transport', () => {
     dummy = await startDummyMcpOAuthServer({
       accessTokenTtlMs: 1_500,
       runtimeTools: true,
+      allowedClientNames: ['Codex', 'Claude Code'],
     });
-    const remote = { type: 'http', url: dummy.mcpUrl };
+    const remote = { type: 'http', url: dummy.mcpUrl, oauth: { clientName: 'Codex' } };
     writeRuntimeDestinations(
       workspaceDir,
       homeDir,
@@ -1027,7 +1030,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
       "MCP server 'user' is not defined in workspace.yaml",
     );
 
-    await authorizeRuntimeFixture(dummy.mcpUrl, homeDir);
+    await authorizeRuntimeFixture(dummy.mcpUrl, homeDir, undefined, 'Codex');
     expect(dummy.authorizeCallCount).toBe(1);
     const project = await runRealCli(workspaceDir, homeDir, [
       '--json',
@@ -1051,7 +1054,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
     expect(JSON.parse(user.stdout).data.destination).toEqual({ kind: 'user' });
     expect(dummy.authorizeCallCount).toBe(1);
 
-    await authorizeRuntimeFixture(dummy.mcpUrl, homeDir, 'markets');
+    await authorizeRuntimeFixture(dummy.mcpUrl, homeDir, 'markets', 'Codex');
     const profile = await runRealCli(workspaceDir, homeDir, [
       '--json',
       'mcp',
@@ -1092,5 +1095,26 @@ describe('MCP runtime CLI real HTTP transport', () => {
     expect(dummy.authorizeCallCount).toBe(2);
     expect(dummy.tokenCallCounts.refresh_token).toBeGreaterThanOrEqual(1);
     expect(dummy.activeSessionCount).toBe(0);
+
+    writeRuntimeDestinations(workspaceDir, homeDir, {
+      project: { ...remote, oauth: { clientName: 'Claude Code' } },
+    });
+    const switched = await runRealCli(workspaceDir, homeDir, [
+      '--json', 'mcp', 'tools', 'project',
+    ]);
+    expect(switched.exitCode).toBe(1);
+    expect(JSON.parse(switched.stdout).error).toContain('allagents mcp reauth project');
+    expect(dummy.authorizeCallCount).toBe(2);
+    await authorizeRuntimeFixture(dummy.mcpUrl, homeDir, undefined, 'Claude Code');
+    const called = await runRealCli(workspaceDir, homeDir, [
+      '--json', 'mcp', 'call', 'project', FIXTURE_TOOL_NAME,
+      '--input', JSON.stringify({ question: 'identity-specific authenticated call' }),
+    ]);
+    expect(called.exitCode).toBe(0);
+    expect(dummy.capturedCalls.at(-1)).toEqual({
+      name: FIXTURE_TOOL_NAME,
+      arguments: { question: 'identity-specific authenticated call' },
+    });
+    expect(dummy.authorizeCallCount).toBe(3);
   }, 30_000);
 });

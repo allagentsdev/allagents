@@ -118,8 +118,9 @@ function rejectUnsupportedReference(value: string, field: string): void {
 
 function serializeCodexMcp(
   input: ProfileSerializationInput,
+  profile: string,
 ): Readonly<Record<string, TomlTable>> | null {
-  const selected = serializeProfileMcpServers(input, 'codex');
+  const selected = serializeProfileMcpServers(input, 'codex', profile);
   if (selected === null) return null;
   const servers: Record<string, TomlTable> = {};
   for (const [name, value] of Object.entries(selected)) {
@@ -406,7 +407,7 @@ export class CodexProfileAdapter implements NativeProfileAdapter {
   ): ProfilePlannedFile | null {
     assertCodexContext(context);
     const settings = CodexProfileSettingsSchema.parse(input.settings ?? {});
-    const mcpServers = serializeCodexMcp(input);
+    const mcpServers = serializeCodexMcp(input, context.profileName);
     const document: TomlTable = {
       ...(settings as TomlTable),
       ...(mcpServers && { mcp_servers: mcpServers }),

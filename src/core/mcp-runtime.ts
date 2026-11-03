@@ -478,6 +478,9 @@ export async function connectManagedMcpServer(
   try {
     const connection = await connectMcpHttpClient(config.url, {
       headers: config.headers ?? {},
+      ...(config.oauth?.clientName === undefined
+        ? {}
+        : { clientName: config.oauth.clientName }),
       allowAuthorization: false,
       maxResponseBytes: MAX_MCP_PROTOCOL_WIRE_BYTES,
       ...(destination.kind === 'profile' ? { profile: destination.name } : {}),

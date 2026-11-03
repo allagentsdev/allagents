@@ -128,10 +128,7 @@ export function syncMcpServers(
       warnings.push(...collectWarnings);
       collectWarningsEmitted = true;
     }
-    if (mcpProxyConfig) {
-      return applyMcpProxy(servers, client, mcpProxyConfig);
-    }
-    return servers;
+    return applyMcpProxy(servers, client, mcpProxyConfig);
   }
 
   const specs = buildSyncSpecs(workspacePath);

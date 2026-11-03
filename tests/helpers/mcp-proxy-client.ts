@@ -14,6 +14,8 @@ export interface ConnectMcpProxyOptions {
   headers?: string[];
   env?: Record<string, string>;
   clientName?: string;
+  /** Actual generated `mcp proxy` arguments, including URL and scoped options. */
+  proxyArgs?: string[];
   /** Called once with the authorization URL the proxy prints when OAuth is required. */
   onAuthorizationUrl?: (url: string) => void;
 }
@@ -29,7 +31,7 @@ const CLI_ENTRY = join(import.meta.dir, '..', '..', 'src', 'cli', 'index.ts');
 export async function connectToMcpProxy(
   options: ConnectMcpProxyOptions,
 ): Promise<McpProxyConnection> {
-  const args = ['run', CLI_ENTRY, 'mcp', 'proxy', options.serverUrl];
+  const args = ['run', CLI_ENTRY, ...(options.proxyArgs ?? ['mcp', 'proxy', options.serverUrl])];
   for (const header of options.headers ?? []) {
     args.push('--header', header);
   }

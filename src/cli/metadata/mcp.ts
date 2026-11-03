@@ -33,6 +33,7 @@ export const mcpAddMeta: AgentCommandMeta = {
     'When adding or replacing an MCP server in the current project, ordinary user configuration, or a declared profile. Agent and non-interactive use works for public servers or valid cached credentials; fresh OAuth consent requires a human rerun.',
   examples: [
     'allagents mcp add deepwiki https://mcp.deepwiki.com/mcp',
+    'allagents mcp add design https://example.com/mcp --oauth-client-name Codex',
     'allagents mcp add my-server npx --arg=-y --arg=@my/mcp-server',
     'allagents mcp add gh-api npx -e GH_TOKEN=abc123 --arg=-y --arg=@modelcontextprotocol/server-github',
     'allagents mcp add deepwiki https://mcp.deepwiki.com/mcp --client claude,copilot --client codex',
@@ -81,6 +82,11 @@ export const mcpAddMeta: AgentCommandMeta = {
       flag: '--header',
       type: 'string',
       description: 'HTTP header KEY=VALUE for http transport (repeatable)',
+    },
+    {
+      flag: '--oauth-client-name',
+      type: 'string',
+      description: 'OAuth registration client name for HTTP transport (default: AllAgents); requires a nonempty value and is not supported for stdio',
     },
     {
       flag: '--client',

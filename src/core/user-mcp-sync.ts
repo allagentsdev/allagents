@@ -65,9 +65,7 @@ export async function syncUserMcpAdapters({
       warnings.push(...collectWarnings);
       collectWarningsEmitted = true;
     }
-    return config.mcpProxy
-      ? applyMcpProxy(servers, client, config.mcpProxy)
-      : servers;
+    return applyMcpProxy(servers, client, config.mcpProxy);
   }
 
   if (syncClients.includes('codex')) {

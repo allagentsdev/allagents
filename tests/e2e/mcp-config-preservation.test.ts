@@ -1,9 +1,17 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const cli = join(import.meta.dir, '../../dist/index.js');
+
+beforeAll(() => {
+  const build = Bun.spawnSync(['bun', 'run', 'build'], {
+    cwd: join(import.meta.dir, '../..'),
+    stdout: 'pipe', stderr: 'pipe',
+  });
+  if (build.exitCode !== 0) throw new Error(`CLI build failed: ${build.stderr.toString()}`);
+});
 
 describe.each([
   ['claude', 'project', '.mcp.json', 'mcpServers'],

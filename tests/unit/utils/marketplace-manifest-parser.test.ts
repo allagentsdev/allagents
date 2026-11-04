@@ -98,6 +98,28 @@ describe('parseMarketplaceManifest', () => {
     }
   });
 
+  it('does not fall back when the preferred Copilot marketplace is invalid', async () => {
+    writeFileSync(join(testDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: 'legacy', description: 'Legacy', plugins: [] }));
+    mkdirSync(join(testDir, '.github', 'plugin'), { recursive: true });
+    writeFileSync(join(testDir, '.github', 'plugin', 'marketplace.json'), '{invalid');
+    const result = await parseMarketplaceManifest(testDir);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('invalid syntax');
+  });
+
+  for (const strict of [false, undefined, true]) {
+    it(`rejects invalid selected component declarations without defaulting (strict=${strict})`, async () => {
+      writeFileSync(join(testDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+        name: 'test', description: 'Test', plugins: [
+          { name: 'invalid', description: 'Invalid', source: './plugins/invalid', skills: 42, ...(strict !== undefined && { strict }) },
+          { name: 'valid', description: 'Valid', source: './plugins/valid' },
+        ],
+      }));
+      expect((await parseMarketplaceManifest(testDir, 'invalid')).success).toBe(false);
+      expect((await parseMarketplaceManifest(testDir, 'valid')).success).toBe(true);
+    });
+  }
+
   it('should return error when marketplace.json does not exist', async () => {
     rmSync(join(testDir, '.claude-plugin'), { recursive: true, force: true });
     const result = await parseMarketplaceManifest(testDir);

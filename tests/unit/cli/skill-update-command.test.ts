@@ -500,6 +500,45 @@ describe('skill update command adapters', () => {
     }
   });
 
+  test('marketplace inventory and inspected updates keep root skills authoritative over unsupported flat children', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'allagents-update-native-inventory-'));
+    const home = join(root, 'home');
+    const workspace = join(root, 'workspace');
+    const marketplace = join(home, '.allagents', 'plugins', 'marketplaces', 'catalog');
+    process.env.ALLAGENTS_TEST_HOME = home;
+    try {
+      await mkdir(join(workspace, '.allagents'), { recursive: true });
+      await mkdir(join(marketplace, '.claude-plugin'), { recursive: true });
+      await mkdir(join(marketplace, 'plugins', 'root-skill', 'rogue'), { recursive: true });
+      await writeFile(join(marketplace, 'plugins', 'root-skill', 'SKILL.md'), '---\nname: actual\ndescription: Root skill\n---\n');
+      await writeFile(join(marketplace, 'plugins', 'root-skill', 'rogue', 'SKILL.md'), '---\nname: rogue\ndescription: Unsupported flat skill\n---\n');
+      await writeFile(join(marketplace, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+        name: 'catalog', description: 'Native boundary', plugins: [{
+          name: 'root-skill', description: 'Root skill', source: './plugins/root-skill', skills: './rogue/',
+        }],
+      }));
+      await initCheckout(marketplace);
+      await writeFile(join(home, '.allagents', 'marketplaces.json'), JSON.stringify({ version: 1, marketplaces: {
+        catalog: { name: 'catalog', source: { type: 'git', location: marketplace }, path: marketplace },
+      } }));
+      await writeFile(join(workspace, '.allagents', 'workspace.yaml'), dump({
+        version: 2, repositories: [], clients: ['codex'], plugins: [{ source: 'root-skill@catalog', skills: ['actual'] }],
+      }));
+      const inventory = await buildSkillUpdateInventory(workspace, ['project']);
+      expect(inventory.failures).toEqual([]);
+      expect(inventory.installations).toHaveLength(1);
+      expect(inventory.installations[0]?.skills.map(({ name, subpath, enabled }) => ({ name, subpath, enabled }))).toEqual([{ name: 'actual', subpath: 'actual', enabled: true }]);
+      const result = await inspectSkillUpdateUnit({
+        id: marketplace, nodes: inventory.installations[0]!.nodes, installations: inventory.installations,
+      });
+      expect(result.outcome).toBe('resolved');
+      expect(result.installations).toEqual([{ installationId: 'project:0', outcome: 'resolved', skills: [{ name: 'actual', subpath: 'actual' }] }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+
   test('classifies a plugin absent from a valid inspected marketplace as removed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'allagents-skill-update-removed-'));
     try {

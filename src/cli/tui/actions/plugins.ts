@@ -799,10 +799,8 @@ async function getPluginMcpSelection(
   if (!plan?.clients.some((client) => mcpClients.includes(client))) return null;
 
   const [validated] = await validateAllPlugins([plan], root, true);
-  if (!validated?.success || validated.fileArtifacts?.mcpServers === false) {
-    return null;
-  }
-  const servers = readPluginMcpConfig(validated.resolved);
+  if (!validated?.success) return null;
+  const servers = readPluginMcpConfig(validated.resolved, validated.components, validated.exclude);
   const names = Object.keys(servers ?? {});
   if (names.length === 0) return null;
   return {
@@ -1215,7 +1213,9 @@ export async function runInstallPlugin(context: TuiContext, cache?: TuiCache): P
     for (const marketplace of marketplaces) {
       const result = await getCachedMarketplacePlugins(marketplace.name, cache);
       for (const plugin of result.plugins) {
-        const skillNames = await discoverSkillNames(plugin.path);
+        const skillNames = plugin.components
+          ? await discoverSkillNames(plugin.path, plugin.components)
+          : [];
         const desc = plugin.description ? ` - ${plugin.description}` : '';
         const entry: { label: string; value: string; hint?: string } = {
           label: `${plugin.name}${desc} (${marketplace.name})`,

@@ -23,7 +23,7 @@ import {
   type ClientMapping,
   type ClientMappings,
 } from '../models/client-mapping.js';
-import type { MarketplaceFileArtifacts } from '../models/marketplace-manifest.js';
+import type { PluginComponents, PluginComponentPolicy } from '../models/plugin-components.js';
 import type {
   NativeStateResource,
   SyncState,
@@ -48,7 +48,7 @@ import {
   normalizeClientEntry,
   resolveInstallMode,
 } from '../models/workspace-config.js';
-import { getEmbeddedMarketplaceFileArtifacts } from '../utils/marketplace-manifest-parser.js';
+import { assertPluginComponentTree, resolvePluginComponents } from './plugin-components.js';
 import {
   getPluginDisplayName,
   isRemotePluginSource,
@@ -76,9 +76,10 @@ import {
   resolveClientContexts,
   resolveMappedPath,
 } from './client-context.js';
-import { syncCodexProjectHooks } from './codex-hooks.js';
+import { collectPluginCodexHooks, syncCodexProjectHooks } from './codex-hooks.js';
 import {
   COPILOT_MANAGED_HOOKS_RELATIVE_PATH,
+  collectPluginCopilotHooks,
   syncCopilotProjectHooks,
 } from './copilot-hooks.js';
 import { processManagedRepos } from './managed-repos.js';
@@ -406,12 +407,14 @@ export interface ValidatedPlugin {
   registeredAs?: string;
   /** GitHub marketplace source (owner/repo) for native CLI registration */
   marketplaceSource?: string;
-  /** File artifacts declared by a non-strict marketplace entry. */
-  fileArtifacts?: MarketplaceFileArtifacts;
+  /** Contained component sources selected during validation. */
+  components?: PluginComponents;
   /** Glob patterns of files to exclude when syncing (from workspace.yaml) */
   exclude?: string[];
   /** Plugin MCP servers excluded from file-installed artifacts. */
   mcpServers?: PluginMcpServersConfig;
+  /** AllAgents file-distribution policy; native plugin hooks remain client-owned. */
+  hooks?: false;
   /** Inline skill selection config from plugin entry (v2+) */
   pluginSkillsConfig?: PluginSkillsConfig;
 }
@@ -427,6 +430,7 @@ export interface PluginSyncPlan {
   exclude?: string[];
   /** Plugin MCP servers excluded from file-installed artifacts. */
   mcpServers?: PluginMcpServersConfig;
+  hooks?: false;
   /** Inline skill selection config from plugin entry (v2+) */
   pluginSkillsConfig?: PluginSkillsConfig;
 }
@@ -1537,7 +1541,6 @@ async function collectAvailableSkillNames(
 ): Promise<Set<string>> {
   const names = new Set<string>();
   for (const plugin of validPlugins) {
-    if (plugin.fileArtifacts && !plugin.fileArtifacts.skills) continue;
     const skills = await collectPluginSkills(
       plugin.resolved,
       plugin.plugin,
@@ -1546,6 +1549,8 @@ async function collectAvailableSkillNames(
       undefined,
       undefined,
       warnings,
+      plugin.components,
+      plugin.exclude,
     );
     for (const skill of skills) {
       names.add(skill.folderName);
@@ -1565,12 +1570,14 @@ async function validatePlugin(
   workspacePath: string,
   offline: boolean,
   onProgress?: FetchOptions['onProgress'],
+  componentPolicy?: PluginComponentPolicy,
 ): Promise<ValidatedPlugin> {
   // Check for plugin@marketplace format first
   if (isPluginSpec(pluginSource)) {
     const resolved = await resolvePluginSpecWithAutoRegister(pluginSource, {
       offline,
       workspacePath,
+      ...(componentPolicy && { componentPolicy }),
     });
     if (!resolved.success) {
       return {
@@ -1593,9 +1600,7 @@ async function validatePlugin(
       ...(resolved.marketplaceSource && {
         marketplaceSource: resolved.marketplaceSource,
       }),
-      ...(resolved.fileArtifacts && {
-        fileArtifacts: resolved.fileArtifacts,
-      }),
+      ...(resolved.components && { components: resolved.components }),
     };
   }
 
@@ -1626,10 +1631,7 @@ async function validatePlugin(
     } catch (error) {
       return { plugin: pluginSource, resolved: '', success: false, clients: [], nativeClients: [], error: error instanceof Error ? error.message : String(error) };
     }
-    const fileArtifacts = await getEmbeddedMarketplaceFileArtifacts(
-      resolvedPath,
-      parsed?.repo,
-    );
+    const components = resolvePluginComponents(resolvedPath, undefined, componentPolicy);
     return {
       plugin: pluginSource,
       resolved: resolvedPath,
@@ -1637,7 +1639,7 @@ async function validatePlugin(
       success: true,
       clients: [],
       nativeClients: [],
-      ...(fileArtifacts && { fileArtifacts }),
+      components,
     };
   }
 
@@ -1653,17 +1655,14 @@ async function validatePlugin(
       error: `Plugin not found at ${resolvedPath}`,
     };
   }
-  const fileArtifacts = await getEmbeddedMarketplaceFileArtifacts(
-    resolvedPath,
-    getPluginName(resolvedPath),
-  );
+  const components = resolvePluginComponents(resolvedPath, undefined, componentPolicy);
   return {
     plugin: pluginSource,
     resolved: resolvedPath,
     success: true,
     clients: [],
     nativeClients: [],
-    ...(fileArtifacts && { fileArtifacts }),
+    components,
   };
 }
 
@@ -1739,12 +1738,13 @@ export function buildPluginSyncPlans(
     const pluginSkillsConfig =
       typeof plugin === 'string' ? undefined : plugin.skills;
     const mcpServers = typeof plugin === 'string' ? undefined : plugin.mcpServers;
+    const hooks = typeof plugin === 'string' ? undefined : plugin.hooks;
     if (
       (nativeRequested || (typeof plugin !== 'string' && plugin.install === 'native')) &&
-      (exclude !== undefined || pluginSkillsConfig !== undefined)
+      (exclude !== undefined || pluginSkillsConfig !== undefined || hooks === false)
     ) {
       errors.push(
-        `skill/exclude filters are not supported for native plugins ('${source}'). Change to install: file to use filters.`,
+        `${hooks === false ? 'hooks' : 'skill/exclude'} filters are not supported for native plugins ('${source}'). Change to install: file to use filters.`,
       );
     }
     return {
@@ -1755,6 +1755,7 @@ export function buildPluginSyncPlans(
       ...(exclude && { exclude }),
       ...(pluginSkillsConfig !== undefined && { pluginSkillsConfig }),
       ...(mcpServers !== undefined && { mcpServers }),
+      ...(hooks === false && { hooks }),
     };
   });
 
@@ -1783,6 +1784,7 @@ export async function validateAllPlugins(
         nativeClients,
         exclude,
         mcpServers,
+        hooks,
         pluginSkillsConfig,
       }) => {
         let validated: ValidatedPlugin;
@@ -1812,7 +1814,18 @@ export async function validateAllPlugins(
                 : {}),
           };
         } else {
-          validated = await validatePlugin(source, workspacePath, offline, onProgress);
+          try {
+            validated = await validatePlugin(source, workspacePath, offline, onProgress, {
+              ...(exclude && { exclude }),
+              ...(hooks === false && { hooks }),
+            });
+            if (validated.success && validated.components?.skills.includes(validated.resolved)) {
+              const skills = await collectPluginSkills(validated.resolved, source, undefined, undefined, undefined, undefined, undefined, validated.components, exclude);
+              for (const skill of skills) assertPluginComponentTree(validated.resolved, skill.skillPath, exclude);
+            }
+          } catch (error) {
+            validated = { plugin: source, resolved: '', success: false, clients: [], nativeClients: [], error: error instanceof Error ? error.message : String(error) };
+          }
         }
         const result: ValidatedPlugin = {
           ...validated,
@@ -1822,8 +1835,22 @@ export async function validateAllPlugins(
         };
         if (exclude) result.exclude = exclude;
         if (mcpServers !== undefined) result.mcpServers = mcpServers;
+        if (hooks === false) result.hooks = false;
         if (pluginSkillsConfig !== undefined) {
           result.pluginSkillsConfig = pluginSkillsConfig;
+        }
+        if (result.success && hooks !== false) {
+          try {
+            if (clients.includes('codex')) collectPluginCodexHooks(result, workspacePath, []);
+            if (clients.includes('copilot')) {
+              const hookWarnings: string[] = [];
+              await collectPluginCopilotHooks(result, hookWarnings);
+              if (hookWarnings.length > 0) throw new Error(hookWarnings.join('\n'));
+            }
+          } catch (error) {
+            result.success = false;
+            result.error = error instanceof Error ? error.message : String(error);
+          }
         }
         return result;
       },
@@ -1902,9 +1929,8 @@ async function copyValidatedPlugin(
             syncMode: 'copy',
             agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
             ...(exclude && { exclude }),
-            ...(validatedPlugin.fileArtifacts && {
-              fileArtifacts: validatedPlugin.fileArtifacts,
-            }),
+            ...(validatedPlugin.hooks === false && { hooks: false as const }),
+            ...(validatedPlugin.components && { components: validatedPlugin.components }),
           },
         );
         agentOutputsAssigned = true;
@@ -1924,9 +1950,8 @@ async function copyValidatedPlugin(
             canonicalSkillsPath: CANONICAL_SKILLS_PATH,
             agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
             ...(exclude && { exclude }),
-            ...(validatedPlugin.fileArtifacts && {
-              fileArtifacts: validatedPlugin.fileArtifacts,
-            }),
+            ...(validatedPlugin.hooks === false && { hooks: false as const }),
+            ...(validatedPlugin.components && { components: validatedPlugin.components }),
           },
         );
         agentOutputsAssigned = true;
@@ -1953,9 +1978,8 @@ async function copyValidatedPlugin(
           syncMode: 'copy',
           agentOutputs: agentOutputsAssigned ? [] : agentOutputs,
           ...(exclude && { exclude }),
-          ...(validatedPlugin.fileArtifacts && {
-            fileArtifacts: validatedPlugin.fileArtifacts,
-          }),
+          ...(validatedPlugin.hooks === false && { hooks: false as const }),
+          ...(validatedPlugin.components && { components: validatedPlugin.components }),
         },
       );
       agentOutputsAssigned = true;
@@ -2019,7 +2043,6 @@ async function collectAllSkills(
   const allSkills: CollectedSkillEntry[] = [];
 
   for (const plugin of validatedPlugins) {
-    if (plugin.fileArtifacts && !plugin.fileArtifacts.skills) continue;
     const pluginName = plugin.pluginName ?? getPluginName(plugin.resolved);
     const skills = await collectPluginSkills(
       plugin.resolved,
@@ -2029,6 +2052,8 @@ async function collectAllSkills(
       enabledSkills,
       plugin.pluginSkillsConfig,
       warnings,
+      plugin.components,
+      plugin.exclude,
     );
 
     for (const skill of skills) {
@@ -2989,7 +3014,7 @@ async function planValidatedPluginAgentOutputs(
       pluginPath: plugin.resolved,
       clients: plugin.clients,
       ...(plugin.exclude && { exclude: plugin.exclude }),
-      ...(plugin.fileArtifacts && { fileArtifacts: plugin.fileArtifacts }),
+      ...(plugin.components && { components: plugin.components }),
     })),
     basePath,
     mappings,
@@ -3119,7 +3144,7 @@ async function persistSyncState(
 ): Promise<void> {
   await saveSyncState(workspacePath, {
     files: syncedFiles,
-    ...(extra?.codexHooks && { codexHooks: extra.codexHooks }),
+    ...(extra && 'codexHooks' in extra && { codexHooks: extra.codexHooks }),
     ...(extra?.vscodeState?.hash && {
       vscodeWorkspaceHash: extra.vscodeState.hash,
     }),
@@ -3293,12 +3318,15 @@ export async function syncWorkspace(
   if (config.workspace?.source) {
     sw.start('workspace-source-validation');
     const sourceBasePath = workspaceSourceBase ?? workspacePath;
-    const wsSourceResult = await validatePlugin(
+    const wsSourceResult: ValidatedPlugin = await validatePlugin(
       config.workspace.source,
       sourceBasePath,
       offline,
       options.onPluginProgress,
-    );
+    ).catch((error) => ({
+      plugin: config.workspace?.source ?? '', resolved: '', success: false, clients: [], nativeClients: [],
+      error: error instanceof Error ? error.message : String(error),
+    }));
     if (wsSourceResult.success) {
       validatedWorkspaceSource = wsSourceResult;
     } else {
@@ -3311,33 +3339,18 @@ export async function syncWorkspace(
   const failedValidations = validatedPlugins.filter(
     (plugin) => !plugin.success,
   );
-  const requiredNativeFailures = failedValidations.filter((plugin) => {
-    const plan = filteredPlans.find(
-      (candidate) => candidate.configurationIndex === plugin.configurationIndex,
-    );
-    return (
-      (plan?.nativeClients ?? []).some((client) => nativeSelectionMatches(
-        nativeSelection,
-        plan?.source ?? plugin.plugin,
-        plan?.source ?? plugin.plugin,
-        client,
-      ))
-    );
-  });
   const validationWarnings = [
     ...planWarnings,
     ...workspaceSourceWarnings,
+    ...validatedPlugins.flatMap((plugin) => (plugin.components?.warnings ?? []).map((warning) => `${plugin.plugin}: ${warning}`)),
     ...failedValidations.map(
-      (plugin) => `${plugin.plugin}: ${plugin.error} (skipped)`,
+      (plugin) => `${plugin.plugin}: ${plugin.error} (workspace unchanged)`,
     ),
   ];
-  if (requiredNativeFailures.length > 0) {
+  if (failedValidations.length > 0) {
     return failedSyncResult(
-      `Mixed native/file preflight failed (workspace unchanged):\n${requiredNativeFailures.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
-      {
-        totalFailed: requiredNativeFailures.length,
-        warnings: validationWarnings,
-      },
+      `Plugin validation failed (workspace unchanged):\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
+      { totalFailed: failedValidations.length, warnings: validationWarnings },
     );
   }
 
@@ -3345,12 +3358,6 @@ export async function syncWorkspace(
   const filePlugins = validPlugins.filter(
     (plugin) => plugin.clients.length > 0,
   );
-  if (validPlugins.length === 0 && filteredPlans.length > 0) {
-    return failedSyncResult(
-      `All plugins failed validation (workspace unchanged):\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
-      { totalFailed: failedValidations.length, warnings: validationWarnings },
-    );
-  }
 
   const skipWorkspaceFiles =
     !!config.workspace?.source && !validatedWorkspaceSource;
@@ -3857,9 +3864,7 @@ export async function syncWorkspace(
     await sw.measure('persist-state', () =>
       persistSyncState(workspacePath, newStatePaths, {
         ...(vscodeState && { vscodeState }),
-        ...(codexHookSync.managedHooks && {
-          codexHooks: codexHookSync.managedHooks,
-        }),
+        codexHooks: codexHookSync.managedHooks,
         ...(Object.keys(mcpResults).length > 0 && {
           mcpTrackedServers: Object.fromEntries(
             Object.entries(mcpResults).map(([scope, r]) => [
@@ -4023,11 +4028,6 @@ export async function syncUserWorkspace(
     );
   }
 
-  if (!dryRun) {
-    // MIGRATION: v1→v2 - remove after v3 release.
-    await migrateUserWorkspaceSkillsV1toV2();
-    config = (await getUserWorkspaceConfig()) ?? config;
-  }
 
   const filePlans = pluginPlans.filter((plan) => plan.clients.length > 0);
   const marketplaceResults = await sw.measure('marketplace-registration', () =>
@@ -4043,42 +4043,29 @@ export async function syncUserWorkspace(
   const failedValidations = validatedPlugins.filter(
     (plugin) => !plugin.success,
   );
-  const requiredNativeFailures = failedValidations.filter((plugin) => {
-    const plan = pluginPlans.find(
-      (candidate) => candidate.configurationIndex === plugin.configurationIndex,
-    );
-    return (
-      (plan?.nativeClients ?? []).some((client) => nativeSelectionMatches(
-        nativeSelection,
-        plan?.source ?? plugin.plugin,
-        plan?.source ?? plugin.plugin,
-        client,
-      ))
-    );
-  });
   const warnings = [
     ...planWarnings,
+    ...validatedPlugins.flatMap((plugin) => (plugin.components?.warnings ?? []).map((warning) => `${plugin.plugin}: ${warning}`)),
     ...failedValidations.map(
-      (plugin) => `${plugin.plugin}: ${plugin.error} (skipped)`,
+      (plugin) => `${plugin.plugin}: ${plugin.error} (user workspace unchanged)`,
     ),
   ];
-  if (requiredNativeFailures.length > 0) {
+  if (failedValidations.length > 0) {
     return failedSyncResult(
-      `Mixed native/file preflight failed (user workspace unchanged):\n${requiredNativeFailures.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
-      { totalFailed: requiredNativeFailures.length, warnings },
+      `Plugin validation failed (user workspace unchanged):\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
+      { totalFailed: failedValidations.length, warnings },
     );
+  }
+  if (!dryRun) {
+    // MIGRATION: v1→v2 - remove after v3 release.
+    await migrateUserWorkspaceSkillsV1toV2();
+    config = (await getUserWorkspaceConfig()) ?? config;
   }
   const validPlugins = validatedPlugins.filter((plugin) => plugin.success);
   const filePlugins = validPlugins.filter(
     (plugin) => plugin.clients.length > 0,
   );
   const messages: string[] = [];
-  if (validPlugins.length === 0 && pluginPlans.length > 0) {
-    return failedSyncResult(
-      `All plugins failed validation:\n${failedValidations.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
-      { totalFailed: failedValidations.length, warnings },
-    );
-  }
 
   // Load previous sync state (stored at ~/.allagents/sync-state.json)
   const previousState = await loadSyncState(homeDir);
@@ -4123,7 +4110,7 @@ export async function syncUserWorkspace(
           .filter(
             (plugin) =>
               plugin.clients.includes('copilot') &&
-              plugin.fileArtifacts?.github !== false,
+              plugin.components?.github !== false,
           )
           .map((plugin) => ({
             pluginPath: plugin.resolved,

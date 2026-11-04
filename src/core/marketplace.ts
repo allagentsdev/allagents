@@ -12,12 +12,8 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { getHomeDir } from '../constants.js';
+import type { PluginComponents, PluginComponentPolicy } from '../models/plugin-components.js';
 import {
-  type MarketplaceFileArtifacts,
-  getMarketplaceFileArtifacts,
-} from '../models/marketplace-manifest.js';
-import {
-  getEmbeddedMarketplaceFileArtifacts,
   parseMarketplaceManifest,
   resolvePluginSourcePath,
 } from '../utils/marketplace-manifest-parser.js';
@@ -45,6 +41,7 @@ import {
 import type { UpdateContext } from './update-context.js';
 import { fetchPlugin } from './plugin.js';
 import type { FetchResult, UpdateResult } from './plugin.js';
+import { assertPluginComponentPath, resolvePluginComponents } from './plugin-components.js';
 
 /**
  * Source types for marketplaces
@@ -1687,6 +1684,8 @@ export interface MarketplacePluginInfo {
   homepage?: string;
   source?: string;
   skills?: string[];
+  /** Internal resolved sources, never part of public CLI output. */
+  components?: PluginComponents;
 }
 
 function normalizeComponentPaths(
@@ -1712,13 +1711,14 @@ export interface MarketplacePluginsResult {
  */
 export async function getMarketplacePluginsFromManifest(
   marketplacePath: string,
+  options: { offline?: boolean } = {},
 ): Promise<MarketplacePluginsResult> {
   const result = await parseMarketplaceManifest(marketplacePath);
   if (!result.success) {
     return { plugins: [], warnings: [] };
   }
 
-  const plugins = result.data.plugins.map((plugin) => {
+  const plugins = await Promise.all(result.data.plugins.map(async (plugin) => {
     const resolvedSource = resolvePluginSourcePath(
       plugin.source,
       marketplacePath,
@@ -1736,8 +1736,16 @@ export async function getMarketplacePluginsFromManifest(
     if (plugin.homepage) info.homepage = plugin.homepage;
     const skills = normalizeComponentPaths(plugin.skills);
     if (skills) info.skills = skills;
+    const resolved = await resolvePluginSpec(`${plugin.name}@marketplace`, {
+      marketplacePathOverride: marketplacePath,
+      offline: options.offline ?? true,
+    });
+    if (resolved?.components) {
+      info.path = resolved.path;
+      info.components = resolved.components;
+    }
     return info;
-  });
+  }));
 
   return { plugins, warnings: result.warnings };
 }
@@ -1750,6 +1758,7 @@ export async function getMarketplacePluginsFromManifest(
 export async function listMarketplacePlugins(
   name: string,
   workspacePath?: string,
+  options: { offline?: boolean } = {},
 ): Promise<MarketplacePluginsResult> {
   const registration = await findMarketplaceRegistration(
     name,
@@ -1773,6 +1782,7 @@ export async function listMarketplacePlugins(
   // Try manifest first
   const manifestResult = await getMarketplacePluginsFromManifest(
     marketplace.path,
+    options,
   );
   if (manifestResult.plugins.length > 0) {
     return manifestResult;
@@ -1784,19 +1794,21 @@ export async function listMarketplacePlugins(
     return { plugins: [], warnings: manifestResult.warnings };
   }
 
-  try {
-    const entries = await readdir(pluginsDir, { withFileTypes: true });
-    const plugins = entries
-      .filter((e) => e.isDirectory())
-      .map((e) => ({
-        name: e.name,
-        path: join(pluginsDir, e.name),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return { plugins, warnings: manifestResult.warnings };
-  } catch {
-    return { plugins: [], warnings: manifestResult.warnings };
-  }
+  const entries = await readdir(pluginsDir, { withFileTypes: true }).catch(() => null);
+  if (!entries) return { plugins: [], warnings: manifestResult.warnings };
+  const plugins = await Promise.all(entries
+    .filter((e) => e.isDirectory())
+    .map(async (e): Promise<MarketplacePluginInfo> => {
+      const info: MarketplacePluginInfo = { name: e.name, path: join(pluginsDir, e.name) };
+      const resolved = await resolvePluginSpec(`${e.name}@marketplace`, {
+        marketplacePathOverride: marketplace.path,
+        offline: true,
+      });
+      if (resolved?.components) info.components = resolved.components;
+      return info;
+    }));
+  plugins.sort((a, b) => a.name.localeCompare(b.name));
+  return { plugins, warnings: manifestResult.warnings };
 }
 
 /**
@@ -1879,12 +1891,13 @@ export async function resolvePluginSpec(
     offline?: boolean;
     fetchFn?: (url: string) => Promise<FetchResult>;
     workspacePath?: string;
+    componentPolicy?: PluginComponentPolicy;
   } = {},
 ): Promise<{
   path: string;
   marketplace: string;
   plugin: string;
-  fileArtifacts?: MarketplaceFileArtifacts;
+  components?: PluginComponents;
 } | null> {
   const parsed = parsePluginSpec(spec);
   if (!parsed) {
@@ -1920,7 +1933,7 @@ export async function resolvePluginSpec(
   }
 
   // Try manifest-based resolution first: look up plugin name in manifest entries
-  const manifestResult = await parseMarketplaceManifest(marketplacePath, parsed.plugin);
+  const manifestResult = await parseMarketplaceManifest(marketplacePath, parsed.plugin, options.componentPolicy);
   if (!manifestResult.success && !manifestResult.error.startsWith('Marketplace manifest not found')) {
     return null;
   }
@@ -1929,20 +1942,19 @@ export async function resolvePluginSpec(
       (p) => p.name === parsed.plugin,
     );
     if (pluginEntry) {
-      const declaredFileArtifacts = getMarketplaceFileArtifacts(pluginEntry);
       if (typeof pluginEntry.source === 'string') {
         // Local path source - resolve relative to marketplace
         const resolvedPath = resolve(marketplacePath, pluginEntry.source);
+        assertPluginComponentPath(marketplacePath, resolvedPath);
         if (existsSync(resolvedPath)) {
           return {
             path: resolvedPath,
             marketplace: marketplaceName,
             plugin: parsed.plugin,
-            ...(declaredFileArtifacts && {
-              fileArtifacts: declaredFileArtifacts,
-            }),
+            components: resolvePluginComponents(resolvedPath, pluginEntry, options.componentPolicy),
           };
         }
+        return null;
       } else {
         const remote = parseRemotePluginSource(pluginEntry.source.url);
         if (!remote) return null;
@@ -1952,14 +1964,11 @@ export async function resolvePluginSpec(
         if (fetchResult.success && fetchResult.cachePath) {
           const pluginPath = resolveRemotePluginPath(remote, fetchResult.cachePath);
           if (!existsSync(pluginPath)) return null;
-          const fileArtifacts =
-            declaredFileArtifacts ??
-            (await getEmbeddedMarketplaceFileArtifacts(pluginPath, parsed.plugin));
           return {
             path: pluginPath,
             marketplace: marketplaceName,
             plugin: parsed.plugin,
-            ...(fileArtifacts && { fileArtifacts }),
+            components: resolvePluginComponents(pluginPath, pluginEntry, options.componentPolicy),
           };
         }
         return null;
@@ -1970,6 +1979,7 @@ export async function resolvePluginSpec(
   // Fall back to directory-based lookup
   const subpath = options.subpath ?? parsed.subpath ?? 'plugins';
   const pluginPath = join(marketplacePath, subpath, parsed.plugin);
+  assertPluginComponentPath(marketplacePath, pluginPath);
 
   if (!existsSync(pluginPath)) {
     return null;
@@ -1979,6 +1989,11 @@ export async function resolvePluginSpec(
     path: pluginPath,
     marketplace: marketplaceName,
     plugin: parsed.plugin,
+    components: resolvePluginComponents(pluginPath, {
+      name: parsed.plugin,
+      description: parsed.plugin,
+      source: pluginPath,
+    }, options.componentPolicy),
   };
 }
 
@@ -1992,8 +2007,8 @@ export interface ResolvePluginSpecResult {
   registeredAs?: string;
   /** GitHub marketplace source (owner/repo) for native CLI registration */
   marketplaceSource?: string;
-  /** File artifacts declared by a non-strict marketplace entry. */
-  fileArtifacts?: MarketplaceFileArtifacts;
+  /** Contained component sources selected for file consumers. */
+  components?: PluginComponents;
   error?: string;
 }
 
@@ -2196,7 +2211,7 @@ async function refreshMarketplace(
  */
 export async function resolvePluginSpecWithAutoRegister(
   spec: string,
-  options: { offline?: boolean; workspacePath?: string } = {},
+  options: { offline?: boolean; workspacePath?: string; componentPolicy?: PluginComponentPolicy } = {},
 ): Promise<ResolvePluginSpecResult> {
   // Parse plugin@marketplace using the parser
   const parsed = parsePluginSpec(spec);
@@ -2311,6 +2326,7 @@ export async function resolvePluginSpecWithAutoRegister(
     marketplacePathOverride: marketplace.path,
     ...(options.offline != null && { offline: options.offline }),
     ...(options.workspacePath && { workspacePath: options.workspacePath }),
+    ...(options.componentPolicy && { componentPolicy: options.componentPolicy }),
   };
 
   let resolved = await resolvePluginSpec(spec, resolveOpts);
@@ -2335,6 +2351,7 @@ export async function resolvePluginSpecWithAutoRegister(
         marketplaceNameOverride: marketplace.name,
         marketplacePathOverride: marketplace.path,
         ...(options.workspacePath && { workspacePath: options.workspacePath }),
+        ...(options.componentPolicy && { componentPolicy: options.componentPolicy }),
       });
     }
   }
@@ -2368,7 +2385,7 @@ export async function resolvePluginSpecWithAutoRegister(
     pluginName: resolved.plugin,
     ...(shouldReturnRegisteredAs && { registeredAs: marketplace.name }),
     ...(marketplaceSource && { marketplaceSource }),
-    ...(resolved.fileArtifacts && { fileArtifacts: resolved.fileArtifacts }),
+    ...(resolved.components && { components: resolved.components }),
   };
 }
 

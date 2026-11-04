@@ -603,6 +603,85 @@ describe('profile lifecycle manager', () => {
     }
   });
 
+  it('materializes manifest-selected profile skills and plugin MCP with profile overrides', async () => {
+    const test = await fixture();
+    const local = join(test.workspaceDirectory, 'custom-plugin');
+    await mkdir(join(local, 'custom-skill'), { recursive: true });
+    await mkdir(join(local, 'skills', 'not-selected'), { recursive: true });
+    await writeFile(join(local, 'custom-skill', 'SKILL.md'), '---\nname: custom-skill\ndescription: Custom\n---\nSelected');
+    await writeFile(join(local, 'skills', 'not-selected', 'SKILL.md'), '---\nname: not-selected\ndescription: Default\n---\nNot selected');
+    await writeFile(join(local, 'plugin.json'), JSON.stringify({ name: 'custom', skills: './custom-skill', mcpServers: './native-mcp.json' }));
+    await writeFile(join(local, 'native-mcp.json'), JSON.stringify({ mcpServers: { plugin: { command: 'plugin-mcp' }, shared: { command: 'plugin-shared' } } }));
+    await writeWorkspace(test.userConfigPath, {
+      work: {
+        clients: [{ name: 'copilot', install: 'file' }],
+        plugins: [{ source: local, install: 'file' }],
+        mcpServers: { shared: { command: 'profile-wins' } },
+      },
+    });
+    const adapter = new MemoryProfileAdapter('copilot', test.home);
+    const deps = dependencies(adapter);
+    const plan = await planProfileOperation('work', 'install', test.options, deps);
+    expect((await applyProfilePlan(plan, test.options, deps)).success).toBe(true);
+    const root = adapter.resolveContext('work', test.options).root;
+    expect(await readFile(join(root, 'skills', 'custom-skill', 'SKILL.md'), 'utf8')).toContain('Selected');
+    await expect(stat(join(root, 'skills', 'not-selected'))).rejects.toThrow();
+    expect(JSON.parse(await readFile(join(root, 'mcp.json'), 'utf8'))).toEqual({ mcpServers: {
+      plugin: { command: 'plugin-mcp' }, shared: { command: 'profile-wins' },
+    } });
+  });
+
+  it('materializes selected GitHub assistant files without expanding workflows or manifest metadata', async () => {
+    const test = await fixture();
+    const local = join(test.workspaceDirectory, 'github-assistant');
+    await mkdir(join(local, '.github/prompts'), { recursive: true });
+    await mkdir(join(local, '.github/instructions'), { recursive: true });
+    await mkdir(join(local, '.github/workflows'), { recursive: true });
+    await writeFile(join(local, 'plugin.json'), '{"name":"github-assistant"}');
+    await writeFile(join(local, '.github/prompts/review.prompt.md'), '# Review\n');
+    await writeFile(join(local, '.github/instructions/review.instructions.md'), '# Instructions\n');
+    await writeFile(join(local, '.github/workflows/ci.yml'), 'name: Build\n');
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'copilot', install: 'file' }], plugins: [{ source: local, install: 'file' }] },
+    });
+    const adapter = new class extends MemoryProfileAdapter {
+      override resolveContext(profileName: string, options: { workspaceDirectory: string }): ProfileClientContext {
+        const context = super.resolveContext(profileName, options);
+        return { ...context, fileMapping: { ...context.fileMapping, githubPath: '.github/' } };
+      }
+    }('copilot', test.home);
+    const deps = dependencies(adapter);
+    const plan = await planProfileOperation('work', 'install', test.options, deps);
+    expect((await applyProfilePlan(plan, test.options, deps)).success).toBe(true);
+    const root = adapter.resolveContext('work', test.options).root;
+    expect(await readFile(join(root, '.github/prompts/review.prompt.md'), 'utf8')).toBe('# Review\n');
+    expect(await readFile(join(root, '.github/instructions/review.instructions.md'), 'utf8')).toBe('# Instructions\n');
+    await expect(stat(join(root, '.github/workflows'))).rejects.toThrow();
+    await expect(stat(join(root, 'plugin.json'))).rejects.toThrow();
+  });
+
+  it('plans inline hook configuration bytes rather than copying the plugin manifest', async () => {
+    const test = await fixture();
+    const local = join(test.workspaceDirectory, 'inline-hooks');
+    await mkdir(local);
+    const hooks = { SessionStart: [{ hooks: [{ type: 'command', command: 'printf configured-only' }] }] };
+    await writeFile(join(local, 'plugin.json'), JSON.stringify({ name: 'inline-hooks', hooks }));
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'claude', install: 'file' }], plugins: [{ source: local, install: 'file' }] },
+    });
+    const adapter = new class extends MemoryProfileAdapter {
+      override resolveContext(profileName: string, options: { workspaceDirectory: string }): ProfileClientContext {
+        const context = super.resolveContext(profileName, options);
+        return { ...context, fileMapping: { ...context.fileMapping, hooksPath: 'hooks/' } };
+      }
+    }('claude', test.home);
+    const deps = dependencies(adapter);
+    const plan = await planProfileOperation('work', 'install', test.options, deps);
+    expect((await applyProfilePlan(plan, test.options, deps)).success).toBe(true);
+    const root = adapter.resolveContext('work', test.options).root;
+    expect(JSON.parse(await readFile(join(root, 'hooks', 'hooks.json'), 'utf8'))).toEqual({ hooks });
+  });
+
   it('checks adapter runtime support for file-only plans and status', async () => {
     const test = await fixture();
     const local = await pluginFixture(test.workspaceDirectory);

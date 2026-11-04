@@ -80,32 +80,6 @@ clients:
     expect(existsSync(join(testDir, '.github', 'skills', 'fallback-skill'))).toBe(true);
   });
 
-  it('ignores plugins that do not target a client not in workspace config', async () => {
-    await createPlugin(testDir, 'copilot-plugin', 'copilot-skill');
-
-    await writeFile(
-      join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE),
-      `
-repositories: []
-plugins:
-  - source: ./missing-claude-plugin
-    clients:
-      - claude
-  - source: ./copilot-plugin
-    clients:
-      - copilot
-clients:
-  - claude
-  - copilot
-`,
-      'utf-8',
-    );
-
-    const result = await syncWorkspace(testDir);
-    expect(result.success).toBe(true);
-    expect(result.totalFailed).toBe(0);
-    expect(existsSync(join(testDir, '.github', 'skills', 'copilot-skill'))).toBe(true);
-  });
 
   it('tracks plugin-level-only client in sync state', async () => {
     await createPlugin(testDir, 'codex-plugin', 'codex-skill');

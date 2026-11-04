@@ -21,6 +21,7 @@ import {
 import {
   addMarketplace,
   findMarketplaceRegistration,
+  getMarketplacePluginsFromManifest,
   listMarketplacePlugins,
   updateMarketplace,
 } from '../../core/marketplace.js';
@@ -69,10 +70,7 @@ import {
   setPluginSkillsMode,
   upsertGitHubPluginSourceAllowlist,
 } from '../../core/workspace-modify.js';
-import {
-  parseMarketplaceManifest,
-  resolvePluginSourcePath,
-} from '../../utils/marketplace-manifest-parser.js';
+import { parseMarketplaceManifest } from '../../utils/marketplace-manifest-parser.js';
 import {
   formatPluginSource,
   isGitHubUrl,
@@ -88,6 +86,7 @@ import {
   getEffectivePluginSource,
   type PluginEntry,
 } from '../../models/workspace-config.js';
+import type { PluginComponents } from '../../models/plugin-components.js';
 import { parseWorkspaceConfig } from '../../utils/workspace-parser.js';
 import { parseSkillMetadata } from '../../validators/skill.js';
 import {
@@ -1187,6 +1186,7 @@ async function installSkillViaMarketplace(opts: {
   const mktPlugins = await listMarketplacePlugins(
     marketplaceName,
     isUser ? undefined : workspacePath,
+    { offline: false },
   );
   if (mktPlugins.plugins.length === 0) {
     return {
@@ -1198,9 +1198,9 @@ async function installSkillViaMarketplace(opts: {
   let targetPluginName: string | null = null;
   const allAvailableSkills: string[] = [];
   for (const mktPlugin of mktPlugins.plugins) {
-    const skillNames = mktPlugin.skills
-      ? mktPlugin.skills.map((entry) => entry.split('/').pop() ?? '').filter(Boolean)
-      : await discoverSkillNames(mktPlugin.path);
+    const skillNames = mktPlugin.components
+      ? await discoverSkillNames(mktPlugin.path, mktPlugin.components)
+      : [];
     allAvailableSkills.push(...skillNames);
     if (!targetPluginName && skillNames.includes(skill)) {
       targetPluginName = mktPlugin.name;
@@ -1673,8 +1673,9 @@ interface DiscoveredSkill {
 export async function discoverSkillsWithMetadata(
   pluginPath: string,
   pluginName?: string,
+  components?: PluginComponents,
 ): Promise<DiscoveredSkill[]> {
-  const entries = await discoverSkillEntries(pluginPath);
+  const entries = await discoverSkillEntries(pluginPath, components);
   const results: DiscoveredSkill[] = [];
 
   for (const entry of entries) {
@@ -1723,12 +1724,10 @@ async function discoverSkillsFromSource(
   const manifestResult = await parseMarketplaceManifest(sourcePath);
   if (manifestResult.success) {
     const all: DiscoveredSkill[] = [];
-    for (const plugin of manifestResult.data.plugins) {
-      // Skip remote URL sources — listing would need extra fetches
-      if (typeof plugin.source === 'object') continue;
-      const resolved = resolvePluginSourcePath(plugin.source, sourcePath);
-      if (!existsSync(resolved)) continue;
-      const skills = await discoverSkillsWithMetadata(resolved, plugin.name);
+    const catalogue = await getMarketplacePluginsFromManifest(sourcePath);
+    for (const plugin of catalogue.plugins) {
+      if (!plugin.components) continue;
+      const skills = await discoverSkillsWithMetadata(plugin.path, plugin.name, plugin.components);
       all.push(...skills);
     }
     return { success: true, skills: all, isMarketplace: true };
@@ -1874,6 +1873,7 @@ async function selectAndInstallSkillsFromSource(opts: {
     const mktPlugins = await listMarketplacePlugins(
       marketplaceName,
       isUser ? undefined : workspacePath,
+      { offline: false },
     );
     if (mktPlugins.plugins.length === 0) {
       return {
@@ -1883,11 +1883,9 @@ async function selectAndInstallSkillsFromSource(opts: {
     }
     const selections: MarketplaceSkillSelection[] = [];
     for (const mktPlugin of mktPlugins.plugins) {
-      const allPluginSkillNames = mktPlugin.skills
-        ? mktPlugin.skills
-            .map((entry) => entry.split('/').pop() ?? '')
-            .filter(Boolean)
-        : await discoverSkillNames(mktPlugin.path);
+      const allPluginSkillNames = mktPlugin.components
+        ? await discoverSkillNames(mktPlugin.path, mktPlugin.components)
+        : [];
       const skills = allPluginSkillNames.filter((name) =>
         selectedNames.includes(name),
       );
@@ -2336,6 +2334,7 @@ async function installAllViaMarketplace(opts: {
   const mktPlugins = await listMarketplacePlugins(
     marketplaceName,
     isUser ? undefined : workspacePath,
+    { offline: false },
   );
   if (mktPlugins.plugins.length === 0) {
     return {
@@ -2345,11 +2344,9 @@ async function installAllViaMarketplace(opts: {
   }
   const selections: MarketplaceSkillSelection[] = [];
   for (const mktPlugin of mktPlugins.plugins) {
-    const skills = mktPlugin.skills
-      ? mktPlugin.skills
-          .map((entry) => entry.split('/').pop() ?? '')
-          .filter(Boolean)
-      : await discoverSkillNames(mktPlugin.path);
+    const skills = mktPlugin.components
+      ? await discoverSkillNames(mktPlugin.path, mktPlugin.components)
+      : [];
     if (skills.length > 0) {
       selections.push({ pluginName: mktPlugin.name, skills });
     }

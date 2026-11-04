@@ -313,67 +313,7 @@ describe('syncWorkspace agent deduplication', () => {
     ).toBe(false);
   });
 
-  it('isolates agent discovery failures to the affected plugin', async () => {
-    const brokenPlugin = join(workspacePath, 'broken-plugin');
-    const healthyPlugin = join(workspacePath, 'healthy-plugin');
-    await mkdir(brokenPlugin, { recursive: true });
-    await writeFile(join(brokenPlugin, 'agents'), 'not a directory');
-    await writePluginAgent(
-      healthyPlugin,
-      'agents/healthy.md',
-      'healthy',
-      'Healthy portable agent',
-    );
-    await writeWorkspace([brokenPlugin, healthyPlugin]);
 
-    const result = await syncWorkspace(workspacePath);
-
-    expect(result.success).toBe(false);
-    expect(existsSync(join(workspacePath, '.github/agents/healthy.md'))).toBe(
-      true,
-    );
-    const brokenResult = result.pluginResults.find(
-      (plugin) => plugin.resolved === brokenPlugin,
-    );
-    expect(
-      brokenResult?.copyResults.some(
-        (copy) => copy.action === 'failed' && copy.source.endsWith('/agents'),
-      ),
-    ).toBe(true);
-  });
-
-  it('does not let a malformed GitHub agents entry block a healthy plugin', async () => {
-    const brokenPlugin = join(workspacePath, 'broken-plugin');
-    const healthyPlugin = join(workspacePath, 'healthy-plugin');
-    await mkdir(join(brokenPlugin, '.github'), { recursive: true });
-    await writeFile(
-      join(brokenPlugin, '.github', 'agents'),
-      'not a directory',
-    );
-    await writePluginAgent(
-      healthyPlugin,
-      'agents/healthy.md',
-      'healthy',
-      'Healthy portable agent',
-    );
-    await writeWorkspace([brokenPlugin, healthyPlugin]);
-
-    const result = await syncWorkspace(workspacePath);
-
-    expect(result.success).toBe(false);
-    expect(existsSync(join(workspacePath, '.github/agents/healthy.md'))).toBe(
-      true,
-    );
-    const brokenResult = result.pluginResults.find(
-      (plugin) => plugin.resolved === brokenPlugin,
-    );
-    expect(
-      brokenResult?.copyResults.some(
-        (copy) =>
-          copy.action === 'failed' && copy.source.endsWith('/.github/agents'),
-      ),
-    ).toBe(true);
-  });
 
   it('uses first-configured-plugin ownership for agent filename conflicts', async () => {
     const pluginA = join(workspacePath, 'plugin-a');

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as dump } from 'yaml';
@@ -7,6 +7,7 @@ import { syncWorkspace, syncUserWorkspace } from '../../../src/core/sync.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import type { WorkspaceConfig } from '../../../src/models/workspace-config.js';
 import { stubHomeDir } from '../../helpers/env.js';
+import { getSyncStatePath } from '../../../src/core/sync-state.js';
 
 describe('sync resilience - project scope', () => {
   let testDir: string;
@@ -44,40 +45,28 @@ describe('sync resilience - project scope', () => {
     return pluginDir;
   }
 
-  it('should sync valid plugins and skip invalid ones with warnings', async () => {
+  it('preserves previously owned files and tracking when one plugin fails validation', async () => {
     const goodPlugin = await createLocalPlugin('good-plugin', 'good-skill');
-
-    await writeProjectConfig({
-      repositories: [],
-      plugins: [
-        goodPlugin,
-        'nonexistent@fake-marketplace',
-      ],
-      clients: ['claude'],
-    });
-
+    await writeProjectConfig({ repositories: [], plugins: [goodPlugin], clients: ['claude'] });
+    expect((await syncWorkspace(testDir)).success).toBe(true);
+    const skillPath = join(testDir, '.claude', 'skills', 'good-skill', 'SKILL.md');
+    const original = await readFile(skillPath, 'utf8');
+    const state = await readFile(getSyncStatePath(testDir), 'utf8');
+    await writeProjectConfig({ repositories: [], plugins: [goodPlugin, './missing-plugin'], clients: ['claude'] });
     const result = await syncWorkspace(testDir);
-
-    // Should succeed overall (partial success)
-    expect(result.success).toBe(true);
-    expect(result.totalCopied).toBeGreaterThan(0);
-
-    // Should have warnings for the failed plugin
-    expect(result.warnings).toBeDefined();
-    expect(result.warnings!.length).toBeGreaterThan(0);
-    expect(result.warnings![0]).toContain('nonexistent@fake-marketplace');
-
-    // The good plugin should have been synced
-    expect(result.pluginResults.length).toBe(1);
-    expect(result.pluginResults[0].success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.totalCopied).toBe(0);
+    expect(result.error).toContain('workspace unchanged');
+    expect(await readFile(skillPath, 'utf8')).toBe(original);
+    expect(await readFile(getSyncStatePath(testDir), 'utf8')).toBe(state);
   });
 
   it('should fail when ALL plugins are invalid', async () => {
     await writeProjectConfig({
       repositories: [],
       plugins: [
-        'bad1@fake-marketplace',
-        'bad2@fake-marketplace',
+        './missing-plugin-1',
+        './missing-plugin-2',
       ],
       clients: ['claude'],
     });
@@ -90,11 +79,7 @@ describe('sync resilience - project scope', () => {
     expect(result.warnings!.length).toBe(2);
   });
 
-  it('should sync the good plugin and warn (not throw) when another plugin path cannot be scanned for skills', async () => {
-    // A plugin whose *source* resolves to a real file (not a directory) passes
-    // plugin validation (existsSync) but can't be readdir'd during skill
-    // collection — this is what used to crash the whole sync with an uncaught
-    // EPERM/ENOTDIR (see #433-style bad-path bugs).
+  it('returns an unchanged failure rather than throwing for a non-directory plugin source', async () => {
     const goodPlugin = await createLocalPlugin('good-plugin', 'good-skill');
     const badPluginPath = join(testDir, 'bad-plugin-is-a-file');
     await writeFile(badPluginPath, 'not a directory');
@@ -107,12 +92,10 @@ describe('sync resilience - project scope', () => {
 
     const result = await syncWorkspace(testDir);
 
-    expect(result.totalCopied).toBeGreaterThan(0);
+    expect(result.success).toBe(false);
+    expect(result.totalCopied).toBe(0);
     expect(result.warnings).toBeDefined();
     expect(result.warnings!.some((w) => w.includes(badPluginPath))).toBe(true);
-    // The same bad path is scanned twice internally (once to collect enabled
-    // skills, once to collect all skill names for deleted-artifact detection)
-    // — warnings should be deduplicated rather than shown twice.
     const matching = result.warnings!.filter((w) => w.includes(badPluginPath));
     expect(matching).toHaveLength(1);
   });
@@ -157,23 +140,22 @@ describe('sync resilience - user scope', () => {
     return pluginDir;
   }
 
-  it('should sync valid user plugins and skip invalid ones with warnings', async () => {
+  it('preserves owned user files and tracking when another source is invalid', async () => {
     const goodPlugin = await createLocalPlugin('good-plugin', 'good-skill');
-
-    await writeUserConfig({
-      repositories: [],
-      plugins: [
-        goodPlugin,
-        'nonexistent@fake-marketplace',
-      ],
-      clients: ['claude'],
-    });
-
+    await writeUserConfig({ repositories: [], plugins: [goodPlugin], clients: ['copilot'] });
+    expect((await syncUserWorkspace()).success).toBe(true);
+    const skillPath = join(testDir, '.copilot', 'skills', 'good-skill', 'SKILL.md');
+    const original = await readFile(skillPath, 'utf8');
+    const state = await readFile(getSyncStatePath(testDir), 'utf8');
+    await writeUserConfig({ repositories: [], plugins: [goodPlugin, './missing-plugin'], clients: ['copilot'] });
+    const configPath = join(testDir, '.allagents', WORKSPACE_CONFIG_FILE);
+    const pendingConfig = await readFile(configPath, 'utf8');
     const result = await syncUserWorkspace();
-
-    expect(result.success).toBe(true);
-    expect(result.totalCopied).toBeGreaterThan(0);
-    expect(result.warnings).toBeDefined();
-    expect(result.warnings!.length).toBeGreaterThan(0);
+    expect(result.success).toBe(false);
+    expect(result.totalCopied).toBe(0);
+    expect(result.error).toContain('user workspace unchanged');
+    expect(await readFile(skillPath, 'utf8')).toBe(original);
+    expect(await readFile(getSyncStatePath(testDir), 'utf8')).toBe(state);
+    expect(await readFile(configPath, 'utf8')).toBe(pendingConfig);
   });
 });

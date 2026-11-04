@@ -7,6 +7,9 @@ import { stubHomeDir } from '../../helpers/env.js';
 import {
   getAllSkillsFromPlugins,
   discoverNestedSkillEntries,
+  discoverSkillEntriesFromPluginRoot,
+  discoverSkillNames,
+  discoverSkillEntries,
   type SkillInfo,
 } from '../../../src/core/skills.js';
 import { resetFetchCache } from '../../../src/core/plugin.js';
@@ -48,6 +51,103 @@ describe('getAllSkillsFromPlugins', () => {
     expect(skills.map((s) => s.name)).toContain('skill-b');
     expect(skills.every((s) => s.pluginName === 'test-plugin')).toBe(true);
     expect(skills.every((s) => s.disabled === false)).toBe(true);
+  });
+
+  it('lists manifest-selected custom skills with nested selection and source-root exclusions', async () => {
+    for (const name of ['keep', 'disabled', 'hidden', 'missing-definition']) {
+      await mkdir(join(pluginDir, 'custom/category', name), { recursive: true });
+      await writeFile(join(pluginDir, 'custom/category', name, 'SKILL.md'), `# ${name}`);
+    }
+    await mkdir(join(pluginDir, '.claude-plugin'), { recursive: true });
+    await writeFile(join(pluginDir, '.claude-plugin/plugin.json'), JSON.stringify({
+      name: 'custom-plugin', skills: './custom',
+    }));
+    await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({
+      version: 2, repositories: [], clients: ['claude'],
+      plugins: [{
+        source: pluginDir, skills: ['category/keep'],
+        exclude: ['custom/category/hidden', 'custom/category/missing-definition/SKILL.md'],
+      }],
+    }));
+    const skills = await getAllSkillsFromPlugins(tmpDir);
+    expect(skills.map((skill) => ({ name: skill.name, disabled: skill.disabled, subpath: skill.skillSubpath }))
+      .sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'disabled', disabled: true, subpath: 'category/disabled' },
+      { name: 'keep', disabled: false, subpath: 'category/keep' },
+    ]);
+    expect(skills.every((skill) => skill.path.startsWith(join(pluginDir, 'custom')))).toBe(true);
+  });
+
+  it('inventories an explicit plugin-root collection without a root SKILL.md', async () => {
+    await mkdir(join(pluginDir, '.claude-plugin'), { recursive: true });
+    await writeFile(join(pluginDir, '.claude-plugin/plugin.json'), JSON.stringify({
+      name: 'root-collection', skills: '.',
+    }));
+    await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({
+      version: 2, repositories: [], clients: ['claude'],
+      plugins: [{ source: pluginDir, exclude: ['skills/skill-b/**'] }],
+    }));
+    const skills = await getAllSkillsFromPlugins(tmpDir);
+    expect(skills.map((skill) => ({ name: skill.name, subpath: skill.skillSubpath }))).toEqual([
+      { name: 'skill-a', subpath: 'skills/skill-a' },
+    ]);
+    expect(skills[0]?.path).toBe(join(pluginDir, 'skills/skill-a'));
+  });
+
+  it('does not resolve excluded unsafe root or nested skill definitions while inventorying', async () => {
+    await rm(join(pluginDir, 'skills'), { recursive: true });
+    await mkdir(join(pluginDir, 'custom/keep'), { recursive: true });
+    await mkdir(join(pluginDir, 'custom/hidden'), { recursive: true });
+    await writeFile(join(pluginDir, 'custom/keep/SKILL.md'), '# Keep');
+    const outside = join(tmpDir, 'outside-skill.md');
+    await writeFile(outside, '---\nname: outside\n---\n# Outside');
+    await symlink(outside, join(pluginDir, 'SKILL.md'), 'file');
+    await symlink(outside, join(pluginDir, 'custom/hidden/SKILL.md'), 'file');
+    await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({
+      version: 2, repositories: [], clients: ['claude'],
+      plugins: [{ source: pluginDir, exclude: ['SKILL.md', 'custom/hidden/SKILL.md'] }],
+    }));
+    const skills = await getAllSkillsFromPlugins(tmpDir);
+    expect(skills.map((skill) => skill.name)).toEqual(['keep']);
+    expect(skills[0]?.path).toBe(join(pluginDir, 'custom/keep'));
+  });
+
+  it('retains supplied root-collection components and exclusion policy in discovery wrappers', async () => {
+    const components = {
+      skills: [pluginDir], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
+    };
+    const exclude = ['skills/skill-b/**'];
+    expect(await discoverSkillNames(pluginDir, components, exclude)).toEqual(['skill-a']);
+    const entries = await discoverSkillEntries(pluginDir, components, exclude);
+    expect(entries.map((entry) => entry.subpath)).toEqual(['skills/skill-a']);
+  });
+
+  it('skips an excluded selected skill source before rechecking its replaced symlink', async () => {
+    const selected = join(pluginDir, 'selected');
+    await mkdir(selected);
+    await writeFile(join(selected, 'SKILL.md'), '# Initial');
+    const components = {
+      skills: [selected], commands: [], agents: [], hooks: [], mcpServers: [], github: false,
+      legacyRepository: false,
+    };
+    const outside = join(tmpDir, 'outside-skill');
+    await mkdir(outside);
+    await writeFile(join(outside, 'SKILL.md'), '# Outside');
+    await rm(selected, { recursive: true });
+    await symlink(outside, selected, process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await discoverSkillEntriesFromPluginRoot(pluginDir, [], components, ['selected/**'])).toEqual([]);
+    await expect(discoverSkillEntriesFromPluginRoot(pluginDir, [], components)).rejects.toThrow('escapes plugin root');
+  });
+
+  it('does not inventory conventional skills suppressed by an empty manifest selection', async () => {
+    await mkdir(join(pluginDir, '.claude-plugin'), { recursive: true });
+    await writeFile(join(pluginDir, '.claude-plugin/plugin.json'),
+      JSON.stringify({ name: 'empty-plugin', skills: [] }));
+    await writeFile(join(tmpDir, '.allagents/workspace.yaml'), dump({
+      version: 2, repositories: [], clients: ['claude'], plugins: [pluginDir],
+    }));
+    expect(await getAllSkillsFromPlugins(tmpDir)).toEqual([]);
   });
 
   it('treats a config without a plugins key as declaring no plugins', async () => {
@@ -336,6 +436,14 @@ describe('discoverNestedSkillEntries error handling', () => {
     expect(warnings[0]).toContain(notADir);
     expect(warnings[0]).toContain('workspace.yaml');
   });
+  it('does not read an excluded scan root with original-plugin-relative patterns', async () => {
+    const excluded = join(tmpDir, 'not-a-directory');
+    await writeFile(excluded, 'not a directory');
+    const warnings: string[] = [];
+    expect(await discoverNestedSkillEntries(excluded, warnings, ['not-a-directory/**'], tmpDir)).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
 
   it('still discovers sibling skills when one plugin path cannot be read', async () => {
     const goodPlugin = join(tmpDir, 'good-plugin');

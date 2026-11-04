@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ValidatedPlugin } from './sync.js';
-import { isExcluded, type CopyResult } from './transform.js';
+import type { CopyResult } from './transform.js';
+import { resolvePluginComponents } from './plugin-components.js';
+import { isPluginHookSourceExcluded } from './plugin-hook-exclusions.js';
 
 export const COPILOT_MANAGED_HOOKS_RELATIVE_PATH =
   '.github/hooks/allagents.json';
-
-const PLUGIN_HOOK_PATHS = ['hooks.json', 'hooks/hooks.json'] as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -39,10 +39,18 @@ function parseHooksFile(
     );
     return null;
   }
+  return normalizeHooksFile(parsed, source, warnings);
+}
 
-  if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.hooks)) {
+function normalizeHooksFile(
+  parsed: unknown,
+  source: string,
+  warnings: string[],
+): CopilotHooksFile | null {
+
+  if (!isRecord(parsed) || (parsed.version !== undefined && parsed.version !== 1) || !isRecord(parsed.hooks)) {
     warnings.push(
-      `Copilot hooks: ${source} must contain version 1 and a hooks object`,
+      `Copilot hooks: ${source} must contain a hooks object and use version 1 when a version is supplied`,
     );
     return null;
   }
@@ -88,67 +96,42 @@ function withPluginRoot(
   return { version: 1, hooks };
 }
 
-async function collectPluginHooks(
+export async function collectPluginCopilotHooks(
   plugin: ValidatedPlugin,
   warnings: string[],
 ): Promise<CopilotHooksFile | null> {
-  const relativePath = PLUGIN_HOOK_PATHS.find((candidate) =>
-    existsSync(join(plugin.resolved, candidate)),
-  );
-  if (!relativePath) return null;
-
-  const hooksPath = join(plugin.resolved, relativePath);
-  if (isExcluded(plugin.resolved, hooksPath, plugin.exclude)) return null;
-
-  let hooksFile: CopilotHooksFile | null;
-  try {
-    hooksFile = parseHooksFile(
-      await readFile(hooksPath, 'utf-8'),
-      hooksPath,
-      warnings,
-    );
-  } catch (error) {
-    warnings.push(
-      `Copilot hooks: failed to read ${hooksPath}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return null;
-  }
-
-  if (!hooksFile) return null;
-
-  // The declaration executes payloads from the installed plugin root. If a
-  // user excluded any root hooks/ payload, activating the declaration would
-  // bypass that exclusion even though the file was not copied to the project.
-  // Skip the plugin's generated declaration rather than execute excluded code.
-  if (await hasExcludedHookPayload(plugin)) return null;
-
-  return withPluginRoot(hooksFile, plugin.resolved);
-}
-
-async function hasExcludedHookPayload(plugin: ValidatedPlugin): Promise<boolean> {
-  if (!plugin.exclude || plugin.exclude.length === 0) return false;
-
-  const hooksDir = join(plugin.resolved, 'hooks');
-  if (!existsSync(hooksDir)) return false;
-
-  async function visit(directory: string): Promise<boolean> {
-    const entries = await readdir(directory, { withFileTypes: true });
-    for (const entry of entries) {
-      const sourcePath = join(directory, entry.name);
-      if (isExcluded(plugin.resolved, sourcePath, plugin.exclude)) return true;
-      if (entry.isDirectory() && (await visit(sourcePath))) return true;
+  const components = plugin.components ?? resolvePluginComponents(plugin.resolved, undefined, { exclude: plugin.exclude, hooks: plugin.hooks });
+  const files: CopilotHooksFile[] = [];
+  for (const source of components.hooks) {
+    if (isPluginHookSourceExcluded(plugin, source, components.hookResources)) continue;
+    let hooksFile: CopilotHooksFile | null;
+    if (source.path) {
+      try {
+        hooksFile = parseHooksFile(await readFile(source.path, 'utf-8'), source.path, warnings);
+      } catch (error) {
+        warnings.push(
+          `Copilot hooks: failed to read ${source.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return null;
+      }
+    } else {
+      hooksFile = normalizeHooksFile(
+        { version: 1, hooks: source.inline },
+        `${source.declaredIn ?? plugin.resolved}#hooks`,
+        warnings,
+      );
     }
-    return false;
+    if (!hooksFile) return null;
+    files.push(withPluginRoot(hooksFile, plugin.resolved));
   }
-
-  return visit(hooksDir);
+  return files.length > 0 ? mergeHooks(files) : null;
 }
 
 function pluginTargetsCopilot(plugin: ValidatedPlugin): boolean {
   return (
     plugin.success &&
-    plugin.clients.includes('copilot') &&
-    plugin.fileArtifacts?.hooks !== false
+    plugin.hooks !== false &&
+    plugin.clients.includes('copilot')
   );
 }
 
@@ -172,7 +155,7 @@ export async function syncCopilotProjectHooks(
   const hookFiles = await Promise.all(
     validatedPlugins
       .filter(pluginTargetsCopilot)
-      .map((plugin) => collectPluginHooks(plugin, warnings)),
+      .map((plugin) => collectPluginCopilotHooks(plugin, warnings)),
   );
   const merged = mergeHooks(
     hookFiles.filter((file): file is CopilotHooksFile => file !== null),

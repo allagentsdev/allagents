@@ -254,7 +254,7 @@ description: Blog watcher
     }
   });
 
-  it('honors skills-only Copilot marketplace entries without copying repository config', async () => {
+  it('discovers conventional hooks and MCP while preserving assistant GitHub configuration', async () => {
     const originalTestHome = process.env.ALLAGENTS_TEST_HOME;
     const fakeHome = join(tmpDir, 'home');
     const marketplaceDir = join(tmpDir, 'ediprod-marketplace');
@@ -292,8 +292,8 @@ description: Blog watcher
         '---\nname: ediprod\ndescription: ediProd\n---\n',
       );
       await writeFile(
-        join(marketplaceDir, 'hooks', 'portable.json'),
-        '{"hooks":{}}',
+        join(marketplaceDir, 'hooks', 'hooks.json'),
+        '{"version":1,"hooks":{"sessionStart":[{"type":"command","bash":"echo undeclared"}]}}',
       );
       await writeFile(
         join(marketplaceDir, '.github', 'hooks', 'repository.json'),
@@ -313,10 +313,9 @@ description: Blog watcher
 
       const config: WorkspaceConfig = {
         repositories: [],
-        // Direct repository sources should honor their embedded marketplace
-        // boundary instead of treating repository configuration as plugin data.
+        // Embedded marketplace metadata does not suppress assistant artifacts.
         plugins: [marketplaceDir],
-        clients: ['copilot'],
+        clients: ['copilot', 'claude', 'codex', 'vscode'],
         syncMode: 'copy',
         version: 2,
       };
@@ -332,8 +331,29 @@ description: Blog watcher
       expect(
         existsSync(join(tmpDir, '.github', 'skills', 'ediprod', 'SKILL.md')),
       ).toBe(true);
-      expect(existsSync(join(tmpDir, '.github', 'hooks'))).toBe(false);
-      expect(existsSync(join(tmpDir, '.github', 'mcp.json'))).toBe(false);
+      const hooks = JSON.parse(await readFile(join(tmpDir, '.github', 'hooks', 'allagents.json'), 'utf-8'));
+      expect(hooks.hooks.sessionStart).toEqual([
+        expect.objectContaining({ type: 'command', bash: 'echo undeclared' }),
+      ]);
+      expect(await readFile(join(tmpDir, '.github', 'hooks', 'repository.json'), 'utf-8')).toBe('{"hooks":{}}');
+      expect(existsSync(join(tmpDir, '.codex', 'hooks.json'))).toBe(false);
+      expect(existsSync(join(tmpDir, '.github', 'plugin'))).toBe(false);
+      for (const [path, key] of [
+        ['.github/mcp.json', 'mcpServers'],
+        ['.mcp.json', 'mcpServers'],
+        ['.vscode/mcp.json', 'servers'],
+      ] as const) {
+        const config = JSON.parse(await readFile(join(tmpDir, path), 'utf-8'));
+        expect(config[key].undeclared).toMatchObject({
+          url: 'https://undeclared.test',
+        });
+      }
+      const codexConfig = Bun.TOML.parse(
+        await readFile(join(tmpDir, '.codex', 'config.toml'), 'utf-8'),
+      ) as Record<string, unknown>;
+      expect(codexConfig.mcp_servers).toEqual({
+        undeclared: { url: 'https://undeclared.test' },
+      });
     } finally {
       if (originalTestHome === undefined) {
         delete process.env.ALLAGENTS_TEST_HOME;

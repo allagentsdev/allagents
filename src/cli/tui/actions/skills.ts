@@ -106,7 +106,9 @@ async function loadMarketplaceSkills(cache?: TuiCache): Promise<MarketplaceSkill
       if (!cachedPlugins) cache?.setMarketplacePlugins(marketplace.name, result);
 
       for (const plugin of result.plugins) {
-        const skillNames = await discoverSkillNames(plugin.path);
+        const skillNames = plugin.components
+          ? await discoverSkillNames(plugin.path, plugin.components)
+          : [];
         for (const skillName of skillNames) {
           const preview: MarketplaceSkillPreview = {
             skillName,

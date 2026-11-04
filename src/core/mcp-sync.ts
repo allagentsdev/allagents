@@ -132,10 +132,32 @@ export function syncMcpServers(
   }
 
   const specs = buildSyncSpecs(workspacePath);
+  const serversByClient = new Map<ClientType, Map<string, unknown>>();
+  let anyServers: Map<string, unknown>;
+  try {
+    anyServers = collectMcpServers(validPlugins, config.mcpServers).servers;
+    for (const spec of specs) {
+      if (syncClients.includes(spec.client)) serversByClient.set(spec.client, getServersForClient(spec.client));
+    }
+  } catch (error) {
+    const warning = `MCP collection failed; existing configuration and ownership retained: ${error instanceof Error ? error.message : String(error)}`;
+    warnings.push(warning);
+    for (const spec of specs) {
+      if (!syncClients.includes(spec.client)) continue;
+      const tracked = getPreviouslySyncedMcpServers(previousState, spec.scope);
+      mcpResults[spec.scope] = {
+        added: 0, skipped: 0, overwritten: 0, removed: 0,
+        addedServers: [], skippedServers: [], overwrittenServers: [], removedServers: [],
+        trackedServers: tracked, warnings: [warning], authoritative: false,
+      };
+      trackedServers[spec.scope] = tracked;
+    }
+    return { mcpResults, warnings, trackedServers };
+  }
   for (const spec of specs) {
     if (!syncClients.includes(spec.client)) continue;
     const tracked = getPreviouslySyncedMcpServers(previousState, spec.scope);
-    const serverOverrides = getServersForClient(spec.client);
+    const serverOverrides = serversByClient.get(spec.client)!;
     const result = spec.syncFn(validPlugins, {
       dryRun,
       force: false,
@@ -152,7 +174,6 @@ export function syncMcpServers(
 
   // Warn about configured clients that don't support project-scoped MCP sync
   // when there are servers that would otherwise have been synced.
-  const anyServers = collectMcpServers(validPlugins, config.mcpServers).servers;
   if (anyServers.size > 0) {
     for (const client of syncClients) {
       if (!PROJECT_MCP_CLIENTS.has(client)) {
@@ -180,6 +201,7 @@ interface PreparedMcpOnlySync {
   validPlugins: ValidatedPlugin[];
   syncClients: ClientType[];
   warnings: string[];
+  error?: string;
 }
 
 async function prepareMcpOnlySync(
@@ -196,11 +218,12 @@ async function prepareMcpOnlySync(
     seedFetchCacheFromMarketplaces,
     validateAllPlugins,
   } = await import('./sync.js');
-  const { plans, warnings } = buildPluginSyncPlans(
+  const { plans, warnings, errors } = buildPluginSyncPlans(
     config.plugins,
     config.clients,
     scope,
   );
+  if (errors.length > 0) return { validPlugins: [], syncClients: [], warnings, error: errors.join('\n') };
   const activePlans = plans.filter(
     (plan) =>
       plan.clients.length > 0 ||
@@ -220,12 +243,14 @@ async function prepareMcpOnlySync(
     (plugin): plugin is ValidatedPlugin =>
       plugin.success && plugin.clients.length > 0,
   );
-  warnings.push(
-    ...validatedPlugins
-      .filter((plugin) => !plugin.success)
-      .map((plugin) => `${plugin.plugin}: ${plugin.error} (skipped)`),
-  );
-
+  const failedPlugins = validatedPlugins.filter((plugin) => !plugin.success);
+  warnings.push(...validatedPlugins.flatMap((plugin) => (plugin.components?.warnings ?? []).map((warning) => `${plugin.plugin}: ${warning}`)));
+  if (failedPlugins.length > 0) {
+    return {
+      validPlugins: [], syncClients, warnings,
+      error: `Plugin validation failed; MCP configuration and ownership unchanged:\n${failedPlugins.map((plugin) => `  - ${plugin.plugin}: ${plugin.error}`).join('\n')}`,
+    };
+  }
   return { validPlugins, syncClients, warnings };
 }
 
@@ -246,7 +271,6 @@ export async function syncMcpOnly(
   options: { offline?: boolean; dryRun?: boolean } = {},
 ): Promise<SyncMcpOnlyResult> {
   const { offline = false, dryRun = false } = options;
-  await migrateWorkspaceSkillsV1toV2(workspacePath);
 
   const configPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
   if (!existsSync(configPath)) {
@@ -270,12 +294,14 @@ export async function syncMcpOnly(
     };
   }
 
-  const { validPlugins, syncClients, warnings } = await prepareMcpOnlySync(
+  const { validPlugins, syncClients, warnings, error } = await prepareMcpOnlySync(
     config,
     'project',
     workspacePath,
     offline,
   );
+  if (error) return { success: false, mcpResults: {}, warnings, error };
+  await migrateWorkspaceSkillsV1toV2(workspacePath);
 
   const previousState = await loadSyncState(workspacePath);
 
@@ -355,12 +381,13 @@ export async function syncUserMcpOnly(
   }
 
   const homeDir = getHomeDir();
-  const { validPlugins, syncClients, warnings } = await prepareMcpOnlySync(
+  const { validPlugins, syncClients, warnings, error } = await prepareMcpOnlySync(
     config,
     'user',
     homeDir,
     offline,
   );
+  if (error) return { success: false, mcpResults: {}, warnings, error };
 
   const previousState = await loadSyncState(homeDir);
   const syncResult = await syncUserMcpAdapters({

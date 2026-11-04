@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addMarketplace, resolvePluginSpec } from '../../../src/core/marketplace.js';
 import { addPluginDeclaration, resolveGitHubIdentity } from '../../../src/core/workspace-modify.js';
-import { getEmbeddedMarketplaceFileArtifacts, parseMarketplaceManifest } from '../../../src/utils/marketplace-manifest-parser.js';
+import { parseMarketplaceManifest } from '../../../src/utils/marketplace-manifest-parser.js';
 import { parseRemotePluginSource } from '../../../src/utils/plugin-path.js';
 
 let root: string;
@@ -102,6 +102,12 @@ describe('external marketplace subdirectories', () => {
     }))?.path).toBe(cache);
   });
 
+  it('does not replace a missing selected local source with a same-name conventional plugin', async () => {
+    manifest('./plugins/missing');
+    checkout(root);
+    expect(await resolvePluginSpec('finance@legacy', { marketplacePathOverride: root, offline: true })).toBeNull();
+  });
+
   it('rejects a symlink that points outside the external checkout', async () => {
     manifest({ source: 'git-subdir', url: 'example/agent-plugins', path: 'plugins/finance' });
     const cache = join(root, 'checkout');
@@ -152,15 +158,6 @@ describe('external marketplace subdirectories', () => {
     const selected = await parseMarketplaceManifest(root, 'finance');
     expect(selected.success).toBe(true);
     if (selected.success) expect(selected.warnings.some((warning) => warning.includes('missing "name"'))).toBe(true);
-  });
-
-  it('does not infer repository-root artifacts from an unsupported remote entry', async () => {
-    writeFileSync(join(root, '.claude-plugin', 'marketplace.json'), JSON.stringify({
-      name: 'legacy', description: 'Mixed catalogue', plugins: [
-        { name: 'unsupported', description: 'Unsupported source', source: { source: 'npm', package: 'example' }, strict: false, skills: ['./skills'] },
-      ],
-    }));
-    expect(await getEmbeddedMarketplaceFileArtifacts(root, 'unsupported')).toBeUndefined();
   });
 
   it('rejects an unsupported SHA instead of silently dropping the pin', async () => {

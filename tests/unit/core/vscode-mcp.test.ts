@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   readPluginMcpConfig,
@@ -8,6 +8,7 @@ import {
   syncVscodeMcpConfig,
 } from '../../../src/core/vscode-mcp.js';
 import type { ValidatedPlugin } from '../../../src/core/sync.js';
+import { resolvePluginComponents } from '../../../src/core/plugin-components.js';
 
 /** Create a temp directory for each test */
 function makeTempDir(): string {
@@ -53,10 +54,69 @@ describe('readPluginMcpConfig', () => {
     });
   });
 
-  test('returns null for invalid JSON', () => {
+  test('returns null when a previously resolved config becomes invalid JSON', () => {
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: {} }));
+    const components = resolvePluginComponents(tempDir);
     writeFileSync(join(tempDir, '.mcp.json'), 'not valid json {{{');
-    const result = readPluginMcpConfig(tempDir);
-    expect(result).toBeNull();
+    expect(readPluginMcpConfig(tempDir, components)).toBeNull();
+  });
+
+  test('reads .github/mcp.json with the native mcpServers envelope', () => {
+    mkdirSync(join(tempDir, '.github'));
+    writeFileSync(join(tempDir, '.github', 'mcp.json'), JSON.stringify({ mcpServers: { github: { command: 'github' } } }));
+    expect(readPluginMcpConfig(tempDir)).toEqual({ github: { command: 'github' } });
+  });
+
+  test('reads custom manifest MCP files and excludes their selected paths', () => {
+    mkdirSync(join(tempDir, '.claude-plugin'));
+    mkdirSync(join(tempDir, 'config'));
+    writeFileSync(join(tempDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'custom', mcpServers: './config/custom.json' }));
+    writeFileSync(join(tempDir, 'config', 'custom.json'), JSON.stringify({ mcpServers: { custom: { command: 'custom' } } }));
+    const components = resolvePluginComponents(tempDir);
+    expect(readPluginMcpConfig(tempDir, components)).toEqual({ custom: { command: 'custom' } });
+    expect(readPluginMcpConfig(tempDir, components, ['config/custom.json'])).toBeNull();
+  });
+
+  test('reads direct inline maps and excludes their declaration manifest', () => {
+    mkdirSync(join(tempDir, '.claude-plugin'));
+    writeFileSync(join(tempDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'inline', mcpServers: { inline: { command: 'inline' } } }));
+    const components = resolvePluginComponents(tempDir);
+    expect(readPluginMcpConfig(tempDir, components)).toEqual({ inline: { command: 'inline' } });
+    expect(readPluginMcpConfig(tempDir, components, ['.claude-plugin/plugin.json'])).toBeNull();
+  });
+
+  test('uses conventional MCP instead of conflicting custom and inline sources', () => {
+    mkdirSync(join(tempDir, '.claude-plugin'));
+    mkdirSync(join(tempDir, '.github'));
+    writeFileSync(join(tempDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'inline', mcpServers: { inline: { command: 'inline' } } }));
+    writeFileSync(join(tempDir, '.github', 'mcp.json'), JSON.stringify({ mcpServers: { github: { command: 'github' } } }));
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: { root: { command: 'root' } } }));
+    expect(readPluginMcpConfig(tempDir)).toEqual({ root: { command: 'root' } });
+  });
+
+  test('rejects source symlinks that escape after component resolution', () => {
+    const path = join(tempDir, '.mcp.json');
+    writeFileSync(path, JSON.stringify({ mcpServers: { safe: { command: 'safe' } } }));
+    const components = resolvePluginComponents(tempDir);
+    const outsideDir = makeTempDir();
+    const outsidePath = join(outsideDir, 'outside-mcp.json');
+    writeFileSync(outsidePath, JSON.stringify({ mcpServers: { outside: { command: 'outside' } } }));
+    try {
+      rmSync(path);
+      symlinkSync(outsidePath, path);
+      expect(() => readPluginMcpConfig(tempDir, components)).toThrow();
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects malformed server maps rather than loading a valid subset', () => {
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: {} }));
+    const components = resolvePluginComponents(tempDir);
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: { invalid: 42, valid: { command: 'safe' } } }));
+    expect(readPluginMcpConfig(tempDir, components)).toBeNull();
+    writeFileSync(join(tempDir, '.mcp.json'), JSON.stringify({ mcpServers: [] }));
+    expect(readPluginMcpConfig(tempDir, components)).toBeNull();
   });
 });
 
@@ -188,27 +248,13 @@ describe('collectMcpServers', () => {
     ).toEqual({});
   });
 
-  test('skips MCP servers omitted by a non-strict marketplace entry', () => {
-    writeFileSync(
-      join(tempDir1, '.mcp.json'),
-      JSON.stringify({
-        mcpServers: {
-          undeclared: { type: 'http', url: 'https://undeclared.test' },
-        },
-      }),
-    );
+  test('generic config exclusions do not fall back to lower-precedence MCP sources', () => {
+    mkdirSync(join(tempDir1, '.claude-plugin'));
+    writeFileSync(join(tempDir1, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'inline', mcpServers: { fallback: { command: 'fallback' } } }));
+    writeFileSync(join(tempDir1, '.mcp.json'), JSON.stringify({ mcpServers: { selected: { command: 'selected' } } }));
     const plugin = makePlugin(tempDir1);
-    plugin.fileArtifacts = {
-      agents: false,
-      commands: false,
-      github: false,
-      hooks: false,
-      mcpServers: false,
-      skills: true,
-    };
-
+    plugin.exclude = ['.mcp.json'];
     const { servers, warnings } = collectMcpServers([plugin]);
-
     expect(servers.size).toBe(0);
     expect(warnings).toEqual([]);
   });
@@ -638,4 +684,35 @@ describe('syncVscodeMcpConfig with tracking', () => {
     const written = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(written.servers.orphaned).toBeDefined();
   });
+});
+
+test('invalid refreshed plugin MCP preserves owned and user configuration bytes', () => {
+  const pluginDir = makeTempDir();
+  const workspaceDir = makeTempDir();
+  try {
+    const source = join(pluginDir, '.mcp.json');
+    writeFileSync(source, JSON.stringify({ mcpServers: { owned: { command: 'before' } } }));
+    const plugin = makePlugin(pluginDir);
+    plugin.components = resolvePluginComponents(pluginDir);
+    const configPath = join(workspaceDir, 'mcp.json');
+    const original = JSON.stringify({ servers: { owned: { command: 'before' }, user: { command: 'user' } } });
+    writeFileSync(configPath, original);
+    writeFileSync(source, '{invalid');
+    expect(() => syncVscodeMcpConfig([plugin], { configPath, trackedServers: ['owned'] })).toThrow();
+    expect(readFileSync(configPath, 'utf-8')).toBe(original);
+  } finally {
+    rmSync(pluginDir, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+test('readPluginMcpConfig does not accept a wrapped inline server map', () => {
+  const pluginDir = makeTempDir();
+  try {
+    const components = resolvePluginComponents(pluginDir);
+    components.mcpServers = [{ inline: { mcpServers: { wrapped: { command: 'wrapped' } } } }];
+    expect(readPluginMcpConfig(pluginDir, components)).toBeNull();
+  } finally {
+    rmSync(pluginDir, { recursive: true, force: true });
+  }
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -13,6 +13,8 @@ import {
   getRegistryPath,
   getAllagentsDir,
 } from '../../../src/core/marketplace.js';
+import { copyPluginToWorkspace } from '../../../src/core/transform.js';
+import { discoverSkillNames } from '../../../src/core/skills.js';
 
 describe('parsePluginSpec', () => {
   it('should parse simple marketplace name', () => {
@@ -219,76 +221,49 @@ describe('getMarketplacePluginsFromManifest', () => {
     expect(result!.plugin).toBe('external');
   });
 
-  it('should expose only declared artifacts for a strict-false skills-only plugin', async () => {
-    mkdirSync(join(testDir, 'skills', 'skill-a'), { recursive: true });
-    mkdirSync(join(testDir, '.github', 'hooks'), { recursive: true });
-    writeFileSync(
-      join(testDir, 'skills', 'skill-a', 'SKILL.md'),
-      '---\nname: skill-a\n---\n',
-    );
-    writeFileSync(
-      join(testDir, '.github', 'hooks', 'post-edit.json'),
-      '{}',
-    );
-    writeFileSync(
-      join(testDir, '.claude-plugin', 'marketplace.json'),
-      JSON.stringify({
-        name: 'test',
-        description: 'Test',
-        plugins: [
-          {
-            name: 'skills-only',
-            description: 'Skills only',
-            source: './',
-            strict: false,
-            skills: ['./skills/'],
-          },
-        ],
-      }),
-    );
-
-    const result = await resolvePluginSpec('skills-only@test-marketplace', {
-      marketplacePathOverride: testDir,
+  for (const strict of [false, undefined, true]) {
+    it(`copies omitted conventional components without repository overlays (strict=${strict})`, async () => {
+      mkdirSync(join(testDir, 'commands'), { recursive: true });
+      mkdirSync(join(testDir, '.github', 'workflows'), { recursive: true });
+      writeFileSync(join(testDir, 'commands', 'review.md'), 'Review changes');
+      writeFileSync(join(testDir, '.github', 'workflows', 'dev.yml'), 'name: Development');
+      writeFileSync(join(testDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+        name: 'test', description: 'Test',
+        plugins: [{ name: 'full-plugin', description: 'Full plugin', source: './', ...(strict !== undefined && { strict }) }],
+      }));
+      const resolved = await resolvePluginSpec('full-plugin@test-marketplace', { marketplacePathOverride: testDir });
+      expect(resolved).not.toBeNull();
+      const workspace = join(testDir, 'workspace');
+      await copyPluginToWorkspace(resolved!.path, workspace, 'claude', { components: resolved!.components });
+      await copyPluginToWorkspace(resolved!.path, workspace, 'copilot', { components: resolved!.components });
+      expect(readFileSync(join(workspace, '.claude', 'commands', 'review.md'), 'utf-8')).toBe('Review changes');
+      expect(existsSync(join(workspace, '.github', 'workflows', 'dev.yml'))).toBe(false);
     });
-
-    expect(result).not.toBeNull();
-    expect(result!.path).toBe(testDir);
-    expect(result!.fileArtifacts).toEqual({
-      agents: false,
-      commands: false,
-      github: false,
-      hooks: false,
-      mcpServers: false,
-      skills: true,
-    });
+  }
+  it('catalogue skill inventory and copies honor manifest sources rather than entry paths', async () => {
+    const pluginRoot = join(testDir, 'plugins', 'plugin-a');
+    mkdirSync(join(pluginRoot, 'skills', 'stale'), { recursive: true });
+    mkdirSync(join(pluginRoot, 'library', 'actual'), { recursive: true });
+    writeFileSync(join(pluginRoot, 'skills', 'stale', 'SKILL.md'), '---\nname: stale\ndescription: Stale skill\n---\n');
+    const selectedContent = '---\nname: actual\ndescription: Actual skill\n---\n';
+    writeFileSync(join(pluginRoot, 'library', 'actual', 'SKILL.md'), selectedContent);
+    writeFileSync(join(pluginRoot, 'plugin.json'), JSON.stringify({ name: 'plugin-a', skills: './library/' }));
+    writeFileSync(join(testDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+      name: 'test', description: 'Test', plugins: [{
+        name: 'plugin-a', description: 'Plugin A', source: './plugins/plugin-a', skills: './skills/',
+      }],
+    }));
+    const catalogue = await getMarketplacePluginsFromManifest(testDir);
+    const plugin = catalogue.plugins[0]!;
+    const names = await discoverSkillNames(plugin.path, plugin.components);
+    expect(names).toEqual(['actual']);
+    const workspace = join(testDir, 'workspace');
+    await copyPluginToWorkspace(plugin.path, workspace, 'codex', { components: plugin.components });
+    expect(readFileSync(join(workspace, '.codex', 'skills', 'actual', 'SKILL.md'), 'utf8')).toBe(selectedContent);
+    expect(existsSync(join(workspace, '.codex', 'skills', 'stale'))).toBe(false);
   });
 
-  it('should keep the plugin root when strict mode can merge other components', async () => {
-    mkdirSync(join(testDir, 'skills', 'skill-a'), { recursive: true });
-    writeFileSync(
-      join(testDir, '.claude-plugin', 'marketplace.json'),
-      JSON.stringify({
-        name: 'test',
-        description: 'Test',
-        plugins: [
-          {
-            name: 'full-plugin',
-            description: 'Full plugin',
-            source: './',
-            skills: ['./skills/'],
-          },
-        ],
-      }),
-    );
 
-    const result = await resolvePluginSpec('full-plugin@test-marketplace', {
-      marketplacePathOverride: testDir,
-    });
-
-    expect(result).not.toBeNull();
-    expect(result!.path).toBe(testDir);
-    expect(result!.fileArtifacts).toBeUndefined();
-  });
 
   it('should return null for URL source plugins when fetch fails', async () => {
     const manifest = {
@@ -418,14 +393,9 @@ describe('getMarketplacePluginsFromManifest', () => {
 
     expect(result).not.toBeNull();
     expect(result!.path).toBe(cachedPluginDir);
-    expect(result!.fileArtifacts).toEqual({
-      agents: false,
-      commands: false,
-      github: false,
-      hooks: false,
-      mcpServers: false,
-      skills: true,
-    });
+    const workspace = join(testDir, 'workspace');
+    await copyPluginToWorkspace(result!.path, workspace, 'copilot', { components: result!.components });
+    expect(existsSync(join(workspace, '.github', 'plugin', 'marketplace.json'))).toBe(false);
   });
 
   it('should handle GitHub source plugins in plugin listing', async () => {

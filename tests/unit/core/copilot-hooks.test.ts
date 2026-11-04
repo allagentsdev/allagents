@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../../../src/constants.js';
 import { syncWorkspace } from '../../../src/core/sync.js';
+import type { ValidatedPlugin } from '../../../src/core/sync.js';
+import { syncCopilotProjectHooks } from '../../../src/core/copilot-hooks.js';
+import { resolvePluginComponents } from '../../../src/core/plugin-components.js';
 
 describe('syncWorkspace Copilot hooks', () => {
   let testDir: string;
@@ -59,14 +62,13 @@ syncMode: copy
     return pluginDir;
   }
 
-  it('materializes root plugin hook declarations as executable repository hooks', async () => {
+  it('accepts native hook files without an input version and emits project hook schema', async () => {
     const pluginDir = join(testDir, 'org');
     await mkdir(join(pluginDir, 'hooks'), { recursive: true });
     await writeFile(join(pluginDir, 'hooks', 'session-start.sh'), '#!/bin/sh\n');
     await writeFile(
       join(pluginDir, 'hooks.json'),
       JSON.stringify({
-        version: 1,
         hooks: {
           SessionStart: [
             {
@@ -96,9 +98,10 @@ syncMode: copy
     const hooks = JSON.parse(
       await readFile(join(testDir, '.github', 'hooks', 'allagents.json'), 'utf-8'),
     ) as {
+      version: number;
       hooks: Record<string, Array<{ env?: Record<string, string> }>>;
     };
-    expect(hooks.hooks.SessionStart).toHaveLength(1);
+    expect(hooks.version).toBe(1);
     expect(hooks.hooks.SessionStart?.[0]?.env?.COPILOT_PLUGIN_ROOT).toBe(pluginDir);
   });
 
@@ -169,9 +172,9 @@ syncMode: copy
     expect(existsSync(join(testDir, '.github', 'hooks', 'user.json'))).toBe(true);
   });
 
-  it('skips an entire hook declaration when any event is not an array', async () => {
+  it('retains installed hooks and skills when a selected hook event map is invalid', async () => {
     const invalidPlugin = await writePlugin('invalid-plugin', 'SessionStart');
-    const validPlugin = await writePlugin('valid-plugin', 'PostToolUse');
+    await writePlugin('valid-plugin', 'PostToolUse');
     await mkdir(join(invalidPlugin, 'skills', 'invalid-plugin-skill'), {
       recursive: true,
     });
@@ -179,6 +182,12 @@ syncMode: copy
       join(invalidPlugin, 'skills', 'invalid-plugin-skill', 'SKILL.md'),
       '---\nname: invalid-plugin-skill\ndescription: Still syncs\n---\n# Skill\n',
     );
+    await writeWorkspace(['invalid-plugin', 'valid-plugin']);
+    expect((await syncWorkspace(testDir)).success).toBe(true);
+    const hooksPath = join(testDir, '.github', 'hooks', 'allagents.json');
+    const statePath = join(testDir, CONFIG_DIR, 'sync-state.json');
+    const previousHooks = await readFile(hooksPath, 'utf-8');
+    const previousState = await readFile(statePath, 'utf-8');
     await writeFile(
       join(invalidPlugin, 'hooks.json'),
       JSON.stringify({
@@ -194,27 +203,31 @@ syncMode: copy
         },
       }),
     );
-    await writeWorkspace(['invalid-plugin', 'valid-plugin']);
 
     const result = await syncWorkspace(testDir);
 
-    expect(result.success).toBe(true);
-    expect(result.warnings).toContain(
-      `Copilot hooks: event 'UserPromptSubmit' in ${join(invalidPlugin, 'hooks.json')} must be an array`,
-    );
-    const hooks = JSON.parse(
-      await readFile(join(testDir, '.github', 'hooks', 'allagents.json'), 'utf-8'),
-    ) as {
-      hooks: Record<string, Array<{ env: Record<string, string> }>>;
-    };
-    expect(hooks.hooks.SessionStart).toBeUndefined();
-    expect(hooks.hooks.PostToolUse).toHaveLength(1);
-    expect(hooks.hooks.PostToolUse?.[0]?.env.COPILOT_PLUGIN_ROOT).toBe(validPlugin);
+    expect(result.success).toBe(false);
+    expect(await readFile(hooksPath, 'utf-8')).toBe(previousHooks);
+    expect(await readFile(statePath, 'utf-8')).toBe(previousState);
     expect(
       existsSync(
         join(testDir, '.github', 'skills', 'invalid-plugin-skill', 'SKILL.md'),
       ),
     ).toBe(true);
+  });
+
+  it('retains managed hooks and tracking when a refreshed Copilot hook version is unsupported', async () => {
+    const plugin = await writePlugin('plugin-a', 'SessionStart');
+    await writeWorkspace(['plugin-a']);
+    expect((await syncWorkspace(testDir)).success).toBe(true);
+    const hooksPath = join(testDir, '.github', 'hooks', 'allagents.json');
+    const statePath = join(testDir, CONFIG_DIR, 'sync-state.json');
+    const previousHooks = await readFile(hooksPath, 'utf-8');
+    const previousState = await readFile(statePath, 'utf-8');
+    await writeFile(join(plugin, 'hooks.json'), JSON.stringify({ version: 2, hooks: { SessionStart: [] } }));
+    expect((await syncWorkspace(testDir)).success).toBe(false);
+    expect(await readFile(hooksPath, 'utf-8')).toBe(previousHooks);
+    expect(await readFile(statePath, 'utf-8')).toBe(previousState);
   });
 
   it('does not overwrite an existing unowned allagents hook file', async () => {
@@ -301,5 +314,88 @@ syncMode: copy
     expect(existsSync(join(testDir, '.github', 'hooks', 'allagents.json'))).toBe(
       false,
     );
+  });
+
+  it('materializes a custom declaration instead of conventional hooks without copying a duplicate', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'sessionStart');
+    await mkdir(join(pluginDir, '.claude-plugin'));
+    await mkdir(join(pluginDir, 'custom'));
+    await writeFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'custom', hooks: './custom/hooks.json' }));
+    await writeFile(join(pluginDir, 'custom', 'hooks.json'), JSON.stringify({ version: 1, hooks: { preToolUse: [{ type: 'command', bash: 'echo custom' }] } }));
+    await writeWorkspace(['plugin-a']);
+    const result = await syncWorkspace(testDir);
+    expect(result.success).toBe(true);
+    const generated = JSON.parse(await readFile(join(testDir, '.github', 'hooks', 'allagents.json'), 'utf-8'));
+    expect(Object.keys(generated.hooks)).toEqual(['preToolUse']);
+    expect(generated.hooks.preToolUse).toHaveLength(1);
+    expect(generated.hooks.preToolUse[0].env.COPILOT_PLUGIN_ROOT).toBe(pluginDir);
+    expect(existsSync(join(testDir, '.github', 'hooks', 'hooks.json'))).toBe(false);
+  });
+
+  it('materializes direct inline native event maps and excludes their manifest origin', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'defaultEvent');
+    await mkdir(join(pluginDir, '.claude-plugin'));
+    await writeFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'inline', hooks: { sessionStart: [{ type: 'command', bash: 'echo inline' }] } }));
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [] };
+    const first = await syncCopilotProjectHooks([plugin], testDir);
+    expect(first.warnings).toEqual([]);
+    const generated = JSON.parse(await readFile(join(testDir, '.github', 'hooks', 'allagents.json'), 'utf-8'));
+    expect(Object.keys(generated.hooks)).toEqual(['sessionStart']);
+    expect(generated.hooks.sessionStart[0].bash).toBe('echo inline');
+    expect(generated.hooks.sessionStart[0].env.COPILOT_PLUGIN_ROOT).toBe(pluginDir);
+    plugin.exclude = ['.claude-plugin/plugin.json'];
+    expect((await syncCopilotProjectHooks([plugin], testDir, { previouslyManaged: true })).copyResults).toEqual([]);
+  });
+
+  it.each(['custom/hooks.json', 'hooks/run.sh'])('does not activate excluded custom declaration or known hook payload %s', async (exclude) => {
+    const pluginDir = await writePlugin('plugin-a', 'defaultEvent');
+    await mkdir(join(pluginDir, '.claude-plugin'));
+    await mkdir(join(pluginDir, 'custom'));
+    await writeFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'custom', hooks: './custom/hooks.json' }));
+    await writeFile(join(pluginDir, 'custom', 'hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ type: 'command', bash: 'bash ${COPILOT_PLUGIN_ROOT}/hooks/run.sh' }] } }));
+    await writeFile(join(pluginDir, 'hooks', 'run.sh'), '#!/bin/sh\n');
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [], exclude: [exclude] };
+    expect((await syncCopilotProjectHooks([plugin], testDir)).copyResults).toEqual([]);
+    expect(existsSync(join(testDir, '.github', 'hooks', 'allagents.json'))).toBe(false);
+  });
+
+  it('does not suppress custom hooks for unrelated exclusions in the declaration directory', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'defaultEvent');
+    await mkdir(join(pluginDir, '.claude-plugin'));
+    await mkdir(join(pluginDir, 'custom', 'excluded'), { recursive: true });
+    await writeFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'custom', hooks: './custom/hooks.json' }));
+    await writeFile(join(pluginDir, 'custom', 'hooks.json'), JSON.stringify({ version: 1, hooks: { sessionStart: [{ type: 'command', bash: 'echo custom' }] } }));
+    await writeFile(join(pluginDir, 'custom', 'excluded', 'SKILL.md'), '# Unrelated excluded skill\n');
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [], exclude: ['custom/excluded/**'] };
+    expect((await syncCopilotProjectHooks([plugin], testDir)).copyResults).toHaveLength(1);
+    const generated = JSON.parse(await readFile(join(testDir, '.github', 'hooks', 'allagents.json'), 'utf-8'));
+    expect(generated.hooks.sessionStart[0].bash).toBe('echo custom');
+  });
+
+  it('does not infer hooks when resolved components explicitly have no declarations', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'sessionStart');
+    const components = resolvePluginComponents(pluginDir);
+    components.hooks = [];
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [], components };
+    expect((await syncCopilotProjectHooks([plugin], testDir)).copyResults).toEqual([]);
+  });
+
+  it('rechecks hook source containment before reading a changed symlink', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'sessionStart');
+    const components = resolvePluginComponents(pluginDir);
+    const outside = join(testDir, 'outside-hooks.json');
+    await writeFile(outside, JSON.stringify({ version: 1, hooks: { sessionStart: [{ type: 'command', bash: 'echo outside' }] } }));
+    await rm(join(pluginDir, 'hooks.json'));
+    await symlink(outside, join(pluginDir, 'hooks.json'));
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [], components };
+    await expect(syncCopilotProjectHooks([plugin], testDir)).rejects.toThrow();
+    expect(existsSync(join(testDir, '.github', 'hooks', 'allagents.json'))).toBe(false);
+  });
+
+  it('honors hooks:false for direct consumers without disabling other plugin components', async () => {
+    const pluginDir = await writePlugin('plugin-a', 'sessionStart');
+    const plugin: ValidatedPlugin = { plugin: './plugin-a', resolved: pluginDir, success: true, clients: ['copilot'], nativeClients: [], hooks: false };
+    expect((await syncCopilotProjectHooks([plugin], testDir)).copyResults).toEqual([]);
+    expect(existsSync(join(testDir, '.github', 'hooks', 'allagents.json'))).toBe(false);
   });
 });

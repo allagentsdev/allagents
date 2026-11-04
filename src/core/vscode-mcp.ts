@@ -1,11 +1,13 @@
 import { syncJsonMcpConfig } from './json-mcp-config.js';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import JSON5 from 'json5';
 import type {
   ClientType,
   McpServerConfig,
 } from '../models/workspace-config.js';
+import type { PluginComponents } from '../models/plugin-components.js';
+import { assertPluginComponentPath, resolvePluginComponents } from './plugin-components.js';
+import { isExcluded } from './transform.js';
 import type { ValidatedPlugin } from './sync.js';
 
 /**
@@ -29,32 +31,40 @@ export interface McpMergeResult {
   configPath?: string;
 }
 
-/**
- * Read .mcp.json from a plugin root directory.
- * Returns the mcpServers object or null if absent/invalid.
- */
+/** Read the resolver-selected MCP sources, excluding plugin-relative paths. */
 export function readPluginMcpConfig(
   pluginPath: string,
+  components?: PluginComponents,
+  exclude?: string[],
 ): Record<string, unknown> | null {
-  const mcpPath = join(pluginPath, '.mcp.json');
-  if (!existsSync(mcpPath)) {
-    return null;
-  }
-  try {
-    const content = readFileSync(mcpPath, 'utf-8');
-    const parsed = JSON5.parse(content);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      parsed.mcpServers &&
-      typeof parsed.mcpServers === 'object'
-    ) {
-      return parsed.mcpServers as Record<string, unknown>;
+  const sources = (components ?? resolvePluginComponents(pluginPath, undefined, { exclude })).mcpServers;
+  const servers: Record<string, unknown> = {};
+  let found = false;
+  for (const source of sources) {
+    if (source.declaredIn) assertPluginComponentPath(pluginPath, source.declaredIn);
+    if (source.path) assertPluginComponentPath(pluginPath, source.path);
+    const exclusionPath = source.path ?? source.declaredIn;
+    if (exclusionPath && isExcluded(pluginPath, exclusionPath, exclude)) continue;
+    try {
+      const parsed: unknown = source.path
+        ? JSON5.parse(readFileSync(source.path, 'utf-8'))
+        : source.inline;
+      if (!isRecord(parsed)) return null;
+      const config = source.path ? parsed.mcpServers : parsed;
+      if (!isRecord(config) || !Object.values(config).every((server) =>
+        isRecord(server) && (typeof server.command === 'string' || typeof server.url === 'string'),
+      )) return null;
+      Object.assign(servers, config);
+      found = true;
+    } catch {
+      return null;
     }
-    return null;
-  } catch {
-    return null;
   }
+  return found ? servers : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -92,9 +102,18 @@ export function collectMcpServers(
   for (const plugin of validatedPlugins) {
     if (plugin.clients.length === 0) continue;
     if (targetClient && !plugin.clients.includes(targetClient)) continue;
-    if (plugin.fileArtifacts?.mcpServers === false) continue;
-    const mcpServers = readPluginMcpConfig(plugin.resolved);
-    if (!mcpServers) continue;
+    if (!plugin.success) continue;
+    const components = plugin.components ?? resolvePluginComponents(plugin.resolved, undefined, { exclude: plugin.exclude, hooks: plugin.hooks });
+    const mcpServers = readPluginMcpConfig(plugin.resolved, components, plugin.exclude);
+    if (!mcpServers) {
+      if (components.mcpServers.some((source) => {
+        const path = source.path ?? source.declaredIn;
+        return !path || !isExcluded(plugin.resolved, path, plugin.exclude);
+      })) {
+        throw new Error(`MCP configuration from ${plugin.plugin} is unreadable or invalid`);
+      }
+      continue;
+    }
 
     for (const [name, config] of Object.entries(mcpServers)) {
       if (plugin.mcpServers?.exclude.includes(name)) continue;

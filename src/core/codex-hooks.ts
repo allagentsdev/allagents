@@ -2,12 +2,14 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import type { SyncState } from '../models/sync-state.js';
 import type { ClientType } from '../models/workspace-config.js';
-import type { CopyResult } from './transform.js';
+import { isExcluded, type CopyResult } from './transform.js';
 import type { ValidatedPlugin } from './sync.js';
+import type { PluginConfigSource } from '../models/plugin-components.js';
+import { assertPluginComponentPath, resolvePluginComponents } from './plugin-components.js';
+import { isPluginHookSourceExcluded } from './plugin-hook-exclusions.js';
 
 const CODEX_HOOKS_RELATIVE_PATH = '.codex/hooks.json';
 const CODEX_PLUGIN_MANIFEST_RELATIVE_PATH = '.codex-plugin/plugin.json';
-const DEFAULT_PLUGIN_HOOKS_RELATIVE_PATH = 'hooks/hooks.json';
 
 const CODEX_HOOK_EVENT_ORDER = [
   'PreToolUse',
@@ -202,20 +204,17 @@ function readManifestHookDeclarations(
   pluginPath: string,
   manifestPath: string,
   warnings: string[],
-): Array<{ path?: string; inline?: CodexHooksFile }> | null {
+): PluginConfigSource[] | null {
+  assertPluginComponentPath(pluginPath, manifestPath);
   let manifest: JsonRecord;
   try {
     const parsed = JSON.parse(readFileSync(manifestPath, 'utf-8'));
     if (!isRecord(parsed)) {
-      warnings.push(`Codex hooks: ${manifestPath} must contain a JSON object`);
-      return null;
+      throw new Error('Codex plugin hook manifest must contain a JSON object');
     }
     manifest = parsed;
   } catch (error) {
-    warnings.push(
-      `Codex hooks: failed to parse ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return null;
+    throw new Error(`Invalid Codex plugin hook manifest: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   if (!('hooks' in manifest)) {
@@ -225,66 +224,74 @@ function readManifestHookDeclarations(
   const hooks = manifest.hooks;
   if (typeof hooks === 'string') {
     const path = resolveManifestPath(pluginPath, 'hooks', hooks, warnings);
-    return path ? [{ path }] : null;
+    if (!path) throw new Error('Codex plugin hook path is invalid');
+    return [{ path, declaredIn: manifestPath }];
   }
 
   if (Array.isArray(hooks) && hooks.every((entry) => typeof entry === 'string')) {
     const paths = hooks
       .map((entry) => resolveManifestPath(pluginPath, 'hooks', entry, warnings))
       .filter((entry): entry is string => entry !== null);
-    return paths.length > 0 ? paths.map((path) => ({ path })) : null;
+    if (paths.length !== hooks.length) throw new Error('Codex plugin hook paths are invalid');
+    return paths.map((path) => ({ path, declaredIn: manifestPath }));
   }
 
   if (Array.isArray(hooks) && hooks.every(isRecord)) {
-    const inline = hooks
-      .map((entry, index) =>
-        normalizeHooksObject(entry, `${manifestPath}#hooks[${index}]`, warnings, {
-          filterCodexEvents: true,
-        }),
-      )
-      .filter((entry): entry is CodexHooksFile => entry !== null && hasHooks(entry));
-    return inline.length > 0 ? inline.map((entry) => ({ inline: entry })) : null;
+    const declarations: PluginConfigSource[] = [];
+    for (const [index, entry] of hooks.entries()) {
+      const inline = normalizeHooksObject(entry, `${manifestPath}#hooks[${index}]`, warnings, {
+        filterCodexEvents: true,
+        strictEventArrays: true,
+      });
+      if (!inline) throw new Error('Codex plugin inline hook configuration is invalid');
+      declarations.push({ inline: inline.hooks, declaredIn: manifestPath });
+    }
+    return declarations;
   }
 
   if (isRecord(hooks)) {
     const inline = normalizeHooksObject(hooks, `${manifestPath}#hooks`, warnings, {
       filterCodexEvents: true,
+      strictEventArrays: true,
     });
-    return inline && hasHooks(inline) ? [{ inline }] : null;
+    if (!inline) throw new Error('Codex plugin inline hook configuration is invalid');
+    return [{ inline: inline.hooks, declaredIn: manifestPath }];
   }
 
-  warnings.push(
-    `Codex hooks: ignoring hooks in ${manifestPath}; expected a string, string array, object, or object array`,
-  );
-  return null;
+  throw new Error('Codex plugin hooks must be configuration paths or inline hook maps');
 }
 
-function collectPluginCodexHooks(
+export function collectPluginCodexHooks(
   plugin: ValidatedPlugin,
   workspacePath: string,
   warnings: string[],
 ): CodexHooksFile[] {
+  if (plugin.hooks === false) return [];
   const pluginPath = plugin.resolved;
   const manifestPath = join(pluginPath, CODEX_PLUGIN_MANIFEST_RELATIVE_PATH);
   const declarations = existsSync(manifestPath)
-    ? readManifestHookDeclarations(pluginPath, manifestPath, warnings)
+    ? (isExcluded(pluginPath, manifestPath, plugin.exclude)
+      ? []
+      : readManifestHookDeclarations(pluginPath, manifestPath, warnings))
     : null;
-  const effectiveDeclarations = declarations ?? (
-    existsSync(join(pluginPath, DEFAULT_PLUGIN_HOOKS_RELATIVE_PATH))
-      ? [{ path: join(pluginPath, DEFAULT_PLUGIN_HOOKS_RELATIVE_PATH) }]
-      : []
-  );
+  const components = plugin.components ?? resolvePluginComponents(pluginPath, undefined, { exclude: plugin.exclude, hooks: plugin.hooks });
+  const effectiveDeclarations = declarations ?? components.hooks;
 
   const dataPath = pluginDataPath(workspacePath, plugin);
   const hooksFiles: CodexHooksFile[] = [];
 
   for (const declaration of effectiveDeclarations) {
-    const hooksFile = declaration.inline ?? (
-      declaration.path
-        ? readHooksJson(declaration.path, warnings, { filterCodexEvents: true })
-        : null
-    );
-    if (hooksFile && hasHooks(hooksFile)) {
+    if (isPluginHookSourceExcluded(plugin, declaration, components.hookResources)) continue;
+    const hooksFile = declaration.path
+      ? readHooksJson(declaration.path, warnings, { filterCodexEvents: true, strictEventArrays: true })
+      : normalizeHooksObject(
+        { hooks: declaration.inline },
+        `${declaration.declaredIn ?? pluginPath}#hooks`,
+        warnings,
+        { filterCodexEvents: true, strictEventArrays: true },
+      );
+    if (!hooksFile) throw new Error('Selected Codex plugin hook configuration is unreadable or invalid');
+    if (hasHooks(hooksFile)) {
       hooksFiles.push(withPluginEnv(hooksFile, pluginPath, dataPath));
     }
   }
@@ -363,8 +370,9 @@ function writeProjectHooks(hooksPath: string, hooksFile: CodexHooksFile): void {
 
 function pluginTargetsCodex(plugin: ValidatedPlugin): boolean {
   return (
-    plugin.clients.includes('codex' as ClientType) &&
-    plugin.fileArtifacts?.hooks !== false
+    plugin.success &&
+    plugin.hooks !== false &&
+    plugin.clients.includes('codex' as ClientType)
   );
 }
 

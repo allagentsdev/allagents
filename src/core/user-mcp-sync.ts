@@ -67,12 +67,35 @@ export async function syncUserMcpAdapters({
     }
     return applyMcpProxy(servers, client, config.mcpProxy);
   }
+  const serversByClient = new Map<ClientType, Map<string, unknown>>();
+  let allServers: Map<string, unknown>;
+  try {
+    allServers = collectMcpServers(validPlugins, config.mcpServers).servers;
+    for (const client of syncClients) {
+      if (USER_MCP_CLIENTS.has(client)) serversByClient.set(client, getServersForClient(client));
+    }
+  } catch (error) {
+    const warning = `MCP collection failed; existing configuration and ownership retained: ${error instanceof Error ? error.message : String(error)}`;
+    warnings.push(warning);
+    for (const client of syncClients) {
+      if (!USER_MCP_CLIENTS.has(client)) continue;
+      const scope = client as McpScope;
+      const tracked = getPreviouslySyncedMcpServers(previousState, scope);
+      mcpResults[scope] = {
+        added: 0, skipped: 0, overwritten: 0, removed: 0,
+        addedServers: [], skippedServers: [], overwrittenServers: [], removedServers: [],
+        trackedServers: tracked, warnings: [warning], authoritative: false,
+      };
+      trackedServers[scope] = tracked;
+    }
+    return { mcpResults, warnings, trackedServers, complete: false };
+  }
 
   if (syncClients.includes('codex')) {
     const result = await syncCodexMcpServers(validPlugins, {
       dryRun,
       trackedServers: getPreviouslySyncedMcpServers(previousState, 'codex'),
-      serverOverrides: getServersForClient('codex'),
+      serverOverrides: serversByClient.get('codex')!,
     });
     warnings.push(...result.warnings);
     mcpResults.codex = result;
@@ -83,7 +106,7 @@ export async function syncUserMcpAdapters({
     const result = await syncClaudeMcpServersViaCli(validPlugins, {
       dryRun,
       trackedServers: getPreviouslySyncedMcpServers(previousState, 'claude'),
-      serverOverrides: getServersForClient('claude'),
+      serverOverrides: serversByClient.get('claude')!,
     });
     warnings.push(...result.warnings);
     mcpResults.claude = result;
@@ -96,14 +119,13 @@ export async function syncUserMcpAdapters({
       force,
       configPath: getCopilotMcpConfigPath(),
       trackedServers: getPreviouslySyncedMcpServers(previousState, 'copilot'),
-      serverOverrides: getServersForClient('copilot'),
+      serverOverrides: serversByClient.get('copilot')!,
     });
     warnings.push(...result.warnings);
     mcpResults.copilot = result;
     trackedServers.copilot = result.trackedServers;
   }
 
-  const allServers = collectMcpServers(validPlugins, config.mcpServers).servers;
   if (allServers.size > 0) {
     for (const client of syncClients) {
       if (!USER_MCP_CLIENTS.has(client)) {

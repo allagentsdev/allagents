@@ -315,12 +315,15 @@ allagents plugin validate ./my-plugin --json=path,valid
 ```
 
 Supports conventional plugin resources (`skills/`, `commands/`, `agents/`,
-`hooks/`, `.github/` content, `.mcp.json`, `hooks.json`, and root instruction
-files), nested skill collections, and [single-skill repositories](/docs/guides/plugins/#single-skill-repositories).
+`hooks/`, [supported `.github/` assistant resources](/docs/guides/plugins/#marketplace-component-discovery),
+`.mcp.json`, `hooks.json`, and root instruction files), nested skill collections,
+and [single-skill repositories](/docs/guides/plugins/#single-skill-repositories).
 Manifests are optional. Skill discovery uses the same precedence as installation:
 `skills/` first, otherwise nested skills, otherwise root `SKILL.md`.
-Links to resource files, such as `commands/review.md`, are supported; scanning
-does not recurse through directory links inside resource directories.
+Links to contained resource files, such as `commands/review.md`, are supported.
+Selected sources must remain within the plugin root after resolving symlinks;
+escaping links are rejected. Resource scanning does not traverse contained
+directory links or loops.
 
 Pi packages are recognized by a `package.json` with a `pi` object and a nonempty
 package `name`, or by conventional `extensions/`, `prompts/`, or `themes/`
@@ -334,16 +337,19 @@ native resources are recognized without loading them or invoking Pi.
 Recognized skills must have valid YAML frontmatter with a nonempty `name` and
 `description`, using the existing skill metadata rules. Plugin manifests at
 `.claude-plugin/plugin.json`, `.github/plugin/plugin.json`, and
-`.codex-plugin/plugin.json` must parse as JSON objects; client-specific manifest
-fields are not checked. Marketplace manifests use the installation parser,
-preferring `.github/plugin/marketplace.json` over
-`.claude-plugin/marketplace.json`. Its recoverable metadata issues remain
-warnings. `.mcp.json` must be a readable JSON5 object (comments and trailing
-commas are supported). `hooks.json`, `hooks/hooks.json`, and `.codex/hooks.json`
-must be readable JSON objects. Invalid syntax or a non-object container is an
-error; client-specific declaration fields are not checked. Hook commands, MCP
-connections, supporting scripts, and Markdown body references are not executed
-or semantically checked.
+`.codex-plugin/plugin.json` must parse as JSON objects. Marketplace manifests use
+the installation parser, preferring `.github/plugin/marketplace.json` over
+`.claude-plugin/marketplace.json`. Recoverable metadata issues remain warnings.
+Validation resolves selected components before inspecting their skills; an
+invalid manifest does not also produce a downstream skill-discovery error.
+
+Selected MCP files require a `mcpServers` object; `{ "mcpServers": {} }` is valid
+and declares no servers. `.mcp.json` supports JSON5 comments and trailing commas.
+Selected hook configuration requires a `hooks` event map whose values are arrays.
+Invalid syntax, containers, selected declarations, and unsafe source paths are
+errors. This does not impose every client-specific plugin schema. Hook commands,
+MCP connections, supporting scripts, and Markdown body references are not
+executed or semantically checked.
 
 Exit status is `0` for valid input (including warnings) and `1` for errors such
 as missing paths, empty or unsupported layouts, malformed manifests or

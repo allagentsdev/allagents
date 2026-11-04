@@ -18,6 +18,7 @@ import {
   type ProfilePluginEntry,
   type UserWorkspaceConfig,
 } from '../../models/workspace-config.js';
+import { ROOT_SKILL_EXCLUDED_ENTRIES } from '../../models/plugin-components.js';
 import { parseUserWorkspaceConfig } from '../../utils/workspace-parser.js';
 import { applyMcpProxy } from '../mcp-proxy.js';
 import type {
@@ -28,8 +29,8 @@ import { sanitizeNativeProvenance } from '../native/types.js';
 import {
   collectPluginSkills,
   copyPluginToWorkspace,
-  ROOT_SKILL_EXCLUDED_ENTRIES,
 } from '../transform.js';
+import { collectMcpServers } from '../vscode-mcp.js';
 import { serializeProfileMcpServers } from './adapters/mcp.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
@@ -49,7 +50,7 @@ import type {
   ProfileStepKind,
 } from './index.js';
 import { renderProfileLaunchers } from './launcher.js';
-import { resolveProfileFileSource } from './source.js';
+import { resolveProfileFileSource, type ResolvedProfileFileSource } from './source.js';
 import {
   hashProfileDeclaration,
   loadProfileState,
@@ -318,11 +319,12 @@ async function expandCopyResult(
   source: string,
   destination: string,
   excludedRootEntries: readonly string[] = [],
+  renderedContent?: string,
 ): Promise<
   Array<{
     source: string;
     destination: string;
-    content: Uint8Array;
+    content: string | Uint8Array;
     mode: number;
   }>
 > {
@@ -334,7 +336,7 @@ async function expandCopyResult(
       {
         source,
         destination,
-        content: await readFile(source),
+        content: renderedContent ?? await readFile(source),
         mode: stats.mode & 0o777,
       },
     ];
@@ -344,7 +346,7 @@ async function expandCopyResult(
   const files: Array<{
     source: string;
     destination: string;
-    content: Uint8Array;
+    content: string | Uint8Array;
     mode: number;
   }> = [];
   for (const entry of (await readdir(source, { withFileTypes: true })).sort(
@@ -941,12 +943,28 @@ export async function planProfileOperation(
           filePlugins.push(plugin);
         }
       }
+      const resolvedFileSources: Array<{ plugin: ProfileResolvedPlugin; source: ResolvedProfileFileSource }> = [];
+      try {
+      for (const plugin of filePlugins) {
+        const source = await resolveProfileFileSource(plugin, runtime);
+        resolvedFileSources.push({ plugin, source });
+        warnings.push(...(source.components.warnings ?? []).map((warning) => `${plugin.source}: ${warning}`));
+      }
+      const pluginMcp = collectMcpServers(resolvedFileSources.map(({ plugin, source }) => ({
+        plugin: plugin.source,
+        resolved: source.path,
+        success: true,
+        clients: [client],
+        nativeClients: [],
+        components: source.components,
+      })), declaration.mcpServers, client);
+      warnings.push(...pluginMcp.warnings);
 
       const selectedMcpServers = serializeProfileMcpServers(
         {
           plugins: [],
-          ...(declaration.mcpServers && {
-            mcpServers: declaration.mcpServers,
+          ...((pluginMcp.servers.size > 0 || declaration.mcpServers !== undefined) && {
+            mcpServers: Object.fromEntries(pluginMcp.servers) as Record<string, McpServerConfig>,
           }),
         },
         client,
@@ -1180,18 +1198,17 @@ export async function planProfileOperation(
         }
       }
 
-      for (const plugin of filePlugins) {
-        const resolvedSource = await resolveProfileFileSource(plugin, runtime);
-        try {
+      for (const { plugin, source: resolvedSource } of resolvedFileSources) {
           const skillWarnings: string[] = [];
           const collected = await collectPluginSkills(
             resolvedSource.path,
             plugin.source,
             undefined,
-            basename(resolvedSource.path),
+            resolvedSource.pluginName ?? basename(resolvedSource.path),
             undefined,
             plugin.skills,
             skillWarnings,
+            resolvedSource.components,
           );
           warnings.push(...skillWarnings);
           const skillNameMap =
@@ -1213,6 +1230,7 @@ export async function planProfileOperation(
               writeRoot: context.root,
               syncMode: 'copy',
               ...(skillNameMap && { skillNameMap }),
+              components: resolvedSource.components,
             },
           );
           const failed = copyResults.find(
@@ -1230,6 +1248,7 @@ export async function planProfileOperation(
               copy.artifactType === 'skill' && copy.source === resolvedSource.path
                 ? ROOT_SKILL_EXCLUDED_ENTRIES
                 : [],
+              copy.content,
             )) {
               const planned = await planManagedFile({
                 client,
@@ -1270,9 +1289,6 @@ export async function planProfileOperation(
               desiredKeys.add(planned.relationship.key);
             }
           }
-        } finally {
-          await resolvedSource.cleanup?.();
-        }
       }
 
       const serializationInput = {
@@ -1377,6 +1393,9 @@ export async function planProfileOperation(
           steps.push(planned);
           desiredKeys.add(planned.relationship.key);
         }
+      }
+      } finally {
+        await Promise.all(resolvedFileSources.map(({ source }) => source.cleanup?.()));
       }
     }
 

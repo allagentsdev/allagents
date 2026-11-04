@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.23.0](https://github.com/allagentsdev/allagents/compare/v1.22.0...v1.23.0) (2026-11-04)
+
+
+### Added
+
+* **mcp:** support compatible OAuth client names ([#607](https://github.com/allagentsdev/allagents/issues/607)) ([a4cc40b](https://github.com/allagentsdev/allagents/commit/a4cc40b267754c860c02d6f5fd1ec171497a5488))
+* **plugin:** align legacy marketplace component discovery with Copilot ([#604](https://github.com/allagentsdev/allagents/issues/604)) ([fb9b016](https://github.com/allagentsdev/allagents/commit/fb9b016de36117d061bf41e6c816e3f60115de72))
+
+
+### Fixed
+
+* **deps-dev:** bump the routine-updates group with 4 updates ([#605](https://github.com/allagentsdev/allagents/issues/605)) ([e574442](https://github.com/allagentsdev/allagents/commit/e574442dce986ae6281603dc57df0aeedb644042))
+
 ## [1.22.0](https://github.com/allagentsdev/allagents/compare/v1.21.4...v1.22.0) (2026-10-28)
 
 

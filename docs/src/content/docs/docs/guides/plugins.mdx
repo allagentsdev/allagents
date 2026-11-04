@@ -424,12 +424,29 @@ You can also exclude individual plugin servers in either project or user
 ```yaml
 plugins:
   - source: my-plugin@official
+    install: file
     mcpServers:
       exclude: [optional-search]
 ```
 
-All other servers remain enabled, including new servers added by a plugin
-update. Workspace-level MCP declarations are not excluded by this setting.
+After editing YAML, run `allagents mcp update --scope project` (or `--scope user`).
+The TUI saves the same setting and reconciles MCP automatically. Other plugin
+servers remain enabled, including new servers added by an update.
+
+### Existing MCP servers
+
+Within a scope, AllAgents matches servers by name, not URL. If both your workspace
+declaration and a plugin define `search`, your declaration wins, even if their
+URLs differ. Different names with the same URL produce separate entries.
+
+An entry added directly to a client's configuration stays yours if AllAgents does
+not already track it. AllAgents neither overwrites nor removes it when a plugin
+uses the same name. Excluding a plugin server does not disable that manual entry
+or a workspace-level declaration. Editing an AllAgents-managed entry does not
+remove its ownership tracking.
+
+See the [configuration reference](/docs/reference/configuration/) for declaration
+and filter options.
 
 ## Plugin Spec Format
 

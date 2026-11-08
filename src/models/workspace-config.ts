@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  McpConnectionConfigSchema,
+  McpOAuthConfigSchema,
+} from './mcp-options.js';
 import { assertPluginSourceNoCredentials } from '../utils/git-source.js';
 import { withPluginSourceRef } from '../utils/plugin-path.js';
 import {
@@ -136,7 +140,6 @@ export const PluginSourceSchema = z.string().superRefine((source, ctx) => {
 
 export type PluginSource = z.infer<typeof PluginSourceSchema>;
 
-
 /**
  * Skill selection config for a plugin entry.
  * - Array: allowlist — only these skills are enabled.
@@ -254,7 +257,6 @@ export function getPluginRef(plugin: PluginEntry): string | undefined {
   return typeof plugin === 'string' ? undefined : plugin.ref;
 }
 
-
 /**
  * Resolve effective install mode for a (plugin, client) pair.
  * Priority: plugin-wide > plugin client mode > workspace client mode > file.
@@ -282,8 +284,9 @@ export function pluginUsesNativeInstall(
   if (pluginMode) return pluginMode === 'native';
   const selected = getPluginClients(plugin);
   if (!selected) {
-    return clientEntries.some((entry) =>
-      resolveInstallMode(plugin, normalizeClientEntry(entry)) === 'native',
+    return clientEntries.some(
+      (entry) =>
+        resolveInstallMode(plugin, normalizeClientEntry(entry)) === 'native',
     );
   }
   return selected.some((client) => {
@@ -291,10 +294,12 @@ export function pluginUsesNativeInstall(
       (candidate) =>
         (typeof candidate === 'string' ? candidate : candidate.name) === client,
     );
-    return resolveInstallMode(plugin, normalizeClientEntry(entry ?? client)) === 'native';
+    return (
+      resolveInstallMode(plugin, normalizeClientEntry(entry ?? client)) ===
+      'native'
+    );
   });
 }
-
 
 /**
  * VSCode workspace generation configuration
@@ -332,10 +337,6 @@ export const McpProxyConfigSchema = z.object({
 
 export type McpProxyConfig = z.infer<typeof McpProxyConfigSchema>;
 
-const McpOAuthConfigSchema = z
-  .object({ clientName: z.string().trim().min(1).optional() })
-  .strict();
-
 /**
  * Workspace-level MCP server definition (top-level `mcpServers:` field in
  * workspace.yaml). Allows declaring ad-hoc MCP servers without authoring a
@@ -351,6 +352,7 @@ const McpHttpServerConfigSchema = z
     url: z.string(),
     headers: z.record(z.string(), z.string()).optional(),
     oauth: McpOAuthConfigSchema.optional(),
+    connection: McpConnectionConfigSchema.optional(),
     clients: ClientTypeListSchema.optional(),
   })
   .strict();
@@ -708,8 +710,7 @@ function validateProfileMcpArguments(
     const assignment = argument.match(/^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/);
     const assignmentName = assignment?.[1];
     const inlineCredential =
-      assignmentName &&
-      PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(assignmentName)
+      assignmentName && PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(assignmentName)
         ? assignment[2]
         : undefined;
     const bearerCredential = argument.match(/\bbearer\s+(.+)$/i)?.[1];
@@ -749,9 +750,22 @@ export const ProfileMcpServerConfigSchema = z.union([
       url: z.string(),
       headers: z.record(z.string(), ProfileSecretReferenceSchema).optional(),
       oauth: McpOAuthConfigSchema.optional(),
+      connection: McpConnectionConfigSchema.optional(),
       clients: z.array(UserClientTypeSchema).optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((config, ctx) => {
+      if (
+        config.oauth?.clientSecret &&
+        !isProfileSecretReference(config.oauth.clientSecret)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['oauth', 'clientSecret'],
+          message: 'Profile OAuth secrets must be exact environment references',
+        });
+      }
+    }),
   z
     .object({
       type: z.enum(['stdio']).optional(),

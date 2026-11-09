@@ -1,20 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { rename, rm } from 'node:fs/promises';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type {
   FetchLike,
   Transport,
 } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  McpConnectionConfig,
+  McpOAuthConfig,
+} from '../models/mcp-options.js';
+import { createMcpNetwork } from './mcp-network.js';
 import {
   buildOAuthProvider,
   getMcpOAuthCacheDir,
   OAuthAuthorizationError,
   type OAuthCallbackUrlReader,
+  resolveMcpOAuthServerUrl,
+  runWithMcpOAuthReset,
 } from './mcp-oauth-provider.js';
+import {
+  createMcpToolFilterTransport,
+  McpRemoteTransport,
+} from './mcp-remote-transport.js';
 
+export type {
+  OAuthCallbackRequest,
+  OAuthCallbackUrlReader,
+} from './mcp-oauth-provider.js';
 export {
   AUTH_URL_LOG_PREFIX,
   getBrowserOpenCommands,
@@ -24,13 +39,6 @@ export {
   parseOAuthCallbackUrl,
   validateOAuthCallbackUrl,
 } from './mcp-oauth-provider.js';
-export type {
-  OAuthCallbackRequest,
-  OAuthCallbackUrlReader,
-} from './mcp-oauth-provider.js';
-
-const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
-const ENCODED_ENVIRONMENT_REFERENCE_PREFIX = /(?:\$|%24)(?:\{|%7b)/i;
 
 export class McpCredentialReflectionError extends Error {
   constructor() {
@@ -92,6 +100,16 @@ export function createMcpCredentialGuard(
       }
     },
     sanitizeError(error) {
+      if (
+        error instanceof McpError &&
+        error.code === -32603 &&
+        error.data &&
+        typeof error.data === 'object' &&
+        'allagents' in error.data &&
+        error.data.allagents === 'credential-reflection'
+      ) {
+        return new McpCredentialReflectionError();
+      }
       if (containsCredential(error, credentials, new Set())) {
         return new McpCredentialReflectionError();
       }
@@ -106,16 +124,20 @@ export function resolveMcpHeaderReferences(
 ): Record<string, string> {
   return Object.fromEntries(
     Object.entries(headers).map(([key, value]) => {
-      const reference = ENVIRONMENT_REFERENCE.exec(value);
-      if (!reference) return [key, value];
-      const variable = reference[1] as string;
-      const resolved = environment[variable];
-      if (resolved === undefined) {
-        throw new Error(
-          `MCP header '${key}' references missing environment variable '${variable}'`,
-        );
-      }
-      return [key, resolved];
+      return [
+        key,
+        value.replace(
+          /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+          (_reference, variable: string) => {
+            const resolved = environment[variable];
+            if (resolved === undefined)
+              throw new Error(
+                `MCP header '${key}' references missing environment variable '${variable}'`,
+              );
+            return resolved;
+          },
+        ),
+      ];
     }),
   );
 }
@@ -166,6 +188,20 @@ function containsMcpAuthorizationFailure(
 
 export function isMcpAuthorizationFailure(error: unknown): boolean {
   return containsMcpAuthorizationFailure(error, new Set());
+}
+
+function mcpConnectionError(error: unknown, guard: McpCredentialGuard): Error {
+  const sanitized = guard.sanitizeError(error);
+  let message = sanitized.message.trim();
+  if (!message)
+    message =
+      'MCP authorization or connection failed; check OAuth client settings';
+  else if (message === 'fetch failed' || message === 'Network request failed') {
+    message =
+      'Could not reach the MCP endpoint; check the server address, network, proxy and certificate settings';
+  }
+  if (isMcpAuthorizationFailure(error)) return new UnauthorizedError(message);
+  return message === sanitized.message ? sanitized : new Error(message);
 }
 
 const UNSAFE_CONFIGURED_HEADERS: Record<string, true> = {
@@ -305,70 +341,31 @@ export interface ConnectMcpHttpClientOptions {
   allowAuthorization?: boolean;
   profile?: string;
   clientName?: string;
+  oauth?: McpOAuthConfig;
+  connection?: McpConnectionConfig;
   environment?: NodeJS.ProcessEnv;
   fetch?: FetchLike;
   maxResponseBytes?: number;
   signal?: AbortSignal;
 }
 
-export interface McpHttpClientConnection {
-  client: Client;
-  transport: StreamableHTTPClientTransport;
+export interface McpRemoteConnection {
+  transport: Transport;
   credentialGuard: McpCredentialGuard;
+  terminateSession(): Promise<void>;
   close(): Promise<void>;
 }
 
-function resolveMcpQueryReferences(
-  serverUrl: string,
-  environment: NodeJS.ProcessEnv,
-  credentialValues: Set<string>,
-): string {
-  if (
-    !serverUrl.includes('${') &&
-    !ENCODED_ENVIRONMENT_REFERENCE_PREFIX.test(serverUrl)
-  ) {
-    return serverUrl;
-  }
-
-  const url = new URL(serverUrl);
-  let changed = false;
-  const query = url.search
-    .slice(1)
-    .split('&')
-    .map((parameter) => {
-      const separator = parameter.indexOf('=');
-      if (separator === -1) return parameter;
-      const value = new URLSearchParams(parameter).values().next().value ?? '';
-      const reference = ENVIRONMENT_REFERENCE.exec(value);
-      if (!reference) return parameter;
-
-      const variable = reference[1] as string;
-      const resolved = environment[variable];
-      if (resolved === undefined) {
-        throw new Error(
-          `MCP URL query parameter references missing environment variable '${variable}'`,
-        );
-      }
-      const encoded = encodeURIComponent(resolved);
-      credentialValues.add(resolved);
-      credentialValues.add(encoded);
-      // HTTP URL serialization additionally percent-encodes apostrophes.
-      credentialValues.add(encoded.replaceAll("'", '%27'));
-      changed = true;
-      return `${parameter.slice(0, separator + 1)}${encoded}`;
-    })
-    .join('&');
-  if (!changed) return serverUrl;
-  url.search = query;
-  return url.toString();
+export interface McpHttpClientConnection extends McpRemoteConnection {
+  client: Client;
 }
 
-export async function connectMcpHttpClient(
+export async function createMcpRemoteConnection(
   serverUrl: string,
   options: ConnectMcpHttpClientOptions = {},
-): Promise<McpHttpClientConnection> {
+): Promise<McpRemoteConnection> {
   const credentialValues = new Set<string>();
-  const resolvedServerUrl = resolveMcpQueryReferences(
+  const resolvedServerUrl = resolveMcpOAuthServerUrl(
     serverUrl,
     options.environment ?? process.env,
     credentialValues,
@@ -379,6 +376,14 @@ export async function connectMcpHttpClient(
   );
   for (const [key, value] of Object.entries(headers)) {
     if (UNSAFE_CONFIGURED_HEADERS[key.toLowerCase()]) continue;
+    for (const reference of (options.headers?.[key] ?? '').matchAll(
+      /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+    )) {
+      const credential = (options.environment ?? process.env)[
+        reference[1] as string
+      ];
+      if (credential) credentialValues.add(credential);
+    }
     credentialValues.add(value);
     if (
       key.toLowerCase() === 'authorization' ||
@@ -388,106 +393,149 @@ export async function connectMcpHttpClient(
       if (credentialComponent) credentialValues.add(credentialComponent);
     }
   }
-  const provider = await buildOAuthProvider(serverUrl, {
-    ...(options.callbackUrlReader && {
-      callbackUrlReader: options.callbackUrlReader,
-    }),
-    ...(options.authorizationOutput && {
-      authorizationOutput: options.authorizationOutput,
-    }),
-    ...(options.allowAuthorization === undefined
-      ? {}
-      : { allowAuthorization: options.allowAuthorization }),
-    ...(options.profile === undefined ? {} : { profile: options.profile }),
-    ...(options.clientName === undefined
-      ? {}
-      : { clientName: options.clientName }),
-    ...(options.signal === undefined ? {} : { signal: options.signal }),
-    credentialValues,
+  const controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  const network = createMcpNetwork({
+    serverUrl: resolvedServerUrl,
+    ...(options.connection && { connection: options.connection }),
+    ...(options.fetch && { fetch: options.fetch }),
+    ...(options.environment && { environment: options.environment }),
+    signal,
   });
-  const client = new Client(
+  const safeFetch = createOriginSafeMcpFetch(
+    resolvedServerUrl,
+    headers,
+    network.fetch,
     {
-      name: 'AllAgents',
-      version: '1.0.0',
+      ...(options.maxResponseBytes === undefined
+        ? {}
+        : { maxResponseBytes: options.maxResponseBytes }),
     },
+  );
+  const credentialGuard = createMcpCredentialGuard(credentialValues);
+  try {
+    const provider = await buildOAuthProvider(serverUrl, {
+      ...(options.callbackUrlReader && {
+        callbackUrlReader: options.callbackUrlReader,
+      }),
+      ...(options.authorizationOutput && {
+        authorizationOutput: options.authorizationOutput,
+      }),
+      ...(options.allowAuthorization === undefined
+        ? {}
+        : { allowAuthorization: options.allowAuthorization }),
+      ...(options.profile === undefined ? {} : { profile: options.profile }),
+      ...(options.clientName === undefined
+        ? {}
+        : { clientName: options.clientName }),
+      ...(options.oauth === undefined ? {} : { oauth: options.oauth }),
+      ...(options.environment === undefined
+        ? {}
+        : { environment: options.environment }),
+      ...(options.headers && { headers: options.headers }),
+      fetch: safeFetch,
+      signal,
+      credentialValues,
+    });
+    const remote = new McpRemoteTransport(
+      new URL(resolvedServerUrl),
+      provider,
+      provider.wrapFetch(safeFetch),
+      credentialGuard,
+      options.connection,
+      signal,
+    );
+    const protocolTransport =
+      options.connection?.protocol === 'auto'
+        ? (await import('./mcp-protocol-era.js')).createMcpProtocolAdapter(
+            remote,
+            { mode: 'auto', signal },
+          )
+        : remote;
+    const transport = createMcpToolFilterTransport(
+      protocolTransport,
+      options.connection?.ignoreTools,
+    );
+    let closePromise: Promise<void> | undefined;
+    const onAbort = () => {
+      void close().catch(() => {});
+    };
+    const close = (): Promise<void> => {
+      closePromise ??= (async () => {
+        signal.removeEventListener('abort', onAbort);
+        controller.abort();
+        try {
+          await transport.close();
+        } finally {
+          provider.dispose();
+          await network.close();
+        }
+      })();
+      return closePromise;
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) await close();
+    return {
+      transport,
+      credentialGuard,
+      terminateSession: () => remote.terminateSession(),
+      close,
+    };
+  } catch (error) {
+    controller.abort();
+    await network.close();
+    throw mcpConnectionError(error, credentialGuard);
+  }
+}
+
+export async function connectMcpHttpClient(
+  serverUrl: string,
+  options: ConnectMcpHttpClientOptions = {},
+): Promise<McpHttpClientConnection> {
+  const connection = await createMcpRemoteConnection(serverUrl, options);
+  const client = new Client(
+    { name: 'AllAgents', version: '1.0.0' },
     { capabilities: {} },
   );
-  const buildTransport = () => {
-    const mcpFetch =
-      Object.keys(headers).length > 0 ||
-      options.fetch ||
-      options.maxResponseBytes !== undefined
-        ? createOriginSafeMcpFetch(resolvedServerUrl, headers, options.fetch, {
-            ...(options.maxResponseBytes === undefined
-              ? {}
-              : { maxResponseBytes: options.maxResponseBytes }),
-          })
-        : undefined;
-    return new StreamableHTTPClientTransport(new URL(resolvedServerUrl), {
-      authProvider: provider,
-      ...(mcpFetch && { fetch: mcpFetch }),
-    });
-  };
-
-  let transport = buildTransport();
-  let closePromise: Promise<void> | undefined;
-  const close = (): Promise<void> => {
-    closePromise ??= client.close();
-    return closePromise;
-  };
-
   try {
-    try {
-      await client.connect(
-        transport as unknown as Transport,
-        options.signal === undefined ? undefined : { signal: options.signal },
-      );
-    } catch (error) {
-      if (!(error instanceof UnauthorizedError)) throw error;
-      if (options.signal?.aborted) throw error;
-      const authorizationCode = await provider.waitForAuthCode();
-      await transport.finishAuth(authorizationCode);
-      await transport.close();
-      transport = buildTransport();
-      await client.connect(
-        transport as unknown as Transport,
-        options.signal === undefined ? undefined : { signal: options.signal },
-      );
-    }
+    await client.connect(
+      connection.transport,
+      options.signal ? { signal: options.signal } : undefined,
+    );
   } catch (error) {
-    const credentialGuard = createMcpCredentialGuard(credentialValues);
-    const sanitizedError = credentialGuard.sanitizeError(error);
-    const connectionError = isMcpAuthorizationFailure(error)
-      ? new UnauthorizedError(sanitizedError.message)
-      : sanitizedError;
+    const sanitized = mcpConnectionError(error, connection.credentialGuard);
     try {
-      await close();
+      await connection.close();
     } catch (cleanupError) {
       throw new AggregateError(
-        [connectionError, credentialGuard.sanitizeError(cleanupError)],
+        [sanitized, connection.credentialGuard.sanitizeError(cleanupError)],
         'MCP connection failed and its transport could not be closed',
       );
     }
-    throw connectionError;
+    throw sanitized;
   }
-
+  let closePromise: Promise<void> | undefined;
   return {
+    ...connection,
     client,
-    transport,
-    credentialGuard: createMcpCredentialGuard(credentialValues),
-    close,
+    close: () => {
+      closePromise ??= (async () => {
+        try {
+          await client.close();
+        } finally {
+          await connection.close();
+        }
+      })();
+      return closePromise;
+    },
   };
 }
 
-export interface ConnectHttpMcpServerOptions {
-  headers?: Record<string, string>;
-  callbackUrlReader?: OAuthCallbackUrlReader;
-  authorizationOutput?: (message: string) => void;
+export interface ConnectHttpMcpServerOptions
+  extends ConnectMcpHttpClientOptions {
   resetCredentials?: boolean;
-  allowAuthorization?: boolean;
-  profile?: string;
-  clientName?: string;
-  signal?: AbortSignal;
 }
 
 export async function connectHttpMcpServer(
@@ -498,48 +546,64 @@ export async function connectHttpMcpServer(
     serverUrl,
     options.profile,
     options.clientName,
+    options.oauth,
+    options.environment,
+    options.headers,
   );
-  const backupDir = options.resetCredentials
-    ? `${cacheDir}.reauth-backup-${randomUUID()}`
-    : undefined;
-  let hasBackup = false;
+  const connect = async (): Promise<void> => {
+    const backupDir = options.resetCredentials
+      ? `${cacheDir}.reauth-backup-${randomUUID()}`
+      : undefined;
+    let hasBackup = false;
 
-  if (backupDir) {
-    try {
-      await rename(cacheDir, backupDir);
-      hasBackup = true;
-    } catch (error) {
-      if (
-        !(error instanceof Error && 'code' in error && error.code === 'ENOENT')
-      ) {
-        throw error;
-      }
-    }
-  }
-
-  try {
-    const connection = await connectMcpHttpClient(serverUrl, options);
-    try {
-      await connection.transport.terminateSession();
-    } finally {
-      await connection.close();
-    }
-  } catch (error) {
     if (backupDir) {
       try {
-        await rm(cacheDir, { recursive: true, force: true });
-        if (hasBackup) await rename(backupDir, cacheDir);
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          'MCP reauthentication failed and the previous credentials could not be restored',
-        );
+        await rename(cacheDir, backupDir);
+        hasBackup = true;
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            'code' in error &&
+            error.code === 'ENOENT'
+          )
+        ) {
+          throw error;
+        }
       }
     }
-    throw error;
-  }
 
-  if (hasBackup && backupDir) {
-    await rm(backupDir, { recursive: true, force: true });
+    try {
+      const connection = await connectMcpHttpClient(serverUrl, options);
+      try {
+        await connection.terminateSession();
+      } finally {
+        await connection.close();
+      }
+    } catch (error) {
+      if (backupDir) {
+        try {
+          await rm(cacheDir, { recursive: true, force: true });
+          if (hasBackup) await rename(backupDir, cacheDir);
+        } catch (restoreError) {
+          throw new AggregateError(
+            [error, restoreError],
+            'MCP reauthentication failed and the previous credentials could not be restored',
+          );
+        }
+      }
+      throw error;
+    }
+
+    if (hasBackup && backupDir) {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  };
+  if (options.resetCredentials) {
+    await runWithMcpOAuthReset(cacheDir, connect, {
+      ...(options.signal && { signal: options.signal }),
+    });
+  } else {
+    await connect();
   }
 }

@@ -90,9 +90,10 @@ async function connectConfiguredHttpServer(
 ): Promise<void> {
   await connectHttpMcpServer(config.url, {
     headers: config.headers ?? {},
-    ...(config.oauth?.clientName === undefined
+    ...(config.oauth === undefined ? {} : { oauth: config.oauth }),
+    ...(config.connection === undefined
       ? {}
-      : { clientName: config.oauth.clientName }),
+      : { connection: config.connection }),
     resetCredentials,
     allowAuthorization: authorization !== undefined,
     ...(destination.kind === 'profile' ? { profile: destination.name } : {}),

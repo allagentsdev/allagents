@@ -3,6 +3,13 @@ import { z } from 'zod';
 const timeout = z.number().finite().nonnegative();
 const nonempty = z.string().trim().min(1);
 
+/** Credential names shared by portable profile validation and bridge generation. */
+export function isMcpCredentialField(name: string): boolean {
+  return /(?:^|[-_.])(?:api[-_]?key|auth|authorization|credential|key|password|secret|signature|token)(?:$|[-_.])/i.test(
+    name,
+  );
+}
+
 export const McpOAuthConfigSchema = z
   .object({
     clientName: nonempty.optional(),
@@ -11,6 +18,8 @@ export const McpOAuthConfigSchema = z
     scope: z.string().optional(),
     clientMetadata: z.record(z.string(), z.unknown()).optional(),
     clientMetadataUrl: z.url().optional(),
+    issuer: z.url().optional(),
+    allowHttp: z.boolean().optional(),
     resource: z.string().optional(),
     authorizationParams: z.record(z.string(), z.string()).optional(),
     disableResourceParameter: z.boolean().optional(),
@@ -56,6 +65,12 @@ export const McpOAuthConfigSchema = z
       });
     }
     const reserved = new Set([
+      'code',
+      'client_secret',
+      'access_token',
+      'refresh_token',
+      'id_token',
+      'token',
       'state',
       'client_id',
       'redirect_uri',

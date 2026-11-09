@@ -1,49 +1,50 @@
 import { z } from 'zod';
-import {
-  McpConnectionConfigSchema,
-  McpOAuthConfigSchema,
-} from './mcp-options.js';
 import { assertPluginSourceNoCredentials } from '../utils/git-source.js';
 import { withPluginSourceRef } from '../utils/plugin-path.js';
 import {
+  type ClientEntry,
   ClientEntryListSchema,
   ClientSelectorListSchema,
+  type ClientType,
   ClientTypeListSchema,
+  deduplicateClientEntries,
+  getClientTypes,
+  type InstallMode,
   InstallModeSchema,
+  normalizeClientEntry,
+  parseClientEntry,
   UserClientEntryListSchema,
   UserClientEntrySchema,
   UserClientTypeListSchema,
   UserClientTypeSchema,
-  normalizeClientEntry,
-  getClientTypes,
-  parseClientEntry,
-  deduplicateClientEntries,
-  type ClientEntry,
-  type ClientType,
-  type InstallMode,
 } from './client-entry-schema.js';
+import {
+  isMcpCredentialField,
+  McpConnectionConfigSchema,
+  McpOAuthConfigSchema,
+} from './mcp-options.js';
 
 export {
   CanonicalClientTypeSchema,
-  CLIENT_TYPES,
   CLIENT_INPUT_TYPES,
+  CLIENT_TYPES,
+  type ClientEntry,
   ClientEntryListSchema,
   ClientEntrySchema,
   ClientSelectorListSchema,
+  type ClientType,
   ClientTypeListSchema,
   ClientTypeSchema,
-  InstallModeSchema,
-  UserClientEntryListSchema,
-  UserClientTypeListSchema,
-  UserClientTypeSchema,
   deduplicateClientEntries,
   getClientInstallMode,
   getClientTypes,
+  type InstallMode,
+  InstallModeSchema,
   normalizeClientEntry,
   parseClientEntry,
-  type ClientEntry,
-  type ClientType,
-  type InstallMode,
+  UserClientEntryListSchema,
+  UserClientTypeListSchema,
+  UserClientTypeSchema,
 } from './client-entry-schema.js';
 
 /**
@@ -614,9 +615,6 @@ export type ProfilePluginEntry = z.infer<typeof ProfilePluginEntrySchema>;
  * Profile MCP declarations retain the existing transport vocabulary, but
  * credential-bearing values must be portable references rather than secrets.
  */
-const PROFILE_SENSITIVE_MCP_FIELD_PATTERN =
-  /(?:^|[-_.])(?:api[-_]?key|auth|authorization|credential|key|password|secret|signature|token)(?:$|[-_.])/i;
-
 function isProfileSecretReference(value: string | undefined): boolean {
   return value !== undefined && PROFILE_SECRET_REFERENCE_PATTERN.test(value);
 }
@@ -638,8 +636,7 @@ function isPortableProfileBridgeUrl(value: string): boolean {
       if (
         key.includes('${') ||
         (queryValue.includes('${') && !isProfileSecretReference(queryValue)) ||
-        (PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(key) &&
-          !isProfileSecretReference(queryValue))
+        (isMcpCredentialField(key) && !isProfileSecretReference(queryValue))
       ) {
         return false;
       }
@@ -680,6 +677,26 @@ function validateProfileMcpArguments(
       if (!isPortableProfileBridgeUrl(argument)) reject(index);
       continue;
     }
+    if (hasBridgePrefix && arguments_[index - 1] === '--oauth-config') {
+      try {
+        const oauth = McpOAuthConfigSchema.parse(JSON.parse(argument));
+        if (
+          oauth.clientSecret &&
+          !isProfileSecretReference(oauth.clientSecret)
+        ) {
+          reject(index);
+        }
+        for (const [key, value] of Object.entries(
+          oauth.authorizationParams ?? {},
+        )) {
+          if (isMcpCredentialField(key) && !isProfileSecretReference(value))
+            reject(index);
+        }
+      } catch {
+        reject(index);
+      }
+      continue;
+    }
     if (arguments_[index - 1] === '--header-env') {
       if (!/^[^=:\s]+=[A-Za-z_][A-Za-z0-9_]*$/.test(argument)) {
         reject(index);
@@ -688,10 +705,7 @@ function validateProfileMcpArguments(
     }
     const separateOption = argument.match(/^(?:--?|\/)([^=:\s]+)$/);
     const separateOptionName = separateOption?.[1];
-    if (
-      separateOptionName &&
-      PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(separateOptionName)
-    ) {
+    if (separateOptionName && isMcpCredentialField(separateOptionName)) {
       const credentialIndex = index + 1;
       if (!isProfileSecretReference(arguments_[credentialIndex])) {
         reject(credentialIndex < arguments_.length ? credentialIndex : index);
@@ -710,7 +724,7 @@ function validateProfileMcpArguments(
     const assignment = argument.match(/^(?:--?|\/)?([^=:\s]+)[=:]\s*(.*)$/);
     const assignmentName = assignment?.[1];
     const inlineCredential =
-      assignmentName && PROFILE_SENSITIVE_MCP_FIELD_PATTERN.test(assignmentName)
+      assignmentName && isMcpCredentialField(assignmentName)
         ? assignment[2]
         : undefined;
     const bearerCredential = argument.match(/\bbearer\s+(.+)$/i)?.[1];
@@ -764,6 +778,18 @@ export const ProfileMcpServerConfigSchema = z.union([
           path: ['oauth', 'clientSecret'],
           message: 'Profile OAuth secrets must be exact environment references',
         });
+      }
+      for (const [key, value] of Object.entries(
+        config.oauth?.authorizationParams ?? {},
+      )) {
+        if (isMcpCredentialField(key) && !isProfileSecretReference(value)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['oauth', 'authorizationParams', key],
+            message:
+              'Profile OAuth secrets must be exact environment references',
+          });
+        }
       }
     }),
   z

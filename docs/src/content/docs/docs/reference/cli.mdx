@@ -615,6 +615,7 @@ allagents mcp list [--scope project|user | --profile <name>]
 allagents mcp get <name> [--scope project|user | --profile <name>]
 allagents mcp update [--offline] [--scope project|user | --profile <name>]
 allagents mcp tools <server> [--search <text>] [--scope project|user | --profile <name>]
+allagents mcp probe <server> [--scope project|user | --profile <name>]
 allagents mcp call <server> <tool> [tool options | --input <json>] [--scope project|user | --profile <name>]
 ```
 
@@ -695,6 +696,13 @@ allagents mcp add gh-server npx --arg=-y --arg=@modelcontextprotocol/server-gith
 allagents mcp add deepwiki https://new.example.com --force
 ```
 
+HTTP setup also accepts `--oauth-config <json|@file>`,
+`--connection-config <json|@file>`, and repeatable `--header-file <path>`.
+These settings are saved in the declaration and reused by direct commands and
+client bridges. See [Connection options](/docs/guides/mcp-proxy/#connection-options)
+for transport strategies, registered clients, grant types, tool exclusions,
+network settings and callback configuration.
+
 ### mcp reauth
 
 Force a fresh OAuth login for an HTTP MCP server in the selected destination:
@@ -714,6 +722,19 @@ the waiting terminal prompt.
 
 The HTTP-to-stdio bridge written into generated client configs is an internal
 implementation detail; users do not need to run it directly.
+
+### mcp probe
+
+Check a configured connection and list its tools and advertised resources:
+
+```bash
+allagents mcp probe notion
+allagents --json mcp probe notion --profile work
+```
+
+The command uses cached or refreshable credentials, refuses fresh human consent,
+and closes the session before printing. JSON includes the destination, server
+name, server metadata, capabilities, tools and resources.
 
 ### mcp tools
 

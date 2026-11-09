@@ -27,6 +27,9 @@ gaps demonstrated below.
   application's credentials. Default registration remains AllAgents.
 - Keep credentials isolated by URL, effective OAuth identity and profile. An
   identity change must not reuse another identity's registration or tokens.
+- Preserve authored query-reference URL cache and reauthentication identity when
+  its query secret rotates. Resource headers partition tenant grants; whole-URL
+  references select their resolved destination.
 - Keep configured resource headers restricted to the resource origin, with
   transport-owned headers taking precedence. Do not copy upstream's observed
   forwarding of resource headers to the separate identity-provider origin.

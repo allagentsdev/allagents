@@ -61,6 +61,24 @@ export const mcpAddMeta: AgentCommandMeta = {
   ],
   options: [
     {
+      flag: '--oauth-config',
+      type: 'string',
+      description:
+        'OAuth settings as JSON or @path/to/file.json; supports registered clients, scopes, grants and callback settings',
+    },
+    {
+      flag: '--connection-config',
+      type: 'string',
+      description:
+        'Transport, protocol, filtering and network settings as JSON or @path/to/file.json',
+    },
+    {
+      flag: '--header-file',
+      type: 'string',
+      description:
+        'HTTP headers from a file, one Name: value per line (repeatable)',
+    },
+    {
       flag: '--transport',
       type: 'string',
       description:
@@ -86,7 +104,8 @@ export const mcpAddMeta: AgentCommandMeta = {
     {
       flag: '--oauth-client-name',
       type: 'string',
-      description: 'OAuth registration client name for HTTP transport (default: AllAgents); requires a nonempty value and is not supported for stdio',
+      description:
+        'OAuth registration client name for HTTP transport (default: AllAgents); requires a nonempty value and is not supported for stdio',
     },
     {
       flag: '--client',
@@ -346,6 +365,38 @@ export const mcpCallMeta: AgentCommandMeta = {
       options: 'generated tool option[]?',
       reason: 'string?',
     },
+  },
+  skipUpdateCheck: true,
+};
+
+export const mcpProbeMeta: AgentCommandMeta = {
+  command: 'mcp probe',
+  description:
+    'Check a configured MCP connection and inspect its tools and resources',
+  whenToUse:
+    'To diagnose a configured MCP server using cached or refreshable credentials without starting fresh human consent',
+  examples: [
+    'allagents mcp probe notion',
+    'allagents --json mcp probe notion --profile work',
+  ],
+  expectedOutput:
+    'Connects to the selected server, lists tools and advertised resources, then closes the session before printing. Missing consent prints the matching mcp reauth command. Exit 0 on success, 1 on failure and 130 when interrupted.',
+  positionals: [
+    {
+      name: 'server',
+      type: 'string',
+      required: true,
+      description: 'Configured server name in the selected destination',
+    },
+  ],
+  options: [...destinationOptions],
+  outputSchema: {
+    destination: destinationOutput,
+    server: 'string',
+    serverInfo: 'object',
+    capabilities: 'object',
+    tools: 'MCP tool[]',
+    resources: 'MCP resource[]',
   },
   skipUpdateCheck: true,
 };

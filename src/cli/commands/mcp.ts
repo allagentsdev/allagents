@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { isCancel, password } from '@clack/prompts';
+import type {
+  CallToolResult,
+  CompatibilityCallToolResult,
+  Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 import {
   array,
   command,
@@ -9,12 +15,6 @@ import {
   positional,
   string,
 } from 'cmd-ts';
-import type {
-  CallToolResult,
-  CompatibilityCallToolResult,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { stringifyYaml } from '../../utils/yaml.js';
 import {
   runHttpMcpStdioProxy,
   validateOAuthCallbackUrl,
@@ -29,15 +29,9 @@ import {
   updateManagedMcpServers,
 } from '../../core/mcp-management.js';
 import {
-  buildMcpServerConfigFromFlags,
-  getMcpServer,
-  type McpDestination,
-  parseKeyValuePairs,
-  resolveMcpDestination,
-} from '../../core/mcp-servers.js';
-import {
   callMcpTool,
   findMcpTool,
+  listAllMcpResources,
   listAllMcpTools,
   type ManagedMcpOperation,
   type ManagedMcpOperationOptions,
@@ -45,11 +39,24 @@ import {
   runManagedMcpOperation as runManagedMcpRuntimeOperation,
 } from '../../core/mcp-runtime.js';
 import {
+  buildMcpServerConfigFromFlags,
+  getMcpServer,
+  type McpDestination,
+  parseKeyValuePairs,
+  resolveMcpDestination,
+} from '../../core/mcp-servers.js';
+import {
+  McpConnectionConfigSchema,
+  type McpOAuthConfig,
+  McpOAuthConfigSchema,
+} from '../../models/mcp-options.js';
+import {
   CLIENT_INPUT_TYPES,
   type ClientType,
   ClientTypeSchema,
   type McpServerConfig,
 } from '../../models/workspace-config.js';
+import { stringifyYaml } from '../../utils/yaml.js';
 import { buildProfileData, formatProfileResult } from '../format-profile.js';
 import { formatMcpResult } from '../format-sync.js';
 import { buildDescription, conciseSubcommands } from '../help.js';
@@ -70,6 +77,7 @@ import {
   mcpCallMeta,
   mcpGetMeta,
   mcpListMeta,
+  mcpProbeMeta,
   mcpReauthMeta,
   mcpRemoveMeta,
   mcpToolsMeta,
@@ -208,7 +216,8 @@ function redactMcpArguments(args: string[]): string[] {
     }
     if (
       argument.startsWith('-') &&
-      isSensitiveCredentialName(argument.replace(/^-+/, ''))
+      (isSensitiveCredentialName(argument.replace(/^-+/, '')) ||
+        argument === '--oauth-config')
     ) {
       redactNext = true;
     }
@@ -221,6 +230,7 @@ function redactMcpServerConfig(config: McpServerConfig): McpServerConfig {
     return {
       ...config,
       url: redactUrlCredentials(config.url),
+      ...(config.oauth && { oauth: redactOAuthConfig(config.oauth) }),
       ...(config.headers && {
         headers: Object.fromEntries(
           Object.keys(config.headers).map((key) => [key, REDACTED_VALUE]),
@@ -238,6 +248,106 @@ function redactMcpServerConfig(config: McpServerConfig): McpServerConfig {
     }),
   };
 }
+
+function redactOAuthConfig(config: McpOAuthConfig): McpOAuthConfig {
+  return {
+    ...config,
+    ...(config.clientSecret === undefined
+      ? {}
+      : { clientSecret: REDACTED_VALUE }),
+    ...(config.authorizationParams && {
+      authorizationParams: Object.fromEntries(
+        Object.keys(config.authorizationParams).map((key) => [
+          key,
+          REDACTED_VALUE,
+        ]),
+      ),
+    }),
+    ...(config.clientMetadata && {
+      clientMetadata: Object.fromEntries(
+        Object.entries(config.clientMetadata).map(([key, value]) => [
+          key,
+          isSensitiveCredentialName(key) ? REDACTED_VALUE : value,
+        ]),
+      ),
+    }),
+    ...(config.resource === undefined
+      ? {}
+      : { resource: redactUrlCredentials(config.resource) }),
+    ...(config.tokenEndpoint === undefined
+      ? {}
+      : { tokenEndpoint: redactUrlCredentials(config.tokenEndpoint) }),
+  };
+}
+
+function parseConnectionOption<T>(
+  commandName: string,
+  value: string | undefined,
+  schema: { parse(input: unknown): T },
+  flagName: string,
+): T | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return schema.parse(
+      JSON.parse(
+        value.startsWith('@') ? readFileSync(value.slice(1), 'utf8') : value,
+      ),
+    );
+  } catch {
+    exitWithError(
+      commandName,
+      `Invalid ${flagName}; expected valid connection options as JSON or @path/to/file.json`,
+    );
+  }
+}
+
+function readHeaderFiles(
+  commandName: string,
+  files: string[],
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file, 'utf8');
+    } catch {
+      exitWithError(commandName, 'Cannot read HTTP header file');
+    }
+    for (const [index, line] of content.split(/\r?\n/).entries()) {
+      if (!line.trim() || line.trimStart().startsWith('#')) continue;
+      const separator = line.indexOf(':');
+      if (separator <= 0)
+        exitWithError(
+          commandName,
+          `Invalid HTTP header file entry on line ${index + 1}`,
+        );
+      result[line.slice(0, separator).trim()] = line
+        .slice(separator + 1)
+        .trim();
+    }
+  }
+  return result;
+}
+
+const connectionArgs = {
+  oauthConfig: option({
+    type: optional(string),
+    long: 'oauth-config',
+    description: 'OAuth settings as JSON or @path/to/file.json',
+  }),
+  connectionConfig: option({
+    type: optional(string),
+    long: 'connection-config',
+    description:
+      'Transport, filtering and network settings as JSON or @path/to/file.json',
+  }),
+  headerFile: multioption({
+    type: array(string),
+    long: 'header-file',
+    description:
+      'HTTP headers from a file, one Name: value per line (repeatable)',
+  }),
+};
 
 function exitWithError(command: string, error: string): never {
   if (isJsonMode()) {
@@ -261,6 +371,9 @@ function buildConfigFromAddFlags(
     header,
     client,
     oauthClientName,
+    oauthConfig,
+    connectionConfig,
+    headerFile = [],
   }: {
     commandOrUrl: string;
     transport: string | undefined;
@@ -269,6 +382,9 @@ function buildConfigFromAddFlags(
     header: string[];
     client: string[];
     oauthClientName: string | undefined;
+    oauthConfig?: string | undefined;
+    connectionConfig?: string | undefined;
+    headerFile?: string[];
   },
 ): McpServerConfig {
   if (transport && transport !== 'http' && transport !== 'stdio') {
@@ -295,9 +411,27 @@ function buildConfigFromAddFlags(
     commandOrUrl,
     args,
     env: envResult.values,
-    headers: headerResult.values,
+    headers: {
+      ...readHeaderFiles(commandName, headerFile),
+      ...headerResult.values,
+    },
   };
-  if (oauthClientName !== undefined) buildOpts.oauthClientName = oauthClientName;
+  const oauth = parseConnectionOption(
+    commandName,
+    oauthConfig,
+    McpOAuthConfigSchema,
+    '--oauth-config',
+  );
+  const connection = parseConnectionOption(
+    commandName,
+    connectionConfig,
+    McpConnectionConfigSchema,
+    '--connection-config',
+  );
+  if (oauth !== undefined) buildOpts.oauth = oauth;
+  if (connection !== undefined) buildOpts.connection = connection;
+  if (oauthClientName !== undefined)
+    buildOpts.oauthClientName = oauthClientName;
   if (transport) buildOpts.transport = transport as 'http' | 'stdio';
   if (clients) buildOpts.clients = clients;
 
@@ -444,6 +578,14 @@ function serverToDisplay(name: string, config: McpServerConfig): string[] {
     if (config.oauth?.clientName !== undefined) {
       lines.push(`  oauth client name: ${config.oauth.clientName}`);
     }
+    if (config.connection?.transportStrategy)
+      lines.push(
+        `  transport strategy: ${config.connection.transportStrategy}`,
+      );
+    if (config.connection?.ignoreTools?.length)
+      lines.push(
+        `  excluded tools: ${config.connection.ignoreTools.join(', ')}`,
+      );
     if (config.headers && Object.keys(config.headers).length > 0) {
       lines.push('  headers:');
       for (const [k, v] of Object.entries(config.headers)) {
@@ -1383,11 +1525,99 @@ const mcpCallCmd = command({
   handler: async () => runMcpRuntimeCommand(process.argv.slice(2)),
 });
 
+const mcpProbeCmd = command({
+  name: 'probe',
+  description: buildDescription(mcpProbeMeta),
+  args: {
+    name: positional({ type: string, displayName: 'server' }),
+    ...destinationArgs,
+  },
+  handler: async ({ name, scope, profile }) => {
+    const destination = resolveCommandDestination('mcp probe', {
+      scope,
+      profile,
+    });
+    const controller = new AbortController();
+    let interruptedExitCode: number | undefined;
+    const cancel = () => {
+      interruptedExitCode = 130;
+      controller.abort(new Error('MCP probe cancelled'));
+    };
+    const terminate = () => {
+      interruptedExitCode = 143;
+      controller.abort(new Error('MCP probe cancelled'));
+    };
+    process.once('SIGINT', cancel);
+    process.once('SIGTERM', terminate);
+    const timeout = setTimeout(
+      () => controller.abort(new Error('MCP probe timed out')),
+      30_000,
+    );
+    try {
+      const outcome = await runManagedMcpRuntimeOperation(
+        destination,
+        name,
+        async ({ client, signal }) => {
+          const capabilities = client.getServerCapabilities() ?? {};
+          const tools = capabilities.tools
+            ? await listAllMcpTools(client, { signal })
+            : [];
+          const resources = capabilities.resources
+            ? await listAllMcpResources(client, { signal })
+            : [];
+          return {
+            serverInfo: client.getServerVersion(),
+            capabilities,
+            tools,
+            resources,
+          };
+        },
+        { signal: controller.signal, timeoutMs: 30_000 },
+      );
+      if (outcome.operation.status === 'rejected')
+        throw outcome.operation.error;
+      if (outcome.cleanup.status === 'rejected') throw outcome.cleanup.error;
+      const data = {
+        destination: serializeDestination(destination),
+        server: name,
+        ...outcome.operation.value,
+      };
+      if (isJsonMode())
+        jsonOutput({ success: true, command: 'mcp probe', data });
+      else {
+        console.log(
+          `Connected to ${terminalSafe(data.serverInfo?.name ?? name)}`,
+        );
+        console.log(`Tools: ${data.tools.length}`);
+        for (const tool of data.tools)
+          console.log(`  ${terminalSafe(tool.name)}`);
+        console.log(`Resources: ${data.resources.length}`);
+        for (const resource of data.resources)
+          console.log(
+            `  ${terminalSafe(resource.name)} (${terminalSafe(resource.uri)})`,
+          );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'MCP probe failed';
+      if (isJsonMode())
+        jsonOutput({ success: false, command: 'mcp probe', error: message });
+      else console.error(`Error: ${terminalSafe(message)}`);
+      process.exitCode = interruptedExitCode ?? 1;
+    } finally {
+      clearTimeout(timeout);
+      process.removeListener('SIGINT', cancel);
+      process.removeListener('SIGTERM', terminate);
+    }
+  },
+});
+
 // =============================================================================
 // mcp add
 // =============================================================================
 
 const addArgs = {
+  ...connectionArgs,
   name: positional({ type: string, displayName: 'name' }),
   commandOrUrl: positional({ type: string, displayName: 'commandOrUrl' }),
   transport: option({
@@ -1415,7 +1645,8 @@ const addArgs = {
   oauthClientName: option({
     type: optional(string),
     long: 'oauth-client-name',
-    description: 'OAuth registration client name for HTTP transport (default: AllAgents)',
+    description:
+      'OAuth registration client name for HTTP transport (default: AllAgents)',
   }),
   client: multioption({
     type: array(string),
@@ -1444,6 +1675,9 @@ const mcpAddCmd = command({
     env,
     header,
     oauthClientName,
+    oauthConfig,
+    connectionConfig,
+    headerFile,
     client,
     force,
     scope,
@@ -1461,6 +1695,9 @@ const mcpAddCmd = command({
       header,
       client,
       oauthClientName,
+      oauthConfig,
+      connectionConfig,
+      headerFile,
     });
     const authorization =
       !isJsonMode() && process.stdin.isTTY
@@ -1563,6 +1800,7 @@ const mcpProxyCmd = command({
   description: 'Expose a remote HTTP MCP server locally over stdio',
   args: {
     serverUrl: positional({ type: string, displayName: 'serverUrl' }),
+    ...connectionArgs,
     header: multioption({
       type: array(string),
       long: 'header',
@@ -1584,7 +1822,16 @@ const mcpProxyCmd = command({
       description: 'OAuth registration client name (default: AllAgents)',
     }),
   },
-  handler: async ({ serverUrl, header, headerEnv, profile, oauthClientName }) => {
+  handler: async ({
+    serverUrl,
+    header,
+    headerEnv,
+    profile,
+    oauthClientName,
+    oauthConfig,
+    connectionConfig,
+    headerFile,
+  }) => {
     if (oauthClientName !== undefined && !oauthClientName.trim()) {
       exitWithError('mcp proxy', '--oauth-client-name must not be empty');
     }
@@ -1612,11 +1859,40 @@ const mcpProxyCmd = command({
       profile === undefined
         ? undefined
         : resolveCommandDestination('mcp proxy', { profile });
+    const oauth = parseConnectionOption(
+      'mcp proxy',
+      oauthConfig,
+      McpOAuthConfigSchema,
+      '--oauth-config',
+    );
+    const connection = parseConnectionOption(
+      'mcp proxy',
+      connectionConfig,
+      McpConnectionConfigSchema,
+      '--connection-config',
+    );
     await runHttpMcpStdioProxy(
       serverUrl,
-      { ...headerResult.values, ...environmentHeaders },
       {
-        ...(oauthClientName === undefined ? {} : { clientName: oauthClientName.trim() }),
+        ...readHeaderFiles('mcp proxy', headerFile),
+        ...headerResult.values,
+        ...environmentHeaders,
+      },
+      {
+        ...(oauth === undefined
+          ? {}
+          : {
+              oauth: {
+                ...oauth,
+                ...(oauthClientName === undefined
+                  ? {}
+                  : { clientName: oauthClientName.trim() }),
+              },
+            }),
+        ...(connection === undefined ? {} : { connection }),
+        ...(oauthClientName === undefined
+          ? {}
+          : { clientName: oauthClientName.trim() }),
         ...(destination?.kind === 'profile'
           ? { profile: destination.name }
           : {}),
@@ -1822,6 +2098,7 @@ export const mcpCmd = conciseSubcommands(
       reauth: mcpReauthCmd,
       tools: mcpToolsCmd,
       call: mcpCallCmd,
+      probe: mcpProbeCmd,
       proxy: mcpProxyCmd,
       remove: mcpRemoveCmd,
       list: mcpListCmd,

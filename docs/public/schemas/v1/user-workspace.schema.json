@@ -951,6 +951,157 @@
                       "clientName": {
                         "type": "string",
                         "minLength": 1
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "clientSecret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string"
+                      },
+                      "clientMetadata": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      },
+                      "clientMetadataUrl": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "issuer": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "allowHttp": {
+                        "type": "boolean"
+                      },
+                      "resource": {
+                        "type": "string"
+                      },
+                      "authorizationParams": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "disableResourceParameter": {
+                        "type": "boolean"
+                      },
+                      "grantType": {
+                        "type": "string",
+                        "enum": [
+                          "authorization_code",
+                          "device_code",
+                          "client_credentials"
+                        ]
+                      },
+                      "tokenEndpoint": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "useIdToken": {
+                        "type": "boolean"
+                      },
+                      "callback": {
+                        "type": "object",
+                        "properties": {
+                          "port": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          "host": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "bindHost": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "path": {
+                            "type": "string",
+                            "format": "starts_with",
+                            "pattern": "^\\/.*"
+                          },
+                          "timeoutSeconds": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "successUrl": {
+                            "type": "string",
+                            "format": "uri"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "connection": {
+                    "type": "object",
+                    "properties": {
+                      "transportStrategy": {
+                        "type": "string",
+                        "enum": [
+                          "http-first",
+                          "sse-first",
+                          "http-only",
+                          "sse-only"
+                        ]
+                      },
+                      "protocol": {
+                        "type": "string",
+                        "enum": [
+                          "legacy",
+                          "auto"
+                        ]
+                      },
+                      "ignoreTools": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "connectTimeoutSeconds": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "headersTimeoutSeconds": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "bodyTimeoutSeconds": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "keepAliveSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "ipv4": {
+                        "type": "boolean"
+                      },
+                      "enableProxy": {
+                        "type": "boolean"
+                      },
+                      "disableCookies": {
+                        "type": "boolean"
+                      },
+                      "debug": {
+                        "type": "boolean"
+                      },
+                      "silent": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -2176,6 +2327,157 @@
                             "clientName": {
                               "type": "string",
                               "minLength": 1
+                            },
+                            "clientId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "clientSecret": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "scope": {
+                              "type": "string"
+                            },
+                            "clientMetadata": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            },
+                            "clientMetadataUrl": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "issuer": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "allowHttp": {
+                              "type": "boolean"
+                            },
+                            "resource": {
+                              "type": "string"
+                            },
+                            "authorizationParams": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "disableResourceParameter": {
+                              "type": "boolean"
+                            },
+                            "grantType": {
+                              "type": "string",
+                              "enum": [
+                                "authorization_code",
+                                "device_code",
+                                "client_credentials"
+                              ]
+                            },
+                            "tokenEndpoint": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "useIdToken": {
+                              "type": "boolean"
+                            },
+                            "callback": {
+                              "type": "object",
+                              "properties": {
+                                "port": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 65535
+                                },
+                                "host": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "bindHost": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "path": {
+                                  "type": "string",
+                                  "format": "starts_with",
+                                  "pattern": "^\\/.*"
+                                },
+                                "timeoutSeconds": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "successUrl": {
+                                  "type": "string",
+                                  "format": "uri"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "connection": {
+                          "type": "object",
+                          "properties": {
+                            "transportStrategy": {
+                              "type": "string",
+                              "enum": [
+                                "http-first",
+                                "sse-first",
+                                "http-only",
+                                "sse-only"
+                              ]
+                            },
+                            "protocol": {
+                              "type": "string",
+                              "enum": [
+                                "legacy",
+                                "auto"
+                              ]
+                            },
+                            "ignoreTools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "connectTimeoutSeconds": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "headersTimeoutSeconds": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "bodyTimeoutSeconds": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "keepAliveSeconds": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "ipv4": {
+                              "type": "boolean"
+                            },
+                            "enableProxy": {
+                              "type": "boolean"
+                            },
+                            "disableCookies": {
+                              "type": "boolean"
+                            },
+                            "debug": {
+                              "type": "boolean"
+                            },
+                            "silent": {
+                              "type": "boolean"
                             }
                           },
                           "additionalProperties": false

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
+  type CompatibilityCallToolResult,
   ErrorCode,
   McpError,
-  type CompatibilityCallToolResult,
+  type Resource,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation';
@@ -15,21 +16,21 @@ import {
   isMcpAuthorizationFailure,
   type McpCredentialGuard,
 } from './mcp-http-client.js';
-import { LinearStdioClientTransport } from './mcp-stdio-client-transport.js';
 import {
   formatMcpDestination,
   getMcpServer,
   type McpDestination,
 } from './mcp-servers.js';
+import { LinearStdioClientTransport } from './mcp-stdio-client-transport.js';
 
 const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 const DEFAULT_HTTP_CLEANUP_TIMEOUT_MS = 2_000;
 const DEFAULT_STDIO_EXIT_TIMEOUT_MS = 1_000;
-const MAX_MCP_TOOL_PAGES = 100;
-const MAX_MCP_TOOLS = 10_000;
+const MAX_MCP_CATALOG_PAGES = 100;
+const MAX_MCP_CATALOG_ITEMS = 10_000;
 const MAX_MCP_PROTOCOL_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_MCP_PROTOCOL_WIRE_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES + 64 * 1024;
-const MAX_MCP_TOOL_METADATA_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES;
+const MAX_MCP_CATALOG_METADATA_BYTES = MAX_MCP_PROTOCOL_MESSAGE_BYTES;
 const MAX_MCP_SCHEMA_DEPTH = 64;
 const MAX_MCP_SCHEMA_NODES = 100_000;
 const MCP_JSON_SCHEMA_VALIDATOR = new AjvJsonSchemaValidator();
@@ -160,8 +161,10 @@ export async function listAllMcpTools(
   let hasMore = true;
 
   while (hasMore) {
-    if (pages >= MAX_MCP_TOOL_PAGES) {
-      throw new Error(`MCP tool catalog exceeds ${MAX_MCP_TOOL_PAGES} pages`);
+    if (pages >= MAX_MCP_CATALOG_PAGES) {
+      throw new Error(
+        `MCP tool catalog exceeds ${MAX_MCP_CATALOG_PAGES} pages`,
+      );
     }
     const page = await client.listTools(
       cursor === undefined ? undefined : { cursor },
@@ -175,8 +178,10 @@ export async function listAllMcpTools(
           `MCP tool catalog contains duplicate tool '${tool.name}'`,
         );
       }
-      if (tools.length >= MAX_MCP_TOOLS) {
-        throw new Error(`MCP tool catalog exceeds ${MAX_MCP_TOOLS} tools`);
+      if (tools.length >= MAX_MCP_CATALOG_ITEMS) {
+        throw new Error(
+          `MCP tool catalog exceeds ${MAX_MCP_CATALOG_ITEMS} tools`,
+        );
       }
       assertBoundedMcpSchema(tool.inputSchema, tool.name);
       if (tool.outputSchema)
@@ -186,9 +191,9 @@ export async function listAllMcpTools(
         metadataBytes +
         (tools.length === 0 ? 0 : 1) +
         Buffer.byteLength(serialized, 'utf8');
-      if (candidateBytes > MAX_MCP_TOOL_METADATA_BYTES) {
+      if (candidateBytes > MAX_MCP_CATALOG_METADATA_BYTES) {
         throw new Error(
-          `MCP tool catalog exceeds ${MAX_MCP_TOOL_METADATA_BYTES} serialized bytes`,
+          `MCP tool catalog exceeds ${MAX_MCP_CATALOG_METADATA_BYTES} serialized bytes`,
         );
       }
       metadataBytes = candidateBytes;
@@ -207,9 +212,9 @@ export async function listAllMcpTools(
     }
     const candidateBytes =
       metadataBytes + Buffer.byteLength(nextCursor, 'utf8');
-    if (candidateBytes > MAX_MCP_TOOL_METADATA_BYTES) {
+    if (candidateBytes > MAX_MCP_CATALOG_METADATA_BYTES) {
       throw new Error(
-        `MCP tool catalog exceeds ${MAX_MCP_TOOL_METADATA_BYTES} serialized bytes`,
+        `MCP tool catalog exceeds ${MAX_MCP_CATALOG_METADATA_BYTES} serialized bytes`,
       );
     }
     metadataBytes = candidateBytes;
@@ -218,6 +223,51 @@ export async function listAllMcpTools(
   }
 
   return tools;
+}
+
+export async function listAllMcpResources(
+  client: Client,
+  options: McpRuntimeRequestOptions = {},
+): Promise<readonly Resource[]> {
+  const resources: Resource[] = [];
+  const cursorHashes = new Set<string>();
+  let cursor: string | undefined;
+  let metadataBytes = 2;
+  for (let pageIndex = 0; pageIndex < MAX_MCP_CATALOG_PAGES; pageIndex++) {
+    const page = await client.listResources(
+      cursor === undefined ? undefined : { cursor },
+      options,
+    );
+    assertBoundedMcpProtocolValue(page, 'resources/list page');
+    for (const resource of page.resources) {
+      if (resources.length >= MAX_MCP_CATALOG_ITEMS)
+        throw new Error(
+          `MCP resource catalog exceeds ${MAX_MCP_CATALOG_ITEMS} resources`,
+        );
+      metadataBytes +=
+        (resources.length === 0 ? 0 : 1) +
+        Buffer.byteLength(JSON.stringify(resource), 'utf8');
+      if (metadataBytes > MAX_MCP_CATALOG_METADATA_BYTES)
+        throw new Error(
+          `MCP resource catalog exceeds ${MAX_MCP_CATALOG_METADATA_BYTES} serialized bytes`,
+        );
+      resources.push(resource);
+    }
+    if (page.nextCursor === undefined) return resources;
+    const hash = createHash('sha256').update(page.nextCursor).digest('hex');
+    if (cursorHashes.has(hash))
+      throw new Error('MCP resource catalog repeated a pagination cursor');
+    metadataBytes += Buffer.byteLength(page.nextCursor, 'utf8');
+    if (metadataBytes > MAX_MCP_CATALOG_METADATA_BYTES)
+      throw new Error(
+        `MCP resource catalog exceeds ${MAX_MCP_CATALOG_METADATA_BYTES} serialized bytes`,
+      );
+    cursorHashes.add(hash);
+    cursor = page.nextCursor;
+  }
+  throw new Error(
+    `MCP resource catalog exceeds ${MAX_MCP_CATALOG_PAGES} pages`,
+  );
 }
 
 export function findMcpTool(catalog: McpToolCatalog, toolName: string): Tool {
@@ -478,9 +528,10 @@ export async function connectManagedMcpServer(
   try {
     const connection = await connectMcpHttpClient(config.url, {
       headers: config.headers ?? {},
-      ...(config.oauth?.clientName === undefined
+      ...(config.oauth === undefined ? {} : { oauth: config.oauth }),
+      ...(config.connection === undefined
         ? {}
-        : { clientName: config.oauth.clientName }),
+        : { connection: config.connection }),
       allowAuthorization: false,
       maxResponseBytes: MAX_MCP_PROTOCOL_WIRE_BYTES,
       ...(destination.kind === 'profile' ? { profile: destination.name } : {}),
@@ -502,7 +553,7 @@ export async function connectManagedMcpServer(
         closePromise ??= (async () => {
           const timeoutMs =
             options.httpCleanupTimeoutMs ?? DEFAULT_HTTP_CLEANUP_TIMEOUT_MS;
-          const termination = connection.transport
+          const termination = connection
             .terminateSession()
             .then<Error | undefined>(() => undefined)
             .catch((error) => credentialGuard.sanitizeError(error));

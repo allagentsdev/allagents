@@ -18,6 +18,28 @@ templates and staged transactions;
 file writers can use `writeWorkspaceConfig` or `serializeWorkspaceConfigFile`.
 Keep scope validation and atomic replacement safeguards in the calling operation.
 
+## Remote MCP connection policy
+
+Keep HTTP/SSE construction and authorization in the shared remote transport
+boundary. The stdio bridge relays protocol messages instead of terminating them
+at a second SDK Client/Server pair; the real host's capabilities, request IDs,
+notifications and remote metadata must survive. Finite CLI operations use an SDK
+Client over that same boundary and must not initiate fresh human consent.
+
+Apply connection options consistently through management, runtime, profiles and
+generated bridges. Keep resource headers origin-restricted, configured secrets
+out of generated process arguments, and grants isolated by effective identity.
+Keep authored query-reference URLs as cache and reauthentication identities when
+query secrets rotate; resolve those values only for outbound requests. Whole-URL
+references select their resolved destination, and resource headers partition
+tenant grants. Keep reset coordination outside the cache directory that moves
+during credential backup and rollback.
+
+Coordinate registration and token refresh in the provider/store rather than
+serializing unrelated tool requests. Keep modern-protocol translation opt-in and
+outside the legacy relay. Verify protocol behavior with real peers, including a
+server request during an outstanding tool call, to detect relay deadlocks.
+
 ## MCP server ownership
 
 MCP servers from plugins are synchronized into VS Code's `mcp.json`.

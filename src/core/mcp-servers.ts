@@ -9,8 +9,11 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { serializeWorkspaceConfigFile } from '../utils/workspace-writer.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
+import type {
+  McpConnectionConfig,
+  McpOAuthConfig,
+} from '../models/mcp-options.js';
 import {
   type ClientType,
   type McpServerConfig,
@@ -28,6 +31,7 @@ import {
   validateProjectWorkspaceConfig,
   validateUserWorkspaceConfig,
 } from '../utils/workspace-parser.js';
+import { serializeWorkspaceConfigFile } from '../utils/workspace-writer.js';
 import { flattenZodIssues } from '../utils/zod-issues.js';
 import {
   ensureUserWorkspace,
@@ -303,10 +307,14 @@ async function writeDestinationConfig(
     `.${basename(destination.configPath)}.${process.pid}.${randomUUID()}.tmp`,
   );
   try {
-    await writeFile(temporaryPath, await serializeWorkspaceConfigFile(destination.configPath, document), {
-      encoding: 'utf-8',
-      mode,
-    });
+    await writeFile(
+      temporaryPath,
+      await serializeWorkspaceConfigFile(destination.configPath, document),
+      {
+        encoding: 'utf-8',
+        mode,
+      },
+    );
     await rename(temporaryPath, destination.configPath);
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -518,6 +526,8 @@ export function buildMcpServerConfigFromFlags(options: {
   headers?: Record<string, string>;
   clients?: ClientType[];
   oauthClientName?: string;
+  oauth?: McpOAuthConfig;
+  connection?: McpConnectionConfig;
 }): { config: McpServerConfig } | { error: string } {
   const { commandOrUrl, args, env, headers, clients } = options;
   const transport =
@@ -545,9 +555,22 @@ export function buildMcpServerConfigFromFlags(options: {
       url: commandOrUrl,
       ...(headers && Object.keys(headers).length > 0 && { headers }),
       ...(clients && clients.length > 0 && { clients }),
-      ...(clientName === undefined ? {} : { oauth: { clientName } }),
+      ...(options.oauth !== undefined || clientName !== undefined
+        ? {
+            oauth: {
+              ...options.oauth,
+              ...(clientName === undefined ? {} : { clientName }),
+            },
+          }
+        : {}),
+      ...(options.connection === undefined
+        ? {}
+        : { connection: options.connection }),
     };
-    return { config };
+    const parsed = McpServerConfigSchema.safeParse(config);
+    return parsed.success
+      ? { config: parsed.data }
+      : { error: 'Invalid HTTP MCP connection configuration' };
   }
 
   if (options.transport === 'stdio' && /^https?:\/\//i.test(commandOrUrl)) {
@@ -559,7 +582,12 @@ export function buildMcpServerConfigFromFlags(options: {
     return { error: '--header is not supported for stdio transport' };
   }
   if (clientName !== undefined) {
-    return { error: '--oauth-client-name is not supported for stdio transport' };
+    return {
+      error: '--oauth-client-name is not supported for stdio transport',
+    };
+  }
+  if (options.oauth || options.connection) {
+    return { error: 'OAuth and connection options require HTTP transport' };
   }
   const config: McpServerConfig = {
     type: 'stdio',

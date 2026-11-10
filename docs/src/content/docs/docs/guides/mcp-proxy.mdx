@@ -102,7 +102,8 @@ mcpServers:
 ```
 
 `Codex` is another supported name value. This option changes OAuth
-`client_name`, not AllAgents' MCP initialization identity. It does not import
+`client_name`. The bridge forwards the connecting AI client's MCP initialization
+identity and capabilities; direct AllAgents commands identify as AllAgents. It does not import
 another application's tokens, client secret, or existing grant. It is not a
 guarantee that a provider will accept registration or grant access.
 
@@ -153,6 +154,7 @@ allagents mcp tools tradingview
 allagents mcp call tradingview quote --symbol AAPL
 allagents mcp tools tradingview --scope user
 allagents mcp call tradingview quote --profile markets --symbol AAPL
+allagents mcp probe tradingview --profile markets
 ```
 
 Unlike an external AI client, `mcp tools`, fully qualified `mcp call ... --help`,
@@ -170,6 +172,155 @@ succeeds, rerun the discovery, help, or call command.
 For a stdio declaration, runtime discovery, live help, and calls start the
 configured process directly with its configured arguments and environment.
 Treat a configured stdio command as executable code you trust.
+
+`mcp probe` checks the connection, lists tools and advertised resources, and
+closes the session before printing. It shares the runtime commands' credentials
+and never starts fresh human consent.
+
+## Connection Options
+
+HTTP declarations support a `connection` object. Settings apply to both direct
+commands and generated bridges:
+
+```yaml
+mcpServers:
+  internal:
+    url: https://mcp.example.com/mcp
+    connection:
+      transportStrategy: http-first
+      ignoreTools: ["delete*", "remove*"]
+      keepAliveSeconds: 30
+      bodyTimeoutSeconds: 0
+```
+
+| Setting | Behavior |
+| --- | --- |
+| `transportStrategy` | `http-first` (default), `sse-first`, `http-only`, or `sse-only`. An initial 404 or 405 tries the alternative transport once when using a fallback strategy. Both try the configured URL without rewriting its path. |
+| `ignoreTools` | Case-insensitive patterns with `*` wildcards. Excluded tools disappear from discovery and direct calls are rejected. |
+| `keepAliveSeconds` | Periodic pings on legacy connections. Modern notification subscriptions manage their own liveness. |
+| `connectTimeoutSeconds` | Timeout for establishing an outbound connection. |
+| `headersTimeoutSeconds` | Timeout for waiting for response headers. Zero disables it. |
+| `bodyTimeoutSeconds` | Maximum gap between incoming chunks, rather than a total stream lifetime. Zero disables it. |
+| `protocol: auto` | Probe for the 2026-07-28 protocol and bridge compatible older hosts. Default `legacy` sends the original handshake without a probe. |
+| `enableProxy: true` | Use `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` for MCP and OAuth requests. |
+| `ipv4: true` | Open outbound connections over IPv4. |
+| `disableCookies: true` | Disable the default in-memory sticky-session cookies. Cookies otherwise stay within their exact response origin and matching paths, respect Secure, and preserve distinct sessions on different paths. Explicit Cookie headers take precedence. |
+| `debug: true` | Write connection diagnostics beneath `~/.allagents/mcp-debug/` and print their location to stderr. Diagnostics omit credentials and raw protocol payloads. |
+| `silent: true` | Suppress ordinary bridge diagnostics. Explicit debug output remains enabled. |
+
+Transport fallback is limited to startup. An established tool request's error
+does not switch transports or replay the request on another transport.
+Node's `NODE_EXTRA_CA_CERTS` environment variable supplies additional trusted
+certificate authorities without disabling certificate verification.
+
+### Registered Clients and Grants
+
+Use a registered client when the provider does not permit dynamic registration:
+
+```yaml
+mcpServers:
+  internal:
+    url: https://mcp.example.com/mcp
+    oauth:
+      clientId: team-client
+      clientSecret: ${MCP_CLIENT_SECRET}
+      scope: read write
+```
+
+Profiles require exact environment references for `clientSecret` and credential
+authorization parameters such as `api_key`. Public parameters such as `audience`
+can remain literal values. Generated
+bridges retain that binding rather than putting the resolved secret in process
+arguments. Changing identity-bearing registration or authorization settings
+selects a separate credential cache. Resource headers also participate in the
+cache identity, so separate tenant headers cannot share a grant.
+
+Other `oauth` settings are:
+
+| Setting | Behavior |
+| --- | --- |
+| `clientMetadata` | Standard registration metadata, including software identification and token endpoint authentication method. |
+| `clientMetadataUrl` | A client metadata document for providers that support it. Configure its registered callback port. |
+| `issuer` | Bind a registered client to one authorization-server issuer. Credentials are refused when discovery selects a different issuer. |
+| `resource` | Explicit resource indicator for authorization, token exchange and refresh. |
+| `authorizationParams` | Extra authorization parameters such as `audience`, `prompt`, or `access_type`. Flow-owned parameters such as `state` and `code_challenge` cannot be replaced. Values are included in the browser authorization URL during consent. |
+| `disableResourceParameter` | Omit the resource indicator when true. |
+| `grantType` | `authorization_code` (default), `device_code`, or `client_credentials`. |
+| `tokenEndpoint` | Explicit endpoint that skips discovery, valid only for client credentials. |
+| `allowHttp` | Permit an HTTP token endpoint or callback success destination on a trusted private network. Without it these destinations require HTTPS or HTTP loopback. |
+| `useIdToken` | Use the provider's ID token for bearer authentication and its expiry for renewal. The provider must issue an ID token. |
+
+Device authorization prints a verification URL and user code and waits for
+approval without a local browser or callback port. Runtime commands can refresh
+an existing device grant but do not request fresh consent. Client credentials
+use the configured client ID and secret without a human login.
+
+`oauth.callback` supports `port`, `host`, `bindHost`, `path`, `timeoutSeconds`,
+and `successUrl`. `host` is the advertised redirect host; `bindHost` is the
+listen address. Defaults retain AllAgents' loopback callback. An explicit port
+is used exactly, rather than silently moving a registered redirect URI. The
+success destination is used only after token exchange and receives no code,
+state or token parameters.
+
+### Options from the CLI
+
+```bash
+allagents mcp add internal https://mcp.example.com/mcp \
+  --connection-config '{"transportStrategy":"http-only","ignoreTools":["delete*"]}' \
+  --oauth-config @oauth-options.json \
+  --header-file headers.txt
+```
+
+Both option arguments accept a JSON object or `@path/to/file.json`.
+`--header-file` accepts one `Name: value` per line, ignoring blank and `#` comment
+lines. Unreadable files fail before mutation. Explicit `--header` values take
+precedence. Ordinary header values can include environment references; profiles
+retain their exact-reference requirement. Resource headers remain restricted
+to the MCP origin and are never forwarded to a separate OAuth identity provider.
+
+## Protocol Forwarding
+
+The bridge forwards requests, responses, errors and notifications in both
+directions. It preserves host capabilities and remote metadata, including roots,
+sampling, elicitation, resource subscriptions, progress, cancellation, logging
+and task-shaped results.
+
+With `connection.protocol: auto`, modern servers are discovered once, compatible
+legacy initialization is answered locally, and per-request protocol metadata is
+carried upstream. Notification subscriptions and supported input requests are
+translated for the connecting host. A request the host has not declared it can
+answer fails explicitly. Default legacy connections retain the original handshake.
+
+Concurrent bridge processes coordinate registration, consent and rotating-token
+refresh within the selected scope. Owner failure permits recovery without
+sharing grants across identities or profiles.
+
+## Compatibility Baseline
+
+The connection options above target the published `mcp-remote@0.16.5`
+capabilities. AllAgents keeps its own setup, destination selection, credential
+cache and recovery commands. Option names follow the YAML policy rather than
+upstream's command-line spelling.
+
+| Upstream capability | AllAgents equivalent |
+| --- | --- |
+| HTTP/SSE strategy and bidirectional stdio bridge | `connection.transportStrategy`; generated `mcp proxy` bridge |
+| Modern protocol translation | `connection.protocol: auto` |
+| Static registration, metadata, scopes, resource and authorization parameters | `oauth` settings above |
+| Device and client credentials grants, explicit token endpoint and ID-token bearer | `oauth.grantType`, `tokenEndpoint`, `useIdToken` |
+| Callback address, deadline and completion destination | `oauth.callback` |
+| Shared login and rotating refresh coordination | Automatic within each destination and credential identity |
+| Tool exclusions and keep-alive | `connection.ignoreTools`, `keepAliveSeconds` |
+| Proxy, custom trust roots, timeouts and IPv4 | `connection` settings and `NODE_EXTRA_CA_CERTS` |
+| Sticky-session cookies | Automatic exact-origin cookie jar; `disableCookies` opts out |
+| Header files and environment substitution | `--header-file`, `--header-env`, YAML header references |
+| Debug and silent output | `connection.debug`, `silent` |
+| Diagnostic client | `mcp probe`, `mcp tools`, `mcp call` |
+
+Protocol and authorization behavior is covered with local HTTP, SSE and OAuth
+fixtures. Modern translation is opt-in and tested against a local modern-only
+server. These checks do not establish compatibility with every live provider
+or native AI-client release.
 
 ## Stdio Servers
 
@@ -248,6 +399,11 @@ These paths describe the default AllAgents identity. Explicit compatibility
 names use separate caches beneath the corresponding URL/profile scope.
 `mcp reauth` resets only the effective identity selected by the declaration;
 it does not clear or borrow another identity's credentials.
+Rotating a secret referenced in a URL query does not select a new OAuth cache;
+the authored URL remains its identity. Changing a tenant header selects a
+separate grant. A declaration with headers may need one new sign-in when
+upgrading from a version that did not partition its cache by headers.
+
 Removing an installed or declared-only profile removes its OAuth subtree with
 its other profile-owned runtime state. Cleanup rejects symbolic-link or
 non-directory OAuth roots and retains retryable state on failure.

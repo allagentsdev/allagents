@@ -11,13 +11,13 @@ let home: string;
 let workspace: string;
 let plugin: string;
 
-async function runInstall(args: string[]): Promise<{
+async function runCli(args: string[]): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
 }> {
   const process = Bun.spawn(
-    ['bun', 'run', cliEntry, '--json', 'plugin', 'install', plugin, ...args],
+    ['bun', 'run', cliEntry, '--json', ...args],
     {
       cwd: workspace,
       env: {
@@ -38,6 +38,10 @@ async function runInstall(args: string[]): Promise<{
     process.exited,
   ]);
   return { exitCode, stdout, stderr };
+}
+
+async function runInstall(args: string[]) {
+  return runCli(['plugin', 'install', plugin, ...args]);
 }
 
 async function runInteractiveInstall(
@@ -116,6 +120,137 @@ afterEach(async () => {
 });
 
 describe('plugin install target options', () => {
+  test.each(['project', 'user'] as const)(
+    '--skill preserves unselected skill directories at %s scope',
+    async (scope) => {
+      await mkdir(join(plugin, 'skills', 'other'), { recursive: true });
+      await writeFile(
+        join(plugin, 'skills', 'other', 'SKILL.md'),
+        '---\nname: other\ndescription: Other\n---\n# Upstream other\n',
+      );
+      const destination = scope === 'user' ? home : workspace;
+      const privateSkill = '---\nname: other\ndescription: Private\n---\n# Private other\n';
+      for (const client of ['.codex', '.cursor']) {
+        const directory = join(destination, client, 'skills', 'other');
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, 'SKILL.md'), privateSkill);
+        await writeFile(join(directory, 'personal.txt'), 'keep this file\n');
+      }
+
+      const result = await runInstall([
+        '--scope', scope, '--client', 'codex,cursor', '--skill', 'demo', '--yes',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout).data.enabledSkills).toEqual(['demo']);
+      for (const client of ['.codex', '.cursor']) {
+        const directory = join(destination, client, 'skills');
+        expect(await readFile(join(directory, 'other', 'SKILL.md'), 'utf8')).toBe(privateSkill);
+        expect(await readFile(join(directory, 'other', 'personal.txt'), 'utf8')).toBe('keep this file\n');
+        expect(existsSync(join(directory, 'demo', 'SKILL.md'))).toBe(true);
+      }
+      const config = load(await readFile(join(destination, '.allagents', 'workspace.yaml'), 'utf8')) as {
+        plugins: Array<{ source: string; skills: string[] }>;
+      };
+      expect(config.plugins).toEqual([{ source: plugin, skills: ['demo'] }]);
+      const state = JSON.parse(await readFile(join(destination, '.allagents', 'sync-state.json'), 'utf8'));
+      expect(Object.values(state.files).flat().some((path) => String(path).includes('/other/'))).toBe(false);
+    },
+    20_000,
+  );
+
+  test('rejects unknown --skill names before changing configuration or client files', async () => {
+    const configPath = join(workspace, '.allagents', 'workspace.yaml');
+    await mkdir(join(workspace, '.allagents'), { recursive: true });
+    const original = dump({ version: 2, repositories: [], plugins: [], clients: ['codex'] });
+    await writeFile(configPath, original);
+    const directory = join(workspace, '.codex', 'skills', 'demo');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'SKILL.md'), 'private demo\n');
+
+    const result = await runInstall([
+      '--scope', 'project', '--client', 'codex', '--skill', 'missing', '--yes',
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout).error).toContain('Unknown skills: missing');
+    expect(await readFile(configPath, 'utf8')).toBe(original);
+    expect(await readFile(join(directory, 'SKILL.md'), 'utf8')).toBe('private demo\n');
+    expect(existsSync(join(workspace, '.allagents', 'sync-state.json'))).toBe(false);
+  }, 20_000);
+
+  test('--skill extends an existing allowlist while preserving plugin fields', async () => {
+    await mkdir(join(plugin, 'skills', 'other'), { recursive: true });
+    await writeFile(join(plugin, 'skills', 'other', 'SKILL.md'), '---\nname: other\ndescription: Other\n---\n');
+    await mkdir(join(workspace, '.allagents'), { recursive: true });
+    await writeFile(join(workspace, '.allagents', 'workspace.yaml'), dump({
+      version: 2,
+      repositories: [],
+      clients: ['codex'],
+      plugins: [{ source: plugin, skills: ['demo'], exclude: ['private/**'], hooks: false }],
+    }));
+
+    const result = await runInstall([
+      '--scope', 'project', '--client', 'codex', '--skill', 'other', '--skill', 'demo', '--yes',
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const config = load(await readFile(join(workspace, '.allagents', 'workspace.yaml'), 'utf8')) as { plugins: unknown[] };
+    expect(config.plugins).toEqual([{ source: plugin, skills: ['demo', 'other'], exclude: ['private/**'], hooks: false }]);
+    for (const name of ['demo', 'other']) {
+      expect(existsSync(join(workspace, '.codex', 'skills', name, 'SKILL.md'))).toBe(true);
+    }
+  }, 20_000);
+
+  test.each(['project', 'user'] as const)(
+    '--skill respects marketplace component declarations at %s scope',
+    async (scope) => {
+      await mkdir(join(root, '.claude-plugin'), { recursive: true });
+      await mkdir(join(plugin, '.claude-plugin'), { recursive: true });
+      await mkdir(join(plugin, 'custom-skills', 'selected'), { recursive: true });
+      await writeFile(join(plugin, 'custom-skills', 'selected', 'SKILL.md'), '---\nname: selected\ndescription: Selected\n---\n');
+      await writeFile(join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'bundle', skills: './custom-skills/' }));
+      await writeFile(join(root, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+        name: 'selection-market',
+        plugins: [{ name: 'bundle', source: './plugin' }],
+      }));
+      if (scope === 'project') {
+        await mkdir(join(workspace, '.allagents'), { recursive: true });
+        await writeFile(join(workspace, '.allagents', 'workspace.yaml'), dump({ version: 2, repositories: [], plugins: [], clients: ['codex'] }));
+      }
+      const registration = await runCli(['plugin', 'marketplace', 'add', root, '--scope', scope]);
+      expect(registration).toMatchObject({ exitCode: 0 });
+      plugin = 'bundle@selection-market';
+      const destination = scope === 'user' ? home : workspace;
+
+      const invalid = await runInstall(['--scope', scope, '--client', 'codex', '--skill', 'demo', '--yes']);
+      expect(invalid.exitCode).toBe(1);
+      expect(JSON.parse(invalid.stdout).error).toContain('Unknown skills: demo');
+      expect(existsSync(join(destination, '.codex', 'skills', 'demo'))).toBe(false);
+
+      const result = await runInstall(['--scope', scope, '--client', 'codex', '--skill', 'selected', '--yes']);
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(destination, '.codex', 'skills', 'selected', 'SKILL.md'))).toBe(true);
+      const config = load(await readFile(join(destination, '.allagents', 'workspace.yaml'), 'utf8')) as { plugins: unknown[] };
+      expect(config.plugins).toEqual([{ source: plugin, skills: ['selected'] }]);
+    },
+    30_000,
+  );
+
+  test('--skill rejects blocklist mode before changing its declaration or copying files', async () => {
+    await mkdir(join(workspace, '.allagents'), { recursive: true });
+    const configPath = join(workspace, '.allagents', 'workspace.yaml');
+    const original = dump({ version: 2, repositories: [], clients: ['codex'], plugins: [{ source: plugin, skills: { exclude: ['demo'] } }] });
+    await writeFile(configPath, original);
+
+    const result = await runInstall(['--scope', 'project', '--client', 'codex', '--skill', 'demo', '--yes']);
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout).error).toContain('blocklist mode');
+    expect(await readFile(configPath, 'utf8')).toBe(original);
+    expect(existsSync(join(workspace, '.codex', 'skills', 'demo'))).toBe(false);
+  }, 20_000);
+
   test('persists an explicit client subset without changing scope defaults', async () => {
     await mkdir(join(workspace, '.allagents'), { recursive: true });
     await writeFile(

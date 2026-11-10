@@ -29,9 +29,11 @@ import { OpenCodeProfileAdapter } from '../../src/core/profile/adapters/opencode
 function connectAndAutoAuthorize(
   serverUrl: string,
   homeDir: string,
+  headers?: string[],
 ): Promise<McpProxyConnection> {
   return connectToMcpProxy({
     serverUrl,
+    ...(headers && { headers }),
     env: { HOME: homeDir, ALLAGENTS_MCP_OAUTH_NO_BROWSER: '1' },
     // Simulates the browser: the dummy IdP auto-approves and 302s straight to the
     // loopback callback, so a plain fetch completes the flow with no human involved.
@@ -236,7 +238,9 @@ describe('mcp proxy OAuth e2e', () => {
         ),
       ).toBe(true);
       expect(dummy.activeSessionCount).toBe(0);
-      const connection = await connectAndAutoAuthorize(dummy.mcpUrl, homeDir);
+      const connection = await connectAndAutoAuthorize(dummy.mcpUrl, homeDir, [
+        `x-resource-secret=${resourceSecret}`,
+      ]);
       await connection.close();
       expect(dummy.authorizeCallCount).toBe(1);
     } finally {

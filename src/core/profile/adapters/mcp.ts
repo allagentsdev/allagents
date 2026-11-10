@@ -70,6 +70,7 @@ export function serializeProfileMcpServers(
         url: config.url,
         ...(headers && { headers }),
         ...(config.oauth && { oauth: config.oauth }),
+        ...(config.connection && { connection: config.connection }),
       };
       continue;
     }
@@ -89,6 +90,8 @@ export function serializeProfileMcpServers(
   return profile === undefined
     ? selected
     : Object.fromEntries(
-        applyMcpProxy(new Map(Object.entries(selected)), client, undefined, { profile }),
+        applyMcpProxy(new Map(Object.entries(selected)), client, undefined, {
+          profile,
+        }),
       );
 }

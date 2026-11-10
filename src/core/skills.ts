@@ -199,7 +199,7 @@ async function walkForSkillMd(
   }
   const discovered: DiscoveredSkillEntry[] = [];
 
-  for (const entry of entries) {
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
 
     const skillPath = join(currentDir, entry.name);

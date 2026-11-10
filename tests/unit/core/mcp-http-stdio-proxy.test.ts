@@ -477,6 +477,22 @@ describe('HTTP OAuth client-name compatibility', () => {
     return location;
   };
 
+  test('opaque header credentials resolve once and reauth resets the same grant', async () => {
+    server = await startDummyMcpOAuthServer();
+    const headers = { 'X-Resource-Key': '${OUTER}' };
+    const environment = { OUTER: 'opaque-${INNER}' };
+    const options = { headers, environment, callbackUrlReader: authorize, authorizationOutput: () => {} };
+    const cache = getMcpOAuthCacheDir(server.mcpUrl, undefined, undefined, undefined, environment, headers);
+    await connectHttpMcpServer(server.mcpUrl, options);
+    const first = await readFile(join(cache, 'tokens.json'), 'utf8');
+    expect(server.authorizeCallCount).toBe(1);
+    await connectHttpMcpServer(server.mcpUrl, { ...options, resetCredentials: true });
+    expect(server.authorizeCallCount).toBe(2);
+    expect(await readFile(join(cache, 'tokens.json'), 'utf8')).not.toBe(first);
+    expect(server.mcpRequestHeaders.some(entry => entry['x-resource-key'] === 'opaque-${INNER}')).toBe(true);
+    expect(server.activeSessionCount).toBe(0);
+  });
+
   test('keeps authored query URLs as cache and reauthorization identities after environment rotation', async () => {
     server = await startDummyMcpOAuthServer();
     const originalToken = process.env.ALLAGENTS_TEST_QUERY_TOKEN;

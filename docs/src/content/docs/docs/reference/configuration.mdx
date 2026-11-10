@@ -694,6 +694,8 @@ mcpServers:
 | `type` | No | `http` or `stdio` (inferred from presence of `url` vs `command` if omitted) |
 | `url` | http only | HTTP URL for the MCP server |
 | `headers` | No | HTTP headers map (http transport only) |
+| `oauth` | No | HTTP authorization settings: client name/registration, scope, resource, grant and callback controls. Profile client secrets must be environment references. |
+| `connection` | No | HTTP/SSE strategy, protocol mode, tool exclusions, network timeouts, proxy, cookies and diagnostic settings. |
 | `command` | stdio only | Executable for the stdio command |
 | `args` | No | Command arguments array (stdio transport only) |
 | `env` | No | Environment variables map (stdio transport only) |
@@ -702,6 +704,10 @@ mcpServers:
 Manage these entries declaratively in the selected `workspace.yaml`, or via the
 [`allagents mcp` commands](/docs/reference/cli/#mcp-commands). Workspace-level
 servers override plugin-supplied servers with the same name, with a warning.
+
+See [Connection options](/docs/guides/mcp-proxy/#connection-options) for the
+complete `oauth` and `connection` fields. Explicit settings use the managed
+bridge so every client and direct command applies the same policy.
 
 Ownership is tracked separately for project, ordinary user, and each named
 profile. Pre-existing user-managed entries in client configs are never claimed

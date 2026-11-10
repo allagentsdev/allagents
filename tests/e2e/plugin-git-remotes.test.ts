@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:te
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as load } from 'yaml';
 
 const repoRoot = join(import.meta.dir, '../..');
 const cli = join(repoRoot, 'dist/index.js');
@@ -81,6 +82,44 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('file-mode Git remotes through the built CLI', () => {
+  test.each(['project', 'user'] as const)('extends the canonical marketplace allowlist when reinstalling its repository alias at %s scope', (scope) => {
+    for (const name of ['fixture', 'unselected']) {
+      const directory = join(upstream, 'plugins', 'bundle', 'skills', name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\n`);
+    }
+    mkdirSync(join(upstream, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(upstream, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+      name: 'canonical-market',
+      plugins: [{ name: 'bundle', source: './plugins/bundle' }],
+    }));
+    git(upstream, 'add', '.claude-plugin', 'plugins');
+    git(upstream, 'commit', '-m', 'add marketplace fixture');
+    git(upstream, 'push', remote, 'main');
+    writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = https://github.com/fixture/selection-market.git\n`);
+    const source = 'bundle@fixture/selection-market';
+    const install = (skill: string) => run(['plugin', 'install', source, '--scope', scope, '--client', 'codex', '--skill', skill, '--yes']);
+    const first = install('fixture');
+    expect(first.exit, first.stdout + first.stderr).toBe(0);
+    const destination = scope === 'user' ? home : project;
+    const configPath = join(destination, '.allagents', 'workspace.yaml');
+    writeFileSync(configPath, 'version: 2\nrepositories: []\nclients: [codex]\nplugins:\n  - source: bundle@canonical-market\n    skills: [fixture]\n    exclude: [private/**]\n    hooks: false\n');
+
+    const second = install('unselected');
+
+    expect(second.exit, second.stdout + second.stderr).toBe(0);
+    const config = load(readFileSync(configPath, 'utf8')) as { plugins: unknown[] };
+    expect(config.plugins).toEqual([{
+      source: 'bundle@canonical-market',
+      skills: ['fixture', 'unselected'],
+      exclude: ['private/**'],
+      hooks: false,
+    }]);
+    for (const skill of ['fixture', 'unselected']) {
+      expect(existsSync(join(destination, '.codex', 'skills', skill, 'SKILL.md'))).toBe(true);
+    }
+  }, 30_000);
+
   test('local plugin installation checks an unchanged remote once and still applies later upstream changes', () => {
     const source = 'https://github.com/fixture/refresh/tree/main/collection/fixture';
     writeFileSync(gitConfig, readFileSync(gitConfig, 'utf8') + `[url "file://${remote}"]\n\tinsteadOf = https://github.com/fixture/refresh.git\n`);

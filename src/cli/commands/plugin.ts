@@ -24,6 +24,7 @@ import {
   buildPluginSyncPlans,
   nativeIdentityMatches,
   preflightNativePluginDeclaration,
+  validateAllPlugins,
   type SyncOptions,
 } from '../../core/sync.js';
 import type { NativeEffectData } from '../../core/native/types.js';
@@ -31,8 +32,7 @@ import { loadSyncState } from '../../core/sync-state.js';
 import {
   addPluginForTarget,
   removePlugin,
-  addEnabledSkill,
-  extractPluginNames,
+  mergeTargetedPluginEntry,
   resolveMarketplacePluginDeclaration,
 } from '../../core/workspace-modify.js';
 import {
@@ -42,7 +42,6 @@ import {
   getInstalledUserPlugins,
   getInstalledProjectPlugins,
   getUserWorkspaceConfig,
-  addUserEnabledSkill,
   type InstalledPluginInfo,
 } from '../../core/user-workspace.js';
 import {
@@ -52,7 +51,7 @@ import {
   type PluginUpdateCheck,
 } from '../../core/plugin.js';
 import { UpdateContext } from '../../core/update-context.js';
-import { getAllSkillsFromPlugins } from '../../core/skills.js';
+import { discoverSkillEntriesFromPluginRoot } from '../../core/skills.js';
 import { validateLocalPlugin } from '../../validators/plugin.js';
 import {
   getWorkspaceStatus,
@@ -100,6 +99,7 @@ import {
   getPluginDisplayName,
   isRemotePluginSource,
   parseRemotePluginSource,
+  normalizePluginPath,
 } from '../../utils/plugin-path.js';
 import {
   parseUserWorkspaceConfig,
@@ -1270,6 +1270,34 @@ const pluginInstallCmd = command({
         }
         prospectiveDeclaration = resolution.declaration;
         registeredMarketplace = resolution.registeredAs;
+        if (skills.length > 0) {
+          const config = isUser
+            ? await getUserWorkspaceConfig()
+            : existsSync(projectConfigPath)
+              ? await parseWorkspaceConfig(projectConfigPath)
+              : undefined;
+          const source = getPluginSource(prospectiveDeclaration);
+          const existing = config?.plugins.find((entry) => getPluginSource(entry) === source);
+          prospectiveDeclaration = mergeTargetedPluginEntry(
+            existing,
+            prospectiveDeclaration,
+            source,
+            config?.clients ?? target.clients,
+          );
+        }
+      }
+
+      if (skills.length > 0) {
+        const entry = typeof prospectiveDeclaration === 'string'
+          ? { source: prospectiveDeclaration }
+          : prospectiveDeclaration;
+        if (entry.skills && !Array.isArray(entry.skills)) {
+          throw new Error('Plugin is in blocklist mode; use skill add to enable an individual skill.');
+        }
+        prospectiveDeclaration = {
+          ...entry,
+          skills: [...new Set([...(entry.skills ?? []), ...skills])],
+        };
       }
 
       // Emit override warnings for project-scope installs
@@ -1306,6 +1334,37 @@ const pluginInstallCmd = command({
         installPlan.clients.length === 0 &&
         installPlan.nativeClients.length > 0;
 
+      if (skills.length > 0 && installPlan) {
+        const discoveryPlan = {
+          ...installPlan,
+          source: isPluginSpec(installPlan.source) || isRemotePluginSource(installPlan.source)
+            ? installPlan.source
+            : normalizePluginPath(installPlan.source, workspacePath),
+        };
+        const [validated] = await withPluginProgress((onProgress) =>
+          validateAllPlugins(
+            [discoveryPlan],
+            isUser ? getHomeDir() : workspacePath,
+            false,
+            onProgress,
+          ),
+        );
+        if (!validated?.success) {
+          throw new Error(validated?.error ?? 'Plugin discovery failed');
+        }
+        const entries = await discoverSkillEntriesFromPluginRoot(
+          validated.resolved,
+          [],
+          validated.components,
+          validated.exclude,
+        );
+        const availableNames = entries.map((entry) => entry.name);
+        const invalid = skills.filter((name) => !availableNames.includes(name));
+        if (invalid.length > 0) {
+          throw new Error(`Unknown skills: ${invalid.join(', ')}. Available: ${availableNames.join(', ')}`);
+        }
+      }
+
       const installTarget = {
         declaration: prospectiveDeclaration,
         clients: target.clients,
@@ -1335,66 +1394,8 @@ const pluginInstallCmd = command({
 
       const displayPlugin = result.normalizedPlugin ?? plugin;
 
-      // Handle --skill flag: write enabledSkills BEFORE sync so only one sync pass is needed
-      if (skills.length > 0) {
-        const workspacePath = isUser ? getHomeDir() : process.cwd();
-
-        // Do an initial sync to fetch the plugin so we can discover its skills.
-        const initialSync = isUser
-          ? await syncUserWorkspace()
-          : await syncProjectWorkspace(workspacePath, { yes });
-
-        if (!initialSync.success) {
-          const error = `Initial sync failed: ${initialSync.error ?? 'Unknown error'}`;
-          if (isJsonMode()) {
-            jsonOutput({ success: false, command: 'plugin install', error });
-            process.exit(1);
-          }
-          console.error(`Error: ${error}`);
-          process.exit(1);
-        }
-
-        const allSkills = await getAllSkillsFromPlugins(workspacePath);
-        const displayNames = extractPluginNames(displayPlugin);
-        const pluginSkills = allSkills.filter((s) =>
-          s.pluginSource === displayPlugin || displayNames.includes(s.pluginName),
-        );
-
-        if (pluginSkills.length === 0) {
-          if (!isJsonMode()) {
-            console.error(`Warning: No skills found in plugin ${displayPlugin}`);
-          }
-        } else {
-          const pluginName = pluginSkills[0]?.pluginName;
-          const availableNames = pluginSkills.map((s) => s.name);
-
-          // Validate requested skill names
-          const invalid = skills.filter((s) => !availableNames.includes(s));
-          if (invalid.length > 0) {
-            const error = `Unknown skills: ${invalid.join(', ')}. Available: ${availableNames.join(', ')}`;
-            if (isJsonMode()) {
-              jsonOutput({ success: false, command: 'plugin install', error });
-              process.exit(1);
-            }
-            console.error(`Error: ${error}`);
-            process.exit(1);
-          }
-
-          // Add each skill to enabledSkills
-          for (const skillName of skills) {
-            const skillKey = `${pluginName}:${skillName}`;
-            const addResult = isUser
-              ? await addUserEnabledSkill(skillKey)
-              : await addEnabledSkill(skillKey, workspacePath);
-            if (!addResult.success && !isJsonMode()) {
-              console.error(`Warning: ${addResult.error}`);
-            }
-          }
-
-          if (!isJsonMode()) {
-            console.log(`\nEnabled skills: ${skills.join(', ')}`);
-          }
-        }
+      if (skills.length > 0 && !isJsonMode()) {
+        console.log(`\nEnabled skills: ${skills.join(', ')}`);
       }
 
       if (result.replaced && !isJsonMode()) {
@@ -1408,7 +1409,6 @@ const pluginInstallCmd = command({
         console.log(`Installing plugin "${displayPlugin}"...\n`);
       }
 
-      // Single sync pass (enabledSkills already written if --skill was used)
       const { ok: syncOk, syncData, error: syncError } = isUser
         ? await runUserSyncAndPrint()
         : await runSyncAndPrint({ yes });

@@ -402,7 +402,15 @@ Only enable specific skills from the plugin. Can be specified multiple times:
 allagents plugin install superpowers@marketplace --skill brainstorming --skill tdd
 ```
 
-When used, all other skills from the plugin are implicitly disabled. Skills can be added later with `skill add`.
+On a new installation, only the named skills are enabled. Reinstalling a plugin
+with an existing allowlist extends that list. Skills can also be added later
+with `skill add`.
+
+AllAgents discovers and validates the requested names before saving the plugin
+declaration or synchronizing client files. It does not install other skills as
+an intermediate discovery step. Unknown names fail without changing the plugin
+declaration or client files. A plugin using `skills.exclude` must use `skill add`
+to enable an individual skill rather than `plugin install --skill`.
 
 When the selected client uses native install mode, this command validates the
 runtime, source, scope, and live inventory before editing `workspace.yaml`.

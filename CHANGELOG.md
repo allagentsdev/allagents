@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.24.0](https://github.com/allagentsdev/allagents/compare/v1.23.0...v1.24.0) (2026-11-10)
+
+
+### Added
+
+* **mcp:** expand managed remote server compatibility ([#609](https://github.com/allagentsdev/allagents/issues/609)) ([9823539](https://github.com/allagentsdev/allagents/commit/982353986e659585b831e185a5907d6d50eec368))
+
+
+### Fixed
+
+* **deps-dev:** bump @biomejs/biome ([#610](https://github.com/allagentsdev/allagents/issues/610)) ([3ca3efc](https://github.com/allagentsdev/allagents/commit/3ca3efc83f82f4eb7fbe97bf200e869f13362c1c))
+
 ## [1.23.0](https://github.com/allagentsdev/allagents/compare/v1.22.0...v1.23.0) (2026-11-04)
 
 

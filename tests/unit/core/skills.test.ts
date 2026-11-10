@@ -78,6 +78,21 @@ describe('getAllSkillsFromPlugins', () => {
     expect(skills.every((skill) => skill.path.startsWith(join(pluginDir, 'custom')))).toBe(true);
   });
 
+  it('sorts discovered siblings recursively while preserving declared source order', async () => {
+    for (const path of ['z-library/z-group/beta', 'z-library/z-group/alpha', 'z-library/a-group/zed', 'a-library/first']) {
+      await mkdir(join(pluginDir, path), { recursive: true });
+      await writeFile(join(pluginDir, path, 'SKILL.md'), '# Skill');
+    }
+    await writeFile(join(pluginDir, 'plugin.json'), JSON.stringify({
+      name: 'ordered', skills: ['./z-library', './a-library'],
+    }));
+
+    const entries = await discoverSkillEntriesFromPluginRoot(pluginDir);
+    expect(entries.map((entry) => entry.subpath)).toEqual([
+      'a-group/zed', 'z-group/alpha', 'z-group/beta', 'first',
+    ]);
+  });
+
   it('inventories an explicit plugin-root collection without a root SKILL.md', async () => {
     await mkdir(join(pluginDir, '.claude-plugin'), { recursive: true });
     await writeFile(join(pluginDir, '.claude-plugin/plugin.json'), JSON.stringify({

@@ -94,7 +94,7 @@ describe('installed plugin MCP selection', () => {
 
     await runPlugins(context(), statusCache('project', first));
 
-    const options = updateSelectMock.mock.calls.find(([input]) => input.message.startsWith(`Plugin: ${first} [project]`))?.[0].options;
+    const options = updateSelectMock.mock.calls.find(([input]) => input.message.startsWith('Plugin: one [project]'))?.[0].options;
     expect(options).toContainEqual({ label: 'MCP servers', value: 'mcp_servers' });
     expect(updateMultiselectMock.mock.calls[0]?.[0].options).toEqual([
       { label: 'alpha', value: 'alpha' },
@@ -174,7 +174,7 @@ describe('installed plugin MCP selection', () => {
 
     await runPlugins(context(), statusCache('project', second));
 
-    const options = updateSelectMock.mock.calls.find(([input]) => input.message.startsWith(`Plugin: ${second} [project]`))?.[0].options;
+    const options = updateSelectMock.mock.calls.find(([input]) => input.message.startsWith('Plugin: one [project]'))?.[0].options;
     expect(options?.some(({ value }) => value === 'mcp_servers')).toBe(false);
     expect(updateMultiselectMock).not.toHaveBeenCalled();
   });
@@ -186,7 +186,7 @@ describe('installed plugin MCP selection', () => {
     await runPlugins(context(), statusCache('project', first));
 
     const options = updateSelectMock.mock.calls.find(
-      ([input]) => input.message.startsWith(`Plugin: ${first} [project]`),
+      ([input]) => input.message.startsWith('Plugin: one [project]'),
     )?.[0].options;
     expect(options?.some(({ value }) => value === 'mcp_servers')).toBe(false);
   });
@@ -199,7 +199,7 @@ describe('installed plugin MCP selection', () => {
     await runPlugins(context(), statusCache('project', first));
 
     const options = updateSelectMock.mock.calls.find(
-      ([input]) => input.message.startsWith(`Plugin: ${first} [project]`),
+      ([input]) => input.message.startsWith('Plugin: one [project]'),
     )?.[0].options;
     expect(options).toBeDefined();
     expect(options?.some(({ value }: { value: string }) => value === 'mcp_servers')).toBe(false);
@@ -215,7 +215,7 @@ describe('installed plugin MCP selection', () => {
     await runPlugins(context(), statusCache('user', first));
 
     const detail = updateSelectMock.mock.calls.find(
-      ([input]) => input.message.startsWith(`Plugin: ${first} [user]`),
+      ([input]) => input.message.startsWith('Plugin: one [user]'),
     )?.[0];
     expect(detail).toBeDefined();
     expect(detail?.options.some(({ value }) => value === 'mcp_servers')).toBe(false);
@@ -236,7 +236,7 @@ describe('installed plugin MCP selection', () => {
     await runPlugins(context(), statusCache('project', first));
 
     const detail = updateSelectMock.mock.calls.find(
-      ([input]) => input.message.startsWith(`Plugin: ${first} [project]`),
+      ([input]) => input.message.startsWith('Plugin: one [project]'),
     )?.[0];
     expect(detail).toBeDefined();
     const actions = detail?.options?.map(({ value }) => value);

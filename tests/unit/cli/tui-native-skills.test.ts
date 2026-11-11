@@ -82,7 +82,7 @@ test('plugin detail hides native skill browsing and auto-enable actions', async 
   expect(options.map((option) => option.value)).not.toContain('toggle_auto_enable');
 });
 
-test('coexisting packages identify clients and install modes in list and detail', async () => {
+test('coexisting packages show client names in the list and install methods in details', async () => {
   const piSource = 'npm:pi-compound-engineering@3.19.2';
   await writeFile(join(workspace, '.allagents', 'workspace.yaml'), dump({
     repositories: [], clients: ['pi:native', 'codex'],
@@ -99,11 +99,11 @@ test('coexisting packages identify clients and install modes in list and detail'
   await runPlugins(context);
   const menus = updateSelectMock.mock.calls.map(([options]) => options);
   const list = menus.find((menu) => menu.message === 'Plugins');
-  expect(list?.options?.find((option) => option.value === `project:${piSource}`)?.hint).toContain('native pi');
-  expect(list?.options?.find((option) => option.value === `project:${plugin}`)?.hint).toContain('file codex');
+  expect(list?.options?.find((option) => option.value === `project:${piSource}`)?.hint).toEndWith(' · Pi');
+  expect(list?.options?.find((option) => option.value === `project:${plugin}`)?.hint).toEndWith(' · Codex');
   expect(list?.options?.map((option) => option.value)).not.toContain('__update_all__');
-  expect(menus.some((menu) => menu.message.includes(`${piSource} [project] · native pi`))).toBe(true);
-  expect(menus.some((menu) => menu.message.includes(`${plugin} [project] · file codex`))).toBe(true);
+  expect(menus.some((menu) => menu.message.includes('pi-compound-engineering [project] · native pi'))).toBe(true);
+  expect(menus.some((menu) => menu.message.includes('plugin [project] · file codex'))).toBe(true);
 });
 
 test('file override retains skill controls for a native-default client', async () => {

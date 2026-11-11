@@ -4,6 +4,7 @@ import { runInit } from './init.js';
 import { runUpdateAllPlugins } from './plugins.js';
 import type { TuiContext } from '../context.js';
 import type { TuiCache } from '../cache.js';
+import { getPluginPresentation } from '../plugin-display.js';
 
 const { select } = p;
 
@@ -36,6 +37,7 @@ export async function runStatus(context: TuiContext, cache?: TuiCache): Promise<
     lines.push('');
 
     const userPlugins = status.userPlugins ?? [];
+    const peers = [...status.plugins, ...userPlugins];
     const hasProjectPlugins = status.plugins.length > 0;
     const hasUserPlugins = userPlugins.length > 0;
 
@@ -47,7 +49,8 @@ export async function runStatus(context: TuiContext, cache?: TuiCache): Promise<
       lines.push('Project plugins:');
       for (const plugin of status.plugins) {
         const icon = plugin.available ? '\u2713' : '\u2717';
-        lines.push(`  ${icon} ${plugin.source} (${plugin.kind}, ${plugin.type})`);
+        const presentation = getPluginPresentation(plugin, peers);
+        lines.push(`  ${icon} ${presentation.name} (${plugin.kind} · ${presentation.source})`);
       }
     }
 
@@ -56,7 +59,8 @@ export async function runStatus(context: TuiContext, cache?: TuiCache): Promise<
       lines.push('User plugins:');
       for (const plugin of userPlugins) {
         const icon = plugin.available ? '\u2713' : '\u2717';
-        lines.push(`  ${icon} ${plugin.source} (${plugin.kind}, ${plugin.type})`);
+        const presentation = getPluginPresentation(plugin, peers);
+        lines.push(`  ${icon} ${presentation.name} (${plugin.kind} · ${presentation.source})`);
       }
     }
 

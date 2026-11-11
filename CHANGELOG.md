@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.1](https://github.com/allagentsdev/allagents/compare/v1.24.0...v1.24.1) (2026-11-10)
+
+
+### Fixed
+
+* **plugin:** apply skill selection before syncing ([#613](https://github.com/allagentsdev/allagents/issues/613)) ([1045f7e](https://github.com/allagentsdev/allagents/commit/1045f7e93e3f920c7ae9b700d447fa6ecfe1a227))
+
 ## [1.24.0](https://github.com/allagentsdev/allagents/compare/v1.23.0...v1.24.0) (2026-11-10)
 
 

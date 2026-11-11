@@ -102,8 +102,8 @@ test('coexisting packages identify clients and install modes in list and detail'
   expect(list?.options?.find((option) => option.value === `project:${piSource}`)?.hint).toContain('native pi');
   expect(list?.options?.find((option) => option.value === `project:${plugin}`)?.hint).toContain('file codex');
   expect(list?.options?.map((option) => option.value)).not.toContain('__update_all__');
-  expect(menus.some((menu) => menu.message.includes(`${piSource} [project] · native pi`))).toBe(true);
-  expect(menus.some((menu) => menu.message.includes(`${plugin} [project] · file codex`))).toBe(true);
+  expect(menus.some((menu) => menu.message.includes('pi-compound-engineering [project] · native pi'))).toBe(true);
+  expect(menus.some((menu) => menu.message.includes('plugin [project] · file codex'))).toBe(true);
 });
 
 test('file override retains skill controls for a native-default client', async () => {

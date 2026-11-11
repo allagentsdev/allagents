@@ -86,7 +86,8 @@ import {
   type InstallScope,
 } from '../../install-target.js';
 import { createClackInstallTargetPromptPort } from '../install-target-prompts.js';
-import { formatPluginSource } from '../../../utils/plugin-path.js';
+import { formatPluginSource, getPluginDisplayName } from '../../../utils/plugin-path.js';
+import { getPluginPresentation } from '../plugin-display.js';
 
 const { select, text, confirm, multiselect, autocomplete } = p;
 
@@ -688,7 +689,7 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
 
       const pluginTargets = new Map<
         string,
-        { source: string; scope: 'project' | 'user'; index: number }
+        { source: string; scope: 'project' | 'user'; index: number; kind: 'skill' | 'plugin'; name: string }
       >();
       // Gather installed plugins from status
       let status = cache?.getStatus();
@@ -698,6 +699,7 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
       }
 
       if (status.success) {
+        const peers = [...status.plugins, ...(status.userPlugins ?? [])];
         for (const scope of ['project', 'user'] as const) {
           const plugins = scope === 'project' ? status.plugins : (status.userPlugins ?? []);
           if (plugins.length === 0) continue;
@@ -709,15 +711,16 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
           for (const [index, plugin] of plugins.entries()) {
             const count = counts.get(plugin.source) ?? 1;
             const key = `${scope}:${plugin.source}${count > 1 ? `\0${index}` : ''}`;
-            pluginTargets.set(key, { source: plugin.source, scope, index });
+            const presentation = getPluginPresentation(plugin, peers);
+            pluginTargets.set(key, { source: plugin.source, scope, index, kind: plugin.kind, name: presentation.name });
             const entry = config?.plugins[index];
             const install = config && entry && getPluginSource(entry) === plugin.source
               ? describePluginInstall(entry, config.clients, scope)
               : '';
             options.push({
-              label: plugin.source,
+              label: presentation.name,
               value: key,
-              hint: `${plugin.kind} · ${plugin.type}${install ? ` · ${install}` : ''} · ${scope}${count > 1 ? ` · entry ${index + 1}` : ''}`,
+              hint: `${plugin.kind} · ${presentation.source} · ${scope}${install ? ` · ${install}` : ''}${count > 1 ? ` · entry ${index + 1}` : ''}`,
             });
           }
         }
@@ -892,15 +895,18 @@ async function runPluginMcpSelection(
  * Shows actions for a specific installed plugin: browse skills, remove.
  */
 async function runPluginDetail(
-  { source: pluginSource, scope, index }: {
+  { source: pluginSource, scope, index, kind, name }: {
     source: string;
     scope: 'project' | 'user';
     index: number;
+    kind: 'skill' | 'plugin';
+    name: string;
   },
   context: TuiContext,
   cache?: TuiCache,
 ): Promise<void> {
   let mcpSelection: PluginMcpSelection | null | undefined;
+  p.note(terminalSafe(pluginSource), 'Source');
 
   while (true) {
     const workspacePath = context.workspacePath ?? process.cwd();
@@ -924,7 +930,7 @@ async function runPluginDetail(
       : 'Auto-enable new skills: ON';
 
     const action = await select({
-      message: `Plugin: ${pluginSource} [${scope}]${install ? ` · ${install}` : native ? ' · native' : ''}`,
+      message: `${kind === 'skill' ? 'Skill' : 'Plugin'}: ${name} [${scope}]${install ? ` · ${install}` : native ? ' · native' : ''}`,
       options: [
         ...(!native
           ? [{ label: 'Browse skills', value: 'browse' as const }]
@@ -1028,7 +1034,7 @@ async function runPluginDetail(
 
     if (action === 'remove') {
       const confirmed = await confirm({
-        message: `Remove plugin "${pluginSource}"?`,
+        message: `Remove ${kind} "${name}" [${scope}]?`,
       });
 
       if (p.isCancel(confirmed) || !confirmed) {
@@ -1036,7 +1042,7 @@ async function runPluginDetail(
       }
 
       const s = p.spinner();
-      s.start('Removing plugin...');
+      s.start(`Removing ${kind}...`);
 
       const result = scope === 'project'
         ? await removePlugin(pluginSource, workspacePath, index)
@@ -1053,7 +1059,7 @@ async function runPluginDetail(
           : await syncUserWorkspace({ spinner: s });
         if (!synced.success) throw new Error(synced.error ?? ((synced.warnings ?? []).join('; ') || 'Cleanup failed'));
         s.stop('Removed');
-        p.note(`Removed: ${pluginSource} [${scope}]`, 'Success');
+        p.note(`Removed: ${name} [${scope}]`, 'Success');
       } catch (error) {
         s.stop('Cleanup failed');
         p.note(`Declaration removed, but cleanup failed for ${pluginSource} [${scope}]: ${error instanceof Error ? error.message : String(error)}. Run allagents update to retry cleanup.`, 'Error');
@@ -1103,7 +1109,7 @@ export async function runBrowsePluginSkills(
     const initialValues = pluginSkills.filter((s) => !s.disabled).map((s) => s.name);
 
     const selected = await multiselect({
-      message: `Toggle skills in ${pluginSource} (selected = enabled)`,
+      message: `Toggle skills in ${terminalSafe(getPluginDisplayName(pluginSource))} (selected = enabled)`,
       options,
       initialValues,
       required: false,

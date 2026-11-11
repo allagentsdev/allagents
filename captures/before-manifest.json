@@ -1,0 +1,22 @@
+[
+  {
+    "snapshot": "/tmp/allagents-skill-labels-e2e/evidence/before-main.json",
+    "caption": "Before: main menu",
+    "duration": 3
+  },
+  {
+    "snapshot": "/tmp/allagents-skill-labels-e2e/evidence/before-plugins.json",
+    "caption": "Before: full URLs fill the Plugins list",
+    "duration": 3
+  },
+  {
+    "snapshot": "/tmp/allagents-skill-labels-e2e/evidence/before-detail.json",
+    "caption": "Before: full URL in plugin detail",
+    "duration": 3
+  },
+  {
+    "snapshot": "/tmp/allagents-skill-labels-e2e/evidence/before-workspace.json",
+    "caption": "Before: full URLs in Workspace status",
+    "duration": 3
+  }
+]

@@ -1,0 +1,56 @@
+{
+  "status": "complete",
+  "verdict": "Ready to merge",
+  "scope": {
+    "base": "9d9af09c4ebce89cdaa30be6da9bfc0f54818484",
+    "branch": "fix/tui-skill-labels",
+    "head_sha": "9d9af09c4ebce89cdaa30be6da9bfc0f54818484",
+    "pr_url": null,
+    "files_changed": 9
+  },
+  "intent": "Present installed skills and plugins with a short name, kind, compact origin and scope in Plugins and Workspace status. Preserve raw source, scope and declaration-index action targeting, retain full source in details, and distinguish duplicate names with path/ref hints.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness"
+  ],
+  "findings": [],
+  "actionable_findings": [],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "deployment_notes": [],
+  "residual_risks": [],
+  "testing_gaps": [],
+  "coverage": {
+    "depth": "lite",
+    "scope_mode": "local-aligned (base:origin/main; tracked staged and working-tree changes)",
+    "criteria": [
+      "AGENTS.md",
+      "CLAUDE.md (@AGENTS.md)",
+      " .agents/architecture.md",
+      " .agents/verification.md",
+      " .agents/tui-dogfooding.md"
+    ],
+    "criteria_fallback": "No CODING_STANDARDS.md governs these paths; root instruction files and their relevant linked guides supplied criteria.",
+    "compound_packs": "None declared.",
+    "review_policy": {
+      "sources": [],
+      "removed": 0,
+      "regraded": 0,
+      "not_applied": []
+    },
+    "plan": "No explicit plan or unambiguous branch-related plan found; reviewed against the supplied user intent.",
+    "validation": [
+      "Independently ran bun test tests/unit/cli/tui-plugin-display.test.ts tests/unit/cli/tui-native-skills.test.ts tests/unit/cli/tui-plugin-mcp.test.ts: 17 pass, 0 fail, 54 assertions.",
+      "Inspected real status/source parsing and exact selection source/scope/index propagation."
+    ],
+    "limitations": [
+      "Lite path ran in this context; no reviewer subagents were dispatched.",
+      "Did not assess learnings, agent-native parity or deployment notes.",
+      "Caller owns completion of full-suite checks, final built TUI E2E, and published MP4 evidence before push; this receipt covers code and focused behavioral tests."
+    ]
+  },
+  "artifact_path": "/tmp/compound-engineering-1000/ce-code-review/skill-labels-2d775530",
+  "run_id": "skill-labels-2d775530"
+}

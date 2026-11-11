@@ -1,0 +1,147 @@
+[
+  {
+    "snapshot": "captures/unique-main.json",
+    "caption": "Single skill: enter Workspace from the main menu",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/unique-workspace.json",
+    "caption": "Workspace status: short name, skill type and repository",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/unique-workspace-cancel.json",
+    "caption": "Ctrl+C returns to the main menu",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/unique-main-plugins-selected.json",
+    "caption": "Enter Plugins",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/unique-plugins.json",
+    "caption": "Plugin resources use short names",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/unique-skill-selected.json",
+    "caption": "Selected skill: compact source, scope and install client",
+    "duration": 4
+  },
+  {
+    "snapshot": "captures/unique-detail.json",
+    "caption": "Skill details retain the exact configured URL",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/unique-browse.json",
+    "caption": "Browse skills also uses the short name",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/unique-browse-cancel.json",
+    "caption": "Ctrl+C returns to skill details",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/unique-missing-source.json",
+    "caption": "Temporarily unavailable source: details remain usable",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/unique-source-restored.json",
+    "caption": "Restoring the source allows browsing again",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/unique-detail-cancel.json",
+    "caption": "Ctrl+C returns to the resource list",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/unique-final-main.json",
+    "caption": "Ctrl+C returns to the main menu",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-main.json",
+    "caption": "Duplicate-name fixture: two project skills and one user skill",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/green-main-plugins-selected.json",
+    "caption": "Enter Plugins with duplicate names",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-plugins.json",
+    "caption": "Same-name resources remain separate entries",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/green-plugins-selected.json",
+    "caption": "Duplicate names include the source path and ref",
+    "duration": 4
+  },
+  {
+    "snapshot": "captures/green-detail.json",
+    "caption": "Details retain the selected source and project scope",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/green-detail-back.json",
+    "caption": "Back returns to the resource list",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-main-return.json",
+    "caption": "Back returns to the main menu",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-workspace.json",
+    "caption": "Workspace status identifies each source and scope",
+    "duration": 4
+  },
+  {
+    "snapshot": "captures/green-workspace-back.json",
+    "caption": "Back preserves the workspace scope",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-user-main-selected.json",
+    "caption": "Enter Plugins to manage the user installation",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-user-plugins.json",
+    "caption": "Project and user installations remain separate",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/green-user-selected.json",
+    "caption": "Choose the user-scoped source",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/green-user-detail.json",
+    "caption": "User skill details identify the local source",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/green-user-remove-confirm.json",
+    "caption": "Removal confirmation shows the short name and scope",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/green-user-removed.json",
+    "caption": "User skill removed; project entries and files preserved",
+    "duration": 4
+  },
+  {
+    "snapshot": "captures/green-plugins-cancel.json",
+    "caption": "Return to the main menu after removal",
+    "duration": 2
+  }
+]

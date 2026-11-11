@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.2](https://github.com/allagentsdev/allagents/compare/v1.24.1...v1.24.2) (2026-11-11)
+
+
+### Fixed
+
+* **cli:** show short skill names in interactive menus ([#615](https://github.com/allagentsdev/allagents/issues/615)) ([7eadf23](https://github.com/allagentsdev/allagents/commit/7eadf238a1a48eba8455c65cfce1d4a4d1227336))
+
 ## [1.24.1](https://github.com/allagentsdev/allagents/compare/v1.24.0...v1.24.1) (2026-11-10)
 
 

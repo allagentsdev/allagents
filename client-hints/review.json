@@ -1,0 +1,57 @@
+{
+  "status": "complete",
+  "verdict": "Ready to merge",
+  "scope": {
+    "base": "505c4d919d1c6805bb6151bce42761bf2e102599",
+    "branch": "fix/tui-skill-labels",
+    "head_sha": "505c4d919d1c6805bb6151bce42761bf2e102599",
+    "pr_url": null,
+    "files_changed": 4
+  },
+  "intent": "Show product names such as Codex and Pi in installed-resource list hints while preserving installation methods in details, exact resource targeting, and native/file behavior.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness"
+  ],
+  "findings": [],
+  "actionable_findings": [],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [],
+  "deployment_notes": [],
+  "residual_risks": [],
+  "testing_gaps": [],
+  "coverage": {
+    "depth": "lite",
+    "criteria": [
+      "AGENTS.md",
+      "CLAUDE.md (includes AGENTS.md)",
+      ".agents/architecture.md",
+      ".agents/verification.md",
+      ".agents/tui-dogfooding.md",
+      ".agents/workflow.md"
+    ],
+    "scope_mode": "base:HEAD, current working tree",
+    "compound_packs": {
+      "roots": [],
+      "warnings": [],
+      "errors": []
+    },
+    "review_policy": {
+      "sources": [],
+      "removed": 0,
+      "regraded": 0,
+      "not_applied": []
+    },
+    "validation": "Independently ran 17 display/native/MCP tests: 17 pass, 0 fail, 54 assertions. Verified native/file plan client identities and canonical registry name lookup.",
+    "limitations": [
+      "No reviewer subagents dispatched; no adversarial material-consequence scenario exists in this presentation-only diff.",
+      "No matching plan found; explicit user request is the requirements source.",
+      "Caller owns final built TUI walkthrough, refreshed MP4 evidence, and CI verification before readiness.",
+      "Learnings, agent-native parity, deployment notes and pre-existing findings were not assessed."
+    ]
+  },
+  "artifact_path": "/tmp/compound-engineering-1000/ce-code-review/client-hints-5dcb1ca8",
+  "run_id": "client-hints-5dcb1ca8"
+}

@@ -1,5 +1,7 @@
 # Interactive skill labels
 
+Latest follow-up: [client names in list hints](client-hints/README.md), including an updated [walkthrough](client-hints/client-hints.mp4) and [screenshot](client-hints/skill-selected.png).
+
 Built commit: `505c4d9` (`fix/tui-skill-labels`), based on `9d9af09`.
 
 [Walkthrough](skill-labels.mp4) · [Before](before.mp4) · [Selected skill](skill-selected.png)

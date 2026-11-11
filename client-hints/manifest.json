@@ -1,0 +1,102 @@
+[
+  {
+    "snapshot": "captures/main.json",
+    "caption": "Enter Plugins from the main menu",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/main-plugins-selected.json",
+    "caption": "Select Plugins",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/plugins.json",
+    "caption": "Installed skill uses its short name",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/skill-selected.json",
+    "caption": "List hint shows Codex",
+    "duration": 4
+  },
+  {
+    "snapshot": "captures/detail.json",
+    "caption": "Installation method remains in details",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/detail-back.json",
+    "caption": "Back returns to the skill list",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/main-return.json",
+    "caption": "Back returns to the main menu",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/again-plugins.json",
+    "caption": "Enter Plugins again",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/again-selected.json",
+    "caption": "Friendly client name preserves source and scope",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/again-detail.json",
+    "caption": "Open the same skill",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/missing-source.json",
+    "caption": "Unavailable source returns to details",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/source-restored.json",
+    "caption": "Restoring the source allows browsing again",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/detail-cancel.json",
+    "caption": "Ctrl+C returns to the list",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/plugins-cancel.json",
+    "caption": "Ctrl+C returns to the main menu",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/remove-plugins.json",
+    "caption": "Enter Plugins for removal",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/remove-selected.json",
+    "caption": "Choose the Codex installation",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/remove-detail.json",
+    "caption": "Details retain the configured source",
+    "duration": 1
+  },
+  {
+    "snapshot": "captures/remove-confirm.json",
+    "caption": "Confirm removal in the selected scope",
+    "duration": 2
+  },
+  {
+    "snapshot": "captures/removed.json",
+    "caption": "Declaration and installed skill removed",
+    "duration": 3
+  },
+  {
+    "snapshot": "captures/final-main.json",
+    "caption": "Return to the main menu",
+    "duration": 2
+  }
+]

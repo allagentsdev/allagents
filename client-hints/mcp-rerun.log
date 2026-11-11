@@ -1,0 +1,34 @@
+bun test v1.4.3 (c6da4a4d3)
+
+tests/unit/core/mcp-runtime.test.ts:
+(pass) configured MCP resolution > reads only the named inline declaration from the selected destination [22.96ms]
+(pass) configured MCP resolution > rejects exact argument references before resolving environment or spawning [2.58ms]
+(pass) configured MCP resolution > fails a missing environment reference before spawning the child [2.26ms]
+(pass) configured MCP resolution > spawns stdio directly with resolved env and only the safe inherited baseline [194.94ms]
+(pass) configured MCP resolution > accepts a 16 MiB parsed result through the bounded stdio wire frame [342.88ms]
+(pass) configured MCP resolution > accepts a 16 MiB parsed result through the bounded HTTP wire response [220.11ms]
+(pass) configured MCP resolution > cancels stdio initialization and observes the spawned child exit [2026.79ms]
+(pass) configured MCP resolution > normalizes HTTP initialization cancellation and closes the request [37.37ms]
+(pass) finite managed lifecycle > retains a successful operation when cleanup fails and closes exactly once [0.99ms]
+(pass) finite managed lifecycle > retains operation failure separately from successful cleanup [0.85ms]
+(pass) finite managed lifecycle > cancels before invocation and still cleans up exactly once [0.60ms]
+(pass) finite managed lifecycle > fails closed without exposing reflected configured credentials [0.52ms]
+(pass) finite managed lifecycle > normalizes call-time invalid grants to an exact destination reauth command [41.15ms]
+(pass) finite managed lifecycle > bounds HTTP termination, aborts the hanging DELETE, and keeps the result [76.37ms]
+(pass) bounded MCP tool catalog > aggregates empty and non-empty pages in order and forwards opaque cursors [0.51ms]
+(pass) bounded MCP tool catalog > rejects repeated cursors and duplicate names across pages [0.39ms]
+(pass) bounded MCP tool catalog > accepts exactly 100 pages and rejects a page beyond the limit [1.77ms]
+(pass) bounded MCP tool catalog > accepts exactly 10,000 tools and rejects the first tool above the limit [35.15ms]
+(pass) bounded MCP tool catalog > accepts the exact aggregate byte budget and rejects one byte above it [118.50ms]
+(pass) bounded MCP tool catalog > counts cumulative opaque cursor bytes against the catalog budget [142.06ms]
+(pass) bounded MCP tool catalog > accepts an exact tools page byte budget and rejects one byte above it [63.67ms]
+(pass) bounded MCP tool catalog > accepts exact schema depth and node limits and rejects the first value above each [23.98ms]
+(pass) bounded MCP tool catalog > rejects required-task tools before calling and invokes ordinary tools from the aggregate [0.40ms]
+(pass) bounded MCP tool catalog > preserves complete structured results that match the selected aggregate tool schema [11.67ms]
+(pass) bounded MCP tool catalog > rejects structured results that violate an earlier aggregate page schema [3.45ms]
+(pass) bounded MCP tool catalog > accepts an exact call result byte budget and rejects one byte above it [64.54ms]
+
+ 26 pass
+ 0 fail
+ 70 expect() calls
+Ran 26 tests across 1 file. [3.70s]

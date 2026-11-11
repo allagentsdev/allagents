@@ -58,7 +58,7 @@ import {
   getHomeDir,
 } from '../../../constants.js';
 import { getPluginSource, type ClientEntry, type PluginEntry } from '../../../models/workspace-config.js';
-import { mcpClientIdsForScope } from '../../../models/client-mapping.js';
+import { findHostById, mcpClientIdsForScope } from '../../../models/client-mapping.js';
 import { readPluginMcpConfig } from '../../../core/vscode-mcp.js';
 import type { TuiContext } from '../context.js';
 import type { TuiCache } from '../cache.js';
@@ -665,13 +665,17 @@ function describePluginInstall(
   entry: PluginEntry,
   clients: ClientEntry[],
   scope: 'project' | 'user',
-): string {
+): { clients: string; methods: string } {
   const plan = buildPluginSyncPlans([entry], clients, scope).plans[0];
-  if (!plan) return '';
-  return [
-    ...plan.nativeClients.map((client) => `native ${client}`),
-    ...plan.clients.map((client) => `file ${client}`),
-  ].join(', ');
+  if (!plan) return { clients: '', methods: '' };
+  return {
+    clients: [...new Set([...plan.nativeClients, ...plan.clients])]
+      .map((client) => findHostById(client)?.name ?? client).join(', '),
+    methods: [
+      ...plan.nativeClients.map((client) => `native ${client}`),
+      ...plan.clients.map((client) => `file ${client}`),
+    ].join(', '),
+  };
 }
 
 /**
@@ -715,7 +719,7 @@ export async function runPlugins(context: TuiContext, cache?: TuiCache): Promise
             pluginTargets.set(key, { source: plugin.source, scope, index, kind: plugin.kind, name: presentation.name });
             const entry = config?.plugins[index];
             const install = config && entry && getPluginSource(entry) === plugin.source
-              ? describePluginInstall(entry, config.clients, scope)
+              ? describePluginInstall(entry, config.clients, scope).clients
               : '';
             options.push({
               label: presentation.name,
@@ -923,7 +927,7 @@ async function runPluginDetail(
     const config = await getPluginConfiguration(scope, workspacePath);
     const entry = config?.plugins[index];
     const install = config && entry && getPluginSource(entry) === pluginSource
-      ? describePluginInstall(entry, config.clients, scope)
+      ? describePluginInstall(entry, config.clients, scope).methods
       : '';
     const autoEnableLabel = currentMode === 'allowlist'
       ? 'Auto-enable new skills: OFF'

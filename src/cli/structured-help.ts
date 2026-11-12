@@ -152,6 +152,9 @@ function formatStructuredHelp(
     result.options = meta.options;
   }
   result.examples = meta.examples;
+  if (meta.workflows && meta.workflows.length > 0) {
+    result.workflows = meta.workflows;
+  }
   if (meta.outputSchema) {
     result.output_schema = meta.outputSchema;
   }

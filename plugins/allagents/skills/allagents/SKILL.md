@@ -1,6 +1,6 @@
 ---
 name: allagents
-description: Manage AllAgents workspaces, plugins, skills, client targets, global profiles, and MCP servers through the allagents CLI. Use when a user asks to initialize, inspect, update, or configure AllAgents; install or remove plugins or skills; manage profiles; or add, inspect, authenticate, update, or remove MCP servers. Resolve current command syntax from machine-readable help instead of relying on remembered flags.
+description: Manage AllAgents workspaces, plugins, skills, client targets, global profiles, and MCP servers through the allagents CLI. Use when a user asks to initialize, inspect, update, or configure AllAgents; schedule automatic updates; install or remove plugins or skills; manage profiles; or add, inspect, authenticate, update, or remove MCP servers. Resolve current command syntax from machine-readable help instead of relying on remembered flags.
 ---
 
 # AllAgents CLI
@@ -26,6 +26,8 @@ Examples and returned `help_command` values use the canonical `allagents` token.
 5. Follow the leaf's `when_to_use`, positionals, options, examples, interaction requirement, expected output, output schema, and JSON field allowlist.
 
 The structured response is authoritative. Do not rely on remembered flags, copied examples, aliases, destination behavior, or mutation semantics. If the installed CLI does not advertise an operation, do not invent it.
+
+For an explicit request to schedule automatic updates, follow the update entry's `help_command` and load its `workflows` recipe. The CLI owns scheduling guidance as well as command contracts; keep the recipe there. If the installed version omits it, report that limitation rather than inventing a scheduling command. Discovery alone does not authorize scheduler changes.
 
 ## Execute through the discovered surface
 

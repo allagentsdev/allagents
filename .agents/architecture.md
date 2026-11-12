@@ -72,6 +72,15 @@ Synchronization results are surfaced by multiple entry points:
 
 Put shared formatting in `src/cli/format-sync.ts` rather than duplicating it at call sites. Keep JSON, redirected human output, and interactive TTY behavior as distinct contracts.
 
+## Agent workflow guidance
+
+Keep operational recipes in CLI metadata and disclose them through the owning
+leaf's structured help `workflows` field. Root and group help remain indexes;
+guidance is not an executable command. The existing AllAgents skill discovers
+recipes rather than copying them. Scheduled-update guidance configures
+user-owned external jobs only on explicit request; help has no scheduler side
+effects.
+
 ## Plugin source and destination identity
 
 Resolve plugin/client install modes through `resolveInstallMode`: plugin-wide

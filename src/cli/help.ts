@@ -29,6 +29,8 @@ export interface CommandPositional {
 
 export interface AgentCommandMeta extends CommandMeta {
   command: string;
+  /** Agent-facing recipes disclosed only in full structured leaf help. */
+  workflows?: readonly CommandWorkflow[];
   positionals?: CommandPositional[];
   options?: CommandOption[];
   outputSchema?: Record<string, unknown>;
@@ -45,6 +47,12 @@ export interface AgentCommandMeta extends CommandMeta {
   jsonFields?: readonly string[];
   /** Skip the automatic update check for commands that must be strictly read-only. */
   skipUpdateCheck?: true;
+}
+
+export interface CommandWorkflow {
+  id: string;
+  description: string;
+  steps: readonly string[];
 }
 
 /**

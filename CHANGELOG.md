@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.0](https://github.com/allagentsdev/allagents/compare/v1.24.2...v1.25.0) (2026-11-12)
+
+
+### Added
+
+* **cli:** ship optional scheduled-update guidance ([#617](https://github.com/allagentsdev/allagents/issues/617)) ([d61b3ca](https://github.com/allagentsdev/allagents/commit/d61b3ca88962ae5d6b206e577f6f42af70b9e0eb))
+
 ## [1.24.2](https://github.com/allagentsdev/allagents/compare/v1.24.1...v1.24.2) (2026-11-11)
 
 

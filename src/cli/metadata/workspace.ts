@@ -1,4 +1,5 @@
 import type { AgentCommandMeta } from '../help.js';
+import { scheduledUpdatesWorkflow } from './scheduled-updates.js';
 
 export const initMeta: AgentCommandMeta = {
   command: 'init',
@@ -82,7 +83,8 @@ export const syncMeta: AgentCommandMeta = {
   command: 'update',
   description: 'Reconcile ordinary resources and installed global profiles',
   whenToUse:
-    'After modifying workspace.yaml, pulling shared config changes, or changing an installed global profile declaration',
+    'After modifying workspace.yaml, pulling shared config changes, or changing an installed global profile declaration; also for guidance on explicitly requested scheduled updates',
+  workflows: [scheduledUpdatesWorkflow],
   examples: [
     'allagents update',
     'allagents update --dry-run',

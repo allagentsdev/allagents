@@ -21,7 +21,7 @@ Structured help is progressively disclosed:
 3. Each index entry provides a `help_command` for the next level.
 4. Leaf help returns the complete contract: when to use the command,
    positionals, options, examples, interaction requirements, expected output,
-   output schema, and JSON field allowlist.
+   output schema, JSON field allowlist, and optional agent-facing `workflows`.
 
 This keeps command discovery small while making side effects, automation
 requirements, and output expectations available before execution. `--help
@@ -96,6 +96,15 @@ JSON output. Native state is tracked separately from copied files so AllAgents
 only removes resources whose ownership it can corroborate.
 
 When `vscode` is in the `clients` list, sync also generates a `.code-workspace` file with repository paths resolved to absolute paths. See the [Workspaces guide](/docs/guides/workspaces/#vscode-workspace-generation) for details.
+
+### Optional scheduled updates
+
+Ask your assistant using the existing AllAgents skill to schedule resource
+updates for your chosen project, user scope or installed profiles, and cadence.
+`allagents update --help --json` exposes brief `scheduled-updates` guidance for
+using an existing host scheduler and verifying execution. The job remains
+user-owned; normal CLI and client startup behavior is unchanged. CLI upgrades
+use [`self update`](#self-update).
 
 ### profile
 

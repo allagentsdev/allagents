@@ -28,17 +28,6 @@ requirements, and output expectations available before execution. `--help
 --json` and `--json --help` are equivalent when they follow the command path.
 Field selection with `--json=<fields>` is not supported for help output.
 
-The update leaf includes a `scheduled-updates` workflow for assistants configuring
-user-owned external schedules on explicit request:
-
-```bash
-allagents update --help --json
-```
-
-The existing AllAgents skill discovers this recipe through the same help index.
-Root and group help stay concise; the recipe appears only in full update help,
-including `allagents workspace update --help --json`.
-
 ## Top-Level Commands
 
 ```bash
@@ -110,17 +99,12 @@ When `vscode` is in the `clients` list, sync also generates a `.code-workspace` 
 
 ### Optional scheduled updates
 
-Ask your assistant using the existing AllAgents skill to set up scheduled
-resource updates, specifying the project, user scope or installed profiles, and
-cadence. The CLI-provided recipe guides it through choosing an external user
-scheduler, resolving a stable executable and unattended environment, reviewing
-the setup, avoiding duplicate jobs, and verifying a run. It also provides
-logs/status and removal guidance. The schedule remains user-owned.
-
-This schedules the existing scoped `update` operation. Upgrading the CLI itself
-is a separate [`self update`](#self-update) operation. AllAgents does not install
-a scheduler or change client startup behavior; reading help and ordinary updates
-do not create scheduled jobs.
+Ask your assistant using the existing AllAgents skill to schedule resource
+updates for your chosen project, user scope or installed profiles, and cadence.
+`allagents update --help --json` exposes brief `scheduled-updates` guidance for
+using an existing host scheduler and verifying execution. The job remains
+user-owned; normal CLI and client startup behavior is unchanged. CLI upgrades
+use [`self update`](#self-update).
 
 ### profile
 

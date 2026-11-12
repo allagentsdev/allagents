@@ -74,12 +74,10 @@ Put shared formatting in `src/cli/format-sync.ts` rather than duplicating it at 
 
 ## Agent workflow guidance
 
-Keep operational recipes in CLI metadata and disclose them through the owning
-leaf's structured help `workflows` field. Root and group help remain indexes;
-guidance is not an executable command. The existing AllAgents skill discovers
-recipes rather than copying them. Scheduled-update guidance configures
-user-owned external jobs only on explicit request; help has no scheduler side
-effects.
+Keep brief workflow guidance in CLI metadata, disclosed through leaf help's
+`workflows` field and discovered by the existing AllAgents skill. Root and group
+help remain indexes. Scheduled updates use user-owned host schedulers on request;
+leave scheduler mechanics to system tooling.
 
 ## Plugin source and destination identity
 

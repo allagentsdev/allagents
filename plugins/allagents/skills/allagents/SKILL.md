@@ -27,7 +27,7 @@ Examples and returned `help_command` values use the canonical `allagents` token.
 
 The structured response is authoritative. Do not rely on remembered flags, copied examples, aliases, destination behavior, or mutation semantics. If the installed CLI does not advertise an operation, do not invent it.
 
-For an explicit request to schedule automatic updates, follow the update entry's `help_command` and load its `workflows` recipe. The CLI owns scheduling guidance as well as command contracts; keep the recipe there. If the installed version omits it, report that limitation rather than inventing a scheduling command. Discovery alone does not authorize scheduler changes.
+For requested scheduled updates, follow the update entry's `help_command` for CLI-provided `workflows` guidance when available.
 
 ## Execute through the discovered surface
 

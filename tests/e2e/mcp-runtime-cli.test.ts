@@ -1,5 +1,6 @@
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -10,6 +11,8 @@ import type { Mock } from 'bun:test';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -59,6 +62,10 @@ function dependencies(
   cleanupError?: Error,
 ): McpRuntimeCliDependencies {
   return {
+    resolveServer: async (destination) => ({
+      destination,
+      config: { command: 'unused' },
+    }),
     runManagedOperation: async (_destination, _server, operation, options) => {
       try {
         const value = await operation({
@@ -459,9 +466,8 @@ const runtimeCliEntry = join(
   import.meta.dir,
   '..',
   '..',
-  'src',
-  'cli',
-  'index.ts',
+  'dist',
+  'index.js',
 );
 
 async function runRealCli(
@@ -469,7 +475,7 @@ async function runRealCli(
   homeDir: string,
   args: string[],
 ): Promise<RealCliResult> {
-  const child = Bun.spawn(['bun', 'run', runtimeCliEntry, ...args], {
+  const child = Bun.spawn(['node', runtimeCliEntry, ...args], {
     cwd: workspaceDir,
     env: {
       ...process.env,
@@ -562,6 +568,13 @@ async function authorizeRuntimeFixture(
 }
 
 describe('MCP runtime CLI real HTTP transport', () => {
+  beforeAll(() => {
+    const build = Bun.spawnSync(['bun', 'run', 'build'], {
+      cwd: join(import.meta.dir, '..', '..'), stdout: 'pipe', stderr: 'pipe',
+    });
+    if (build.exitCode !== 0) throw new Error(`CLI build failed: ${build.stderr.toString()}`);
+  });
+
   let rootDir: string;
   let workspaceDir: string;
   let homeDir: string;
@@ -580,6 +593,154 @@ describe('MCP runtime CLI real HTTP transport', () => {
     dummy = undefined;
     rmSync(rootDir, { recursive: true, force: true });
   });
+
+  test('falls back to ordinary user declarations for tools, call, live help, and probe', async () => {
+    dummy = await startDummyMcpOAuthServer({ requireAuth: false, runtimeTools: true });
+    writeRuntimeDestinations(workspaceDir, homeDir, {}, {
+      personal: { type: 'http', url: dummy.mcpUrl },
+      constructor: { type: 'http', url: dummy.mcpUrl },
+    });
+    for (const args of [
+      ['tools', 'personal'],
+      ['tools', 'constructor'],
+      ['call', 'personal', FIXTURE_TOOL_NAME, '--input', '{"question":"fallback"}'],
+      ['call', 'personal', FIXTURE_TOOL_NAME, '--help'],
+      ['probe', 'personal'],
+    ]) {
+      const result = await runRealCli(workspaceDir, homeDir, ['--json', 'mcp', ...args]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout).data.destination).toEqual({ kind: 'user' });
+    }
+    expect(dummy.callToolCount).toBe(1);
+    expect(dummy.activeSessionCount).toBe(0);
+  }, 20_000);
+
+  test('keeps explicit scopes and profiles strict and prefers project declarations', async () => {
+    dummy = await startDummyMcpOAuthServer({ requireAuth: false, runtimeTools: true });
+    const remote = { type: 'http', url: dummy.mcpUrl };
+    writeRuntimeDestinations(workspaceDir, homeDir, { project: remote, shared: remote }, {
+      user: remote,
+      shared: { type: 'http', url: 'http://127.0.0.1:1/mcp' },
+    }, { work: { clients: [{ name: 'codex' }], mcpServers: { profile: remote } } });
+    for (const operation of [
+      ['tools'], ['call', FIXTURE_TOOL_NAME, '--help'], ['probe'],
+      ['call', FIXTURE_TOOL_NAME, '--input', '{"question":"strict"}'],
+    ]) {
+      const [command, ...tail] = operation;
+      const run = (name: string, flags: string[] = []) => runRealCli(workspaceDir, homeDir,
+        ['--json', 'mcp', command!, name, ...tail, ...flags]);
+      const project = await run('shared');
+      expect(project.exitCode).toBe(0);
+      expect(JSON.parse(project.stdout).data.destination).toEqual({ kind: 'project' });
+      for (const [name, flags, message] of [
+        ['user', ['--scope', 'project'], 'workspace.yaml'],
+        ['project', ['--scope', 'user'], 'the user workspace'],
+        ['user', ['--profile', 'work'], "profile 'work'"],
+        ['profile', [], 'workspace.yaml or the user workspace'],
+        ['user', ['--profile', 'missing'], "Profile 'missing' is not declared"],
+      ] as const) {
+        const missing = await run(name, [...flags]);
+        expect(missing.exitCode).toBe(1);
+        expect(JSON.parse(missing.stdout).error).toContain(message);
+      }
+      const profile = await run('profile', ['--profile', 'work']);
+      expect(profile.exitCode).toBe(0);
+      expect(JSON.parse(profile.stdout).data.destination).toEqual({ kind: 'profile', name: 'work' });
+    }
+    expect(dummy.activeSessionCount).toBe(0);
+  }, 60_000);
+
+  test('handles missing configs and the HOME alias without creating files', async () => {
+    dummy = await startDummyMcpOAuthServer({ requireAuth: false, runtimeTools: true });
+    writeRuntimeDestinations(workspaceDir, homeDir, {}, { user: { type: 'http', url: dummy.mcpUrl } });
+    rmSync(join(workspaceDir, '.allagents'), { recursive: true });
+    for (const cwd of [workspaceDir, homeDir]) {
+      for (const command of ['tools', 'probe']) {
+        const result = await runRealCli(cwd, homeDir, ['--json', 'mcp', command, 'user']);
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout).data.destination).toEqual({ kind: 'user' });
+      }
+    }
+    const alias = await runRealCli(homeDir, homeDir, ['--json', 'mcp', 'tools', 'user', '--scope', 'project']);
+    expect(alias.exitCode).toBe(2);
+    expect(JSON.parse(alias.stdout).error).toContain('aliases the user workspace');
+    rmSync(join(homeDir, '.allagents'), { recursive: true });
+    for (const command of ['tools', 'probe']) {
+      const missing = await runRealCli(workspaceDir, homeDir, ['--json', 'mcp', command, 'missing']);
+      expect(missing.exitCode).toBe(1);
+      expect(JSON.parse(missing.stdout).error).toContain('workspace.yaml or the user workspace');
+    }
+    expect(existsSync(join(workspaceDir, '.allagents'))).toBe(false);
+    expect(existsSync(join(homeDir, '.allagents'))).toBe(false);
+  }, 30_000);
+
+  test.skipIf(process.getuid?.() === 0)('rejects an unreadable project destination without user fallback', async () => {
+    dummy = await startDummyMcpOAuthServer({ requireAuth: false, runtimeTools: true });
+    const remote = { personal: { type: 'http', url: dummy.mcpUrl } };
+    writeRuntimeDestinations(workspaceDir, homeDir, remote, remote);
+    const configDir = join(workspaceDir, '.allagents');
+    chmodSync(configDir, 0o000);
+    try {
+      for (const args of [['tools'], ['probe'], ['call', FIXTURE_TOOL_NAME, '--help']]) {
+        const [command, ...tail] = args;
+        const result = await runRealCli(workspaceDir, homeDir,
+          ['--json', 'mcp', command!, 'personal', ...tail]);
+        expect(result.exitCode).toBe(1);
+        expect(JSON.parse(result.stdout).error).toMatch(/EACCES|permission denied/i);
+      }
+      expect(dummy.listCallCount).toBe(0);
+    } finally {
+      chmodSync(configDir, 0o700);
+    }
+  }, 20_000);
+
+  test('never falls back after project parsing, connection, authorization, or tool errors', async () => {
+    dummy = await startDummyMcpOAuthServer({ requireAuth: false, runtimeTools: true });
+    const user = { personal: { type: 'http', url: dummy.mcpUrl } };
+    const projectPath = join(workspaceDir, '.allagents', 'workspace.yaml');
+    for (const content of [
+      'mcpServers: [',
+      JSON.stringify({ repositories: [], plugins: [], clients: [], mcpServers: { personal: { type: 'http', url: 'http://127.0.0.1:1/mcp' } } }),
+      JSON.stringify({ repositories: [], plugins: [], clients: [], mcpServers: { personal: { command: 123 } } }),
+    ]) {
+      writeRuntimeDestinations(workspaceDir, homeDir, {}, user);
+      writeFileSync(projectPath, content);
+      for (const args of [['tools'], ['probe'], ['call', FIXTURE_TOOL_NAME, '--help']]) {
+        const [command, ...tail] = args;
+        const result = await runRealCli(workspaceDir, homeDir,
+          ['--json', 'mcp', command!, 'personal', ...tail]);
+        expect(result.exitCode).toBe(1);
+        expect(JSON.parse(result.stdout).success).toBe(false);
+        const error = JSON.parse(result.stdout).error as string;
+        if (content.includes('127.0.0.1:1')) expect(error).toContain('Could not reach the MCP endpoint');
+        else if (content.includes('123')) expect(error).toContain('mcpServers.personal');
+        else expect(error).toMatch(/YAML|parse|flow sequence/i);
+      }
+    }
+    expect(dummy.listCallCount).toBe(0);
+    const secured = await startDummyMcpOAuthServer({ runtimeTools: true });
+    try {
+      writeRuntimeDestinations(workspaceDir, homeDir,
+        { personal: { type: 'http', url: secured.mcpUrl } }, user);
+      for (const command of ['tools', 'probe']) {
+        const result = await runRealCli(workspaceDir, homeDir, ['--json', 'mcp', command, 'personal']);
+        expect(result.exitCode).toBe(1);
+        expect(JSON.parse(result.stdout).error).toContain('allagents mcp reauth personal');
+        expect(JSON.parse(result.stdout).error).not.toContain('--scope user');
+      }
+      expect(dummy.listCallCount).toBe(0);
+      expect(secured.authorizeCallCount).toBe(0);
+    } finally {
+      await secured.stop();
+    }
+    writeRuntimeDestinations(workspaceDir, homeDir, user, user);
+    const failed = await runRealCli(workspaceDir, homeDir,
+      ['--json', 'mcp', 'call', 'personal', RUNTIME_FAILURE_TOOL_NAME, '--input', '{}']);
+    expect(failed.exitCode).toBe(1);
+    expect(JSON.parse(failed.stdout).data.destination).toEqual({ kind: 'project' });
+    expect(dummy.callToolCount).toBe(1);
+  }, 60_000);
 
   test('discovers paginated complete records, filters, and renders both empty states', async () => {
     dummy = await startDummyMcpOAuthServer({
@@ -997,7 +1158,7 @@ describe('MCP runtime CLI real HTTP transport', () => {
         command: 'allagents mcp reauth project',
       },
       {
-        args: ['--json', 'mcp', 'tools', 'user', '--scope', 'user'],
+        args: ['--json', 'mcp', 'tools', 'user'],
         command: 'allagents mcp reauth --scope user user',
       },
       {
@@ -1021,12 +1182,12 @@ describe('MCP runtime CLI real HTTP transport', () => {
     }
     expect(dummy.authorizeCallCount).toBe(0);
 
-    const projectDoesNotMergeUser = await runRealCli(
+    const explicitProjectDoesNotMergeUser = await runRealCli(
       workspaceDir,
       homeDir,
-      ['--json', 'mcp', 'tools', 'user'],
+      ['--json', 'mcp', 'tools', 'user', '--scope', 'project'],
     );
-    expect(JSON.parse(projectDoesNotMergeUser.stdout).error).toContain(
+    expect(JSON.parse(explicitProjectDoesNotMergeUser.stdout).error).toContain(
       "MCP server 'user' is not defined in workspace.yaml",
     );
 
@@ -1042,8 +1203,6 @@ describe('MCP runtime CLI real HTTP transport', () => {
       '--json',
       'mcp',
       'tools',
-      'user',
-      '--scope',
       'user',
     ]);
     expect(project.exitCode).toBe(0);

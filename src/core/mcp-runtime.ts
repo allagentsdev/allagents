@@ -20,6 +20,7 @@ import {
   formatMcpDestination,
   getMcpServer,
   type McpDestination,
+  resolveMcpDestination,
 } from './mcp-servers.js';
 import { LinearStdioClientTransport } from './mcp-stdio-client-transport.js';
 
@@ -36,6 +37,11 @@ const MAX_MCP_SCHEMA_NODES = 100_000;
 const MCP_JSON_SCHEMA_VALIDATOR = new AjvJsonSchemaValidator();
 
 export type McpToolCatalog = readonly Tool[];
+
+export interface ResolvedMcpServer {
+  destination: McpDestination;
+  config: McpServerConfig;
+}
 
 export interface McpRuntimeRequestOptions {
   signal?: AbortSignal;
@@ -502,26 +508,37 @@ async function connectStdioSession(
   return { client, credentialGuard, close };
 }
 
+/** Select a declaration before connecting; errors never trigger fallback. */
 export async function resolveConfiguredMcpServer(
   destination: McpDestination,
   serverName: string,
-): Promise<McpServerConfig> {
+  fallbackToUser = false,
+): Promise<ResolvedMcpServer> {
   const config = await getMcpServer(destination, serverName);
-  if (!config) {
+  if (config) return { destination, config };
+  if (fallbackToUser && destination.kind === 'project') {
+    const user = resolveMcpDestination({ scope: 'user' });
+    const userConfig = await getMcpServer(user, serverName);
+    if (userConfig) return { destination: user, config: userConfig };
     throw new Error(
-      `MCP server '${serverName}' is not defined in ${formatMcpDestination(destination)}`,
+      `MCP server '${serverName}' is not defined in workspace.yaml or the user workspace`,
     );
   }
-  return config;
+  throw new Error(
+    `MCP server '${serverName}' is not defined in ${formatMcpDestination(destination)}`,
+  );
 }
 
 export async function connectManagedMcpServer(
-  destination: McpDestination,
+  target: McpDestination | ResolvedMcpServer,
   serverName: string,
   options: ManagedMcpConnectionOptions = {},
 ): Promise<ManagedMcpSession> {
   if (options.signal?.aborted) throw new McpRuntimeCancelledError();
-  const config = await resolveConfiguredMcpServer(destination, serverName);
+  const { destination, config } =
+    'destination' in target
+      ? target
+      : await resolveConfiguredMcpServer(target, serverName);
   if (options.signal?.aborted) throw new McpRuntimeCancelledError();
   if ('command' in config) return connectStdioSession(config, options);
 
@@ -656,15 +673,11 @@ export async function runManagedMcpSession<T>(
 }
 
 export async function runManagedMcpOperation<T>(
-  destination: McpDestination,
+  target: McpDestination | ResolvedMcpServer,
   serverName: string,
   operation: ManagedMcpOperation<T>,
   options: ManagedMcpOperationOptions = {},
 ): Promise<ManagedMcpOperationResult<T>> {
-  const session = await connectManagedMcpServer(
-    destination,
-    serverName,
-    options,
-  );
+  const session = await connectManagedMcpServer(target, serverName, options);
   return runManagedMcpSession(session, operation, options);
 }

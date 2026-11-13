@@ -6,6 +6,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -484,7 +485,14 @@ export async function getMcpServer(
   name: string,
 ): Promise<McpServerConfig | null> {
   validateDestination(destination);
-  if (!existsSync(destination.configPath)) {
+  const configExists = await stat(destination.configPath).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    },
+  );
+  if (!configExists) {
     if (destination.kind === 'profile') {
       throw new Error(`Profile '${destination.name}' is not declared`);
     }
@@ -492,7 +500,9 @@ export async function getMcpServer(
   }
   const document = await readDestinationConfig(destination);
   const container = selectDestinationContainer(destination, document);
-  return container.mcpServers?.[name] ?? null;
+  return container.mcpServers && Object.hasOwn(container.mcpServers, name)
+    ? (container.mcpServers[name] ?? null)
+    : null;
 }
 
 /**

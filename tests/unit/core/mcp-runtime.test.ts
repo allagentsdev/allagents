@@ -176,7 +176,7 @@ describe('configured MCP resolution', () => {
       `  direct:\n    url: https://mcp.example/rpc\n    headers:\n      X-Token: \${TOKEN}\n`,
     );
 
-    expect(await resolveConfiguredMcpServer(destination, 'direct')).toEqual({
+    expect((await resolveConfiguredMcpServer(destination, 'direct')).config).toEqual({
       url: 'https://mcp.example/rpc',
       headers: { 'X-Token': '${TOKEN}' },
     });

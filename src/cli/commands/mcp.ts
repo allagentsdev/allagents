@@ -36,6 +36,8 @@ import {
   type ManagedMcpOperation,
   type ManagedMcpOperationOptions,
   type ManagedMcpOperationResult,
+  type ResolvedMcpServer,
+  resolveConfiguredMcpServer,
   runManagedMcpOperation as runManagedMcpRuntimeOperation,
 } from '../../core/mcp-runtime.js';
 import {
@@ -99,6 +101,16 @@ const destinationArgs = {
     type: optional(string),
     long: 'profile',
     description: 'Named profile declaration destination',
+  }),
+};
+
+const runtimeDestinationArgs = {
+  ...destinationArgs,
+  scope: option({
+    type: optional(string),
+    long: 'scope',
+    description:
+      "Restrict lookup to 'project' or 'user' (default: project, then user)",
   }),
 };
 
@@ -632,7 +644,7 @@ interface ParsedRuntimeRequest {
 }
 
 export type McpRuntimeManagedOperationRunner = <T>(
-  destination: McpDestination,
+  target: ResolvedMcpServer,
   serverName: string,
   operation: ManagedMcpOperation<T>,
   options: ManagedMcpOperationOptions,
@@ -640,6 +652,7 @@ export type McpRuntimeManagedOperationRunner = <T>(
 
 export interface McpRuntimeCliDependencies {
   runManagedOperation: McpRuntimeManagedOperationRunner;
+  resolveServer: typeof resolveConfiguredMcpServer;
 }
 
 class McpRuntimeUsageError extends Error {
@@ -650,6 +663,7 @@ class McpRuntimeUsageError extends Error {
 }
 
 const defaultMcpRuntimeDependencies: McpRuntimeCliDependencies = {
+  resolveServer: resolveConfiguredMcpServer,
   runManagedOperation: (destination, serverName, operation, options) =>
     runManagedMcpRuntimeOperation(destination, serverName, operation, options),
 };
@@ -958,7 +972,7 @@ type ManagedExecution<T> =
     };
 
 async function executeManagedRuntime<T>(
-  destination: McpDestination,
+  target: ResolvedMcpServer,
   server: string,
   operation: ManagedMcpOperation<T>,
   dependencies: McpRuntimeCliDependencies,
@@ -979,7 +993,7 @@ async function executeManagedRuntime<T>(
 
   try {
     const result = await dependencies.runManagedOperation(
-      destination,
+      target,
       server,
       operation,
       { signal: controller.signal },
@@ -1256,7 +1270,7 @@ type CallOperation = CallHelpOperation | CallResultOperation;
 
 async function runToolsRuntime(
   request: ParsedRuntimeRequest,
-  destination: McpDestination,
+  initialDestination: McpDestination,
   dependencies: McpRuntimeCliDependencies,
 ): Promise<void> {
   const server = request.server;
@@ -1265,8 +1279,14 @@ async function runToolsRuntime(
       'Usage: allagents mcp tools <server> [options]',
     );
   }
+  const target = await dependencies.resolveServer(
+    initialDestination,
+    server,
+    request.scope === undefined && request.profile === undefined,
+  );
+  const { destination } = target;
   const execution = await executeManagedRuntime(
-    destination,
+    target,
     server,
     ({ client, signal }) => listAllMcpTools(client, { signal }),
     dependencies,
@@ -1341,7 +1361,7 @@ async function runToolsRuntime(
 
 async function runCallRuntime(
   request: ParsedRuntimeRequest,
-  destination: McpDestination,
+  initialDestination: McpDestination,
   dependencies: McpRuntimeCliDependencies,
 ): Promise<void> {
   const { server, tool: toolName } = request;
@@ -1350,8 +1370,14 @@ async function runCallRuntime(
       'Usage: allagents mcp call <server> <tool> [options]',
     );
   }
+  const target = await dependencies.resolveServer(
+    initialDestination,
+    server,
+    request.scope === undefined && request.profile === undefined,
+  );
+  const { destination } = target;
   const execution = await executeManagedRuntime<CallOperation>(
-    destination,
+    target,
     server,
     async ({ client, signal }) => {
       const catalog = await listAllMcpTools(client, { signal });
@@ -1503,7 +1529,7 @@ const mcpToolsCmd = command({
       description:
         'Case-insensitive substring filter over tool name, title, and description',
     }),
-    ...destinationArgs,
+    ...runtimeDestinationArgs,
   },
   handler: async () => runMcpRuntimeCommand(process.argv.slice(2)),
 });
@@ -1520,7 +1546,7 @@ const mcpCallCmd = command({
       description:
         'Exact JSON object input; mutually exclusive with generated tool options',
     }),
-    ...destinationArgs,
+    ...runtimeDestinationArgs,
   },
   handler: async () => runMcpRuntimeCommand(process.argv.slice(2)),
 });
@@ -1530,10 +1556,10 @@ const mcpProbeCmd = command({
   description: buildDescription(mcpProbeMeta),
   args: {
     name: positional({ type: string, displayName: 'server' }),
-    ...destinationArgs,
+    ...runtimeDestinationArgs,
   },
   handler: async ({ name, scope, profile }) => {
-    const destination = resolveCommandDestination('mcp probe', {
+    const initialDestination = resolveCommandDestination('mcp probe', {
       scope,
       profile,
     });
@@ -1554,8 +1580,14 @@ const mcpProbeCmd = command({
       30_000,
     );
     try {
+      const target = await resolveConfiguredMcpServer(
+        initialDestination,
+        name,
+        scope === undefined && profile === undefined,
+      );
+      const { destination } = target;
       const outcome = await runManagedMcpRuntimeOperation(
-        destination,
+        target,
         name,
         async ({ client, signal }) => {
           const capabilities = client.getServerCapabilities() ?? {};

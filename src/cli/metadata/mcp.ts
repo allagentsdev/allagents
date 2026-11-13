@@ -16,6 +16,16 @@ const destinationOptions: NonNullable<AgentCommandMeta['options']> = [
   },
 ];
 
+const runtimeDestinationOptions = destinationOptions.map((option) =>
+  option.flag === '--scope'
+    ? {
+        ...option,
+        description:
+          "Restrict lookup to 'project' or 'user'; without --scope or --profile, check the project first, then ordinary user configuration",
+      }
+    : option,
+);
+
 const destinationOutput = {
   kind: 'project | user | profile',
   name: 'string?',
@@ -290,7 +300,7 @@ export const mcpToolsMeta: AgentCommandMeta = {
   command: 'mcp tools',
   description: 'List tools exposed by an MCP server',
   whenToUse:
-    'To discover the complete live tool catalog from one configured MCP server in exactly one selected destination',
+    'To discover the complete live tool catalog from one configured MCP server using project declarations before ordinary user configuration unless --scope or --profile selects one destination',
   examples: [
     'allagents mcp tools deepwiki',
     'allagents mcp tools deepwiki --search docs',
@@ -315,7 +325,7 @@ export const mcpToolsMeta: AgentCommandMeta = {
       description:
         'Case-insensitive substring filter over tool name, title, and description',
     },
-    ...destinationOptions,
+    ...runtimeDestinationOptions,
   ],
   outputSchema: {
     destination: destinationOutput,
@@ -342,7 +352,7 @@ export const mcpCallMeta: AgentCommandMeta = {
   command: 'mcp call',
   description: 'Call a tool exposed by an MCP server',
   whenToUse:
-    'To inspect live help for, or synchronously invoke, one exact tool on one configured MCP server in exactly one selected destination',
+    'To inspect live help for, or synchronously invoke, one exact tool on one configured MCP server using project declarations before ordinary user configuration unless --scope or --profile selects one destination',
   examples: [
     'allagents mcp call deepwiki ask_question --help',
     'allagents mcp call deepwiki ask_question --input \'{"question":"How?"}\'',
@@ -373,7 +383,7 @@ export const mcpCallMeta: AgentCommandMeta = {
       description:
         'Exact JSON object input; mutually exclusive with live generated tool options',
     },
-    ...destinationOptions,
+    ...runtimeDestinationOptions,
   ],
   outputSchema: {
     destination: destinationOutput,
@@ -396,7 +406,7 @@ export const mcpProbeMeta: AgentCommandMeta = {
   description:
     'Check a configured MCP connection and inspect its tools and resources',
   whenToUse:
-    'To diagnose a configured MCP server using cached or refreshable credentials without starting fresh human consent',
+    'To diagnose a configured MCP server using cached or refreshable credentials without starting fresh human consent; check the project first, then ordinary user configuration unless --scope or --profile is explicit',
   examples: [
     'allagents mcp probe notion',
     'allagents --json mcp probe notion --profile work',
@@ -411,7 +421,7 @@ export const mcpProbeMeta: AgentCommandMeta = {
       description: 'Configured server name in the selected destination',
     },
   ],
-  options: [...destinationOptions],
+  options: [...runtimeDestinationOptions],
   outputSchema: {
     destination: destinationOutput,
     server: 'string',

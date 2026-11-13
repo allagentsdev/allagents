@@ -95,8 +95,8 @@ describe('MCP runtime direct stdio CLI e2e', () => {
   });
 
   async function runCli(args: string[]): Promise<CliResult> {
-    const cliEntry = join(import.meta.dir, '..', '..', 'src', 'cli', 'index.ts');
-    const proc = Bun.spawn(['bun', 'run', cliEntry, ...args], {
+    const cliEntry = join(import.meta.dir, '..', '..', 'dist', 'index.js');
+    const proc = Bun.spawn(['node', cliEntry, ...args], {
       cwd: workspaceDir,
       env: {
         ...process.env,
@@ -191,8 +191,6 @@ describe('MCP runtime direct stdio CLI e2e', () => {
       'mcp',
       'tools',
       userServer,
-      '--scope',
-      'user',
     ]);
     expect(JSON.parse(user.stdout).data.destination).toEqual({ kind: 'user' });
 
@@ -427,7 +425,7 @@ describe('MCP runtime direct stdio CLI e2e', () => {
   }, 30_000);
 
   test('waits for stdio cleanup after the first interrupt', async () => {
-    const cliEntry = join(import.meta.dir, '..', '..', 'src', 'cli', 'index.ts');
+    const cliEntry = join(import.meta.dir, '..', '..', 'dist', 'index.js');
     const previousCaptureCount = fixture.captures().length;
     const previousExitCount = fixture.exits().length;
     const proc = Bun.spawn(

@@ -157,6 +157,15 @@ allagents mcp call tradingview quote --profile markets --symbol AAPL
 allagents mcp probe tradingview --profile markets
 ```
 
+With no destination flags, `mcp tools`, `mcp call`, live tool help, and
+`mcp probe` look in the current project first and fall back to ordinary user
+configuration only when the requested server name is absent. A project
+declaration overrides a same-named user declaration. Explicit `--scope project`,
+`--scope user`, or `--profile <name>` selects only that destination. Profiles
+remain isolated. Invalid configuration, failed authentication, connection
+errors, and tool failures do not trigger fallback. JSON output and recovery
+commands identify the selected destination.
+
 Unlike an external AI client, `mcp tools`, fully qualified `mcp call ... --help`,
 and `mcp call` connect directly to the configured HTTP endpoint. They do not go
 through the generated client bridge. They still use the same credential
@@ -421,7 +430,8 @@ that must work offline should prime the cache before disconnecting.
 ## Destinations
 
 HTTP MCP routing supports project, ordinary user, and named profile
-destinations. Omit destination flags for project scope, use `--scope user` for
+destinations. Management commands default to project scope; runtime commands
+use the project-first lookup described above. Use `--scope user` for
 ordinary user configuration, or `--profile <name>` for a profile. `--scope` and
 `--profile` cannot be combined. From the home directory, the project path
 aliases the user workspace, so an unflagged command resolves to user scope and

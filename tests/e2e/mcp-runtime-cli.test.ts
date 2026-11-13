@@ -1,5 +1,6 @@
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -567,6 +568,13 @@ async function authorizeRuntimeFixture(
 }
 
 describe('MCP runtime CLI real HTTP transport', () => {
+  beforeAll(() => {
+    const build = Bun.spawnSync(['bun', 'run', 'build'], {
+      cwd: join(import.meta.dir, '..', '..'), stdout: 'pipe', stderr: 'pipe',
+    });
+    if (build.exitCode !== 0) throw new Error(`CLI build failed: ${build.stderr.toString()}`);
+  });
+
   let rootDir: string;
   let workspaceDir: string;
   let homeDir: string;

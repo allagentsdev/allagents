@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +42,13 @@ function callArguments() {
 }
 
 describe('MCP runtime direct stdio CLI e2e', () => {
+  beforeAll(() => {
+    const build = Bun.spawnSync(['bun', 'run', 'build'], {
+      cwd: join(import.meta.dir, '..', '..'), stdout: 'pipe', stderr: 'pipe',
+    });
+    if (build.exitCode !== 0) throw new Error(`CLI build failed: ${build.stderr.toString()}`);
+  });
+
   let rootDir: string;
   let workspaceDir: string;
   let homeDir: string;

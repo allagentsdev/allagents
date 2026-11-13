@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.26.0](https://github.com/allagentsdev/allagents/compare/v1.25.0...v1.26.0) (2026-11-13)
+
+
+### Added
+
+* **mcp:** list user and project declarations by default ([#620](https://github.com/allagentsdev/allagents/issues/620)) ([c307e90](https://github.com/allagentsdev/allagents/commit/c307e90ebb8e893d0e6ab291d83b39e467b49008))
+
+
+### Fixed
+
+* **mcp:** fall back to user servers for runtime commands ([#621](https://github.com/allagentsdev/allagents/issues/621)) ([2025902](https://github.com/allagentsdev/allagents/commit/20259022d239ba60803cfe3e525452c555c5279d))
+
 ## [1.25.0](https://github.com/allagentsdev/allagents/compare/v1.24.2...v1.25.0) (2026-11-12)
 
 

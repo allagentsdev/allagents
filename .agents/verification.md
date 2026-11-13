@@ -60,7 +60,7 @@ For substantial changes, run a final code review after implementation and before
 
 A branch is ready only when:
 
-1. Every affected caller, test, and user-facing document matches the new contract.
+1. Every affected caller and test matches the new contract. Documentation updates follow the rule in [AGENTS.md](../AGENTS.md).
 2. Focused tests for the changed paths pass.
 3. Typecheck, lint, and build pass when applicable.
 4. Manual E2E proves the built behavior and filesystem result.

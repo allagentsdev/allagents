@@ -164,19 +164,41 @@ export const mcpListMeta: AgentCommandMeta = {
   description:
     'List MCP servers declared in a project, user, or profile destination',
   whenToUse:
-    'To inspect inline MCP declarations in exactly one selected destination without merging plugin-provided servers',
+    'To inspect ordinary user and current-project inline MCP declarations together, or exactly one explicit scope or named profile, without merging plugin-provided servers',
   examples: [
     'allagents mcp list',
+    'allagents mcp list --scope project',
     'allagents mcp list --scope user',
     'allagents mcp list --profile markets',
     'allagents --json mcp list --scope user',
+    'allagents --json mcp list',
   ],
   expectedOutput:
-    'Prints MCP declarations from the selected project, ordinary user, or named profile destination with transport, target, and client filter. Header, environment, URL credential, and sensitive query values are redacted in human and JSON output. Exit 0 on success.',
-  options: [...destinationOptions],
+    'By default lists ordinary user then current-project inline declarations, with deterministic server order within each scope and duplicate names retained separately. Missing configurations are empty; the HOME alias is listed once as user scope. Named profiles and plugin-provided declarations are excluded from the aggregate. --scope or --profile selects exactly one destination. Default JSON has destinations (an object keyed by scope, each with destination, servers, total) and total; explicit-selector JSON retains destination, servers, total. Header, environment, argument, OAuth, URL credential, and sensitive query values are redacted in human and JSON output. Exit 0 on success.',
+  options: destinationOptions.map((option) =>
+    option.flag === '--scope'
+      ? {
+          ...option,
+          description:
+            "List only 'project' or ordinary 'user' declarations (default: both scopes); cannot be combined with --profile",
+        }
+      : option,
+  ),
   outputSchema: {
     destination: destinationOutput,
     servers: 'record<string, redacted MCP server config>',
+    destinations: {
+      user: {
+        destination: { kind: 'user' },
+        servers: 'record<string, redacted MCP server config>',
+        total: 'number',
+      },
+      project: {
+        destination: { kind: 'project' },
+        servers: 'record<string, redacted MCP server config>',
+        total: 'number',
+      },
+    },
     total: 'number',
   },
 };

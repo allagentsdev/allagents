@@ -1908,57 +1908,90 @@ const mcpProxyCmd = command({
 const mcpListCmd = command({
   name: 'list',
   description: buildDescription(mcpListMeta),
-  args: destinationArgs,
+  args: {
+    ...destinationArgs,
+    scope: option({
+      type: optional(string),
+      long: 'scope',
+      description:
+        "List only 'project' or 'user' declarations (default: both scopes)",
+    }),
+  },
   handler: async ({ scope, profile }) => {
+    const aggregate = scope === undefined && profile === undefined;
     const destination = resolveCommandDestination('mcp list', {
       scope,
       profile,
     });
-    const servers = await runManagedMcpOperation('mcp list', () =>
-      listManagedMcpServers(destination),
-    );
-    const names = Object.keys(servers);
-    const redactedServers = Object.fromEntries(
-      Object.entries(servers).map(([name, config]) => [
-        name,
-        redactMcpServerConfig(config),
-      ]),
+    const destinations = aggregate
+      ? [
+          resolveCommandDestination('mcp list', { scope: 'user' }),
+          ...(destination.kind === 'project' ? [destination] : []),
+        ]
+      : [destination];
+    const listings = await runManagedMcpOperation('mcp list', async () =>
+      Promise.all(
+        destinations.map(async (selected) => {
+          const servers = await listManagedMcpServers(selected);
+          const names = Object.keys(servers);
+          if (aggregate) names.sort();
+          return {
+            destination: serializeDestination(selected),
+            servers: Object.fromEntries(
+              names.map((name) => [
+                name,
+                redactMcpServerConfig(servers[name] as McpServerConfig),
+              ]),
+            ),
+            total: names.length,
+          };
+        }),
+      ),
     );
 
     if (isJsonMode()) {
       jsonOutput({
         success: true,
         command: 'mcp list',
-        data: {
-          destination: serializeDestination(destination),
-          servers: redactedServers,
-          total: names.length,
-        },
+        data: aggregate
+          ? {
+              destinations: Object.fromEntries(
+                listings.map((listing) => [listing.destination.kind, listing]),
+              ),
+              total: listings.reduce(
+                (total, listing) => total + listing.total,
+                0,
+              ),
+            }
+          : listings[0],
       });
       return;
     }
 
-    if (names.length === 0) {
-      console.log(
-        `No MCP servers defined in ${destinationDisplay(destination)}.`,
-      );
-      console.log('');
-      console.log('Add one with:');
-      console.log('  allagents mcp add <name> <commandOrUrl>');
-      return;
-    }
-
-    console.log(
-      `MCP servers in ${destinationDisplay(destination)} (${names.length}):`,
-    );
-    console.log('');
-    for (const name of names) {
-      const config = redactedServers[name];
-      if (!config) continue;
-      for (const line of serverToDisplay(name, config)) {
-        console.log(`  ${line}`);
+    for (const [index, listing] of listings.entries()) {
+      const selected = destinations[index] as McpDestination;
+      const display = aggregate
+        ? `${selected.kind} scope (${destinationDisplay(selected)})`
+        : destinationDisplay(selected);
+      if (listing.total === 0) {
+        console.log(`No MCP servers defined in ${display}.`);
+        console.log('');
+        console.log('Add one with:');
+        console.log(
+          `  allagents mcp add <name> <commandOrUrl>${aggregate ? ` --scope ${selected.kind}` : ''}`,
+        );
+        if (aggregate) console.log('');
+        continue;
       }
+
+      console.log(`MCP servers in ${display} (${listing.total}):`);
       console.log('');
+      for (const [name, config] of Object.entries(listing.servers)) {
+        for (const line of serverToDisplay(name, config)) {
+          console.log(`  ${line}`);
+        }
+        console.log('');
+      }
     }
   },
 });

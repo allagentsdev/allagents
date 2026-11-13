@@ -20,7 +20,7 @@ AllAgents is a CLI for managing AI coding-assistant plugins, workspaces, and cli
 - Verify the changed behavior through the real built surface. A passing unit test is not a substitute for manual E2E when users interact with the changed path.
 - Preserve JSON and redirected-output contracts when changing interactive CLI output unless the request explicitly changes them.
 - Keep user-owned configuration intact. Track, update, or remove only artifacts AllAgents owns.
-- Update user documentation and durable agent guidance when behavior or the development workflow changes.
+- Update user docs or agent guidance only when they explain non-obvious behavior, constraints, or workflow decisions. Self-explanatory CLI behavior does not need extra documentation.
 - Push feature work through a branch and pull request. Never implement or push directly on `main`.
 - Use conventional commit and PR titles, omit automated co-author attribution unless requested, and squash-merge to `main`.
 - Release Please owns versions, tags, and `CHANGELOG.md`: merge the generated release pull request to finalize a release, never bump the version or tag by hand, and never run `npm publish` directly.

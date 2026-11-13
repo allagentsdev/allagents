@@ -40,17 +40,6 @@ serializing unrelated tool requests. Keep modern-protocol translation opt-in and
 outside the legacy relay. Verify protocol behavior with real peers, including a
 server request during an outstanding tool call, to detect relay deadlocks.
 
-## MCP runtime declaration resolution
-
-Keep `mcp tools`, `mcp call` (including live help), and `mcp probe` on the
-shared runtime resolver. With no selector, select the project declaration by
-name before ordinary user scope; explicit scope/profile selectors stay strict.
-Carry the selected declaration and destination together through connection,
-auth recovery, generated help commands, and JSON output. Missing declarations
-permit fallback; parse, authentication, connection, and operation errors do
-not. Keep profiles outside ordinary fallback and preserve the HOME alias.
-Management commands retain destination-local reads and mutations.
-
 ## MCP server ownership
 
 MCP servers from plugins are synchronized into VS Code's `mcp.json`.

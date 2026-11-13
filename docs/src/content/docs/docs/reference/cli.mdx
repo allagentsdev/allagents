@@ -636,17 +636,9 @@ allagents mcp probe <server> [--scope project|user | --profile <name>]
 allagents mcp call <server> <tool> [tool options | --input <json>] [--scope project|user | --profile <name>]
 ```
 
-MCP management commands select one declaration destination. With no selector,
-AllAgents uses the current project's `.allagents/workspace.yaml`. Runtime commands
-(`mcp tools`, `mcp call`, live tool help, and `mcp probe`) look up the server in
-the project first, then ordinary user configuration if the name is absent.
-Project declarations override same-named user declarations. Explicit
-`--scope project`, `--scope user`, and `--profile <name>` restrict lookup to
-that destination; profiles never participate in fallback. Invalid project
-configuration and project authentication, connection, or tool errors fail
-without trying the user declaration. JSON reports the selected destination.
-
-From the home directory that path aliases the ordinary user config, so an unflagged command
+Every MCP command selects one declaration destination. With no selector,
+AllAgents uses the current project's `.allagents/workspace.yaml`. From the home
+directory that path aliases the ordinary user config, so an unflagged command
 resolves to user scope and explicit `--scope project` is rejected. Use
 `--scope user` to select top-level MCP fields in `~/.allagents/workspace.yaml`;
 `--profile <name>` selects `profiles.<name>` in that same file.
@@ -780,8 +772,8 @@ allagents --json --jq '.data.tools[] | {name, description}' \
   mcp tools trading --profile markets
 ```
 
-`mcp tools` resolves one inline declaration using the project-first lookup
-described above; plugin-provided servers are excluded. It connects
+`mcp tools` reads only the inline declaration from the selected destination; it
+does not merge declarations from other destinations or plugins. It connects
 directly to that declaration, consumes every `tools/list` page, closes the
 connection, and then renders the filtered or unfiltered result in discovery
 order. An empty catalog and a search with no matches are both successful.

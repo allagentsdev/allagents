@@ -42,12 +42,6 @@ server request during an outstanding tool call, to detect relay deadlocks.
 
 ## MCP server ownership
 
-Keep declaration aggregation at the CLI `mcp list` boundary. Its unflagged view
-lists ordinary user then current-project inline declarations with separate scope
-provenance, retaining duplicate names and listing the HOME alias once. Explicit
-selectors, TUI destinations, mutations, and runtime commands continue to use
-exactly one destination through `resolveMcpDestination`.
-
 MCP servers from plugins are synchronized into VS Code's `mcp.json`.
 
 - Track only servers AllAgents added.

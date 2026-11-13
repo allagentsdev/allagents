@@ -636,8 +636,10 @@ allagents mcp probe <server> [--scope project|user | --profile <name>]
 allagents mcp call <server> <tool> [tool options | --input <json>] [--scope project|user | --profile <name>]
 ```
 
-Every MCP command selects one declaration destination. With no selector,
-AllAgents uses the current project's `.allagents/workspace.yaml`. From the home
+MCP commands select one declaration destination, except unflagged `mcp list`,
+which lists ordinary user and current-project declarations together. For other
+commands with no selector, AllAgents uses the current project's
+`.allagents/workspace.yaml`. From the home
 directory that path aliases the ordinary user config, so an unflagged command
 resolves to user scope and explicit `--scope project` is rejected. Use
 `--scope user` to select top-level MCP fields in `~/.allagents/workspace.yaml`;
@@ -905,14 +907,50 @@ allagents mcp remove tradingview --profile markets
 
 ### mcp list
 
-List inline MCP declarations from exactly one selected destination. Header,
-environment, URL credential, and sensitive query values are redacted in both
-human and JSON output.
+With neither `--scope` nor `--profile`, list inline MCP declarations from both
+`~/.allagents/workspace.yaml` and the current project's
+`.allagents/workspace.yaml`. Output labels each scope and lists user scope first,
+then project scope, with deterministic server order within each scope. The same
+name in both scopes appears twice; this is a declaration inventory, not a merged runtime
+configuration. Missing configurations count as empty. From HOME, the user config
+is listed once because the project path aliases it.
+
+Use `--scope project` or `--scope user` to list exactly that scope, or
+`--profile <name>` to list only that named profile. `--scope` and `--profile`
+cannot be combined. Plugin-provided declarations and named profiles are excluded
+from the default aggregate.
+
+Header, environment, sensitive argument, OAuth credential, URL credential, and
+sensitive query values are redacted in both human and JSON output.
 
 ```bash
 allagents mcp list
+allagents mcp list --scope project
+allagents mcp list --scope user
 allagents mcp list --profile markets
+allagents --json mcp list
 ```
+
+Default JSON now returns `data.destinations`, an object keyed by scope containing
+`{ destination, servers, total }` objects, plus `data.total`, the total number of
+declarations across scopes. Each `destination.kind` is `user` or `project`, so
+duplicate names retain their scope provenance. Empty scopes remain in the object;
+the HOME alias has only one user entry. For example, a server named `docs` in both
+scopes produces:
+
+```json
+{
+  "destinations": {
+    "user": {"destination": {"kind": "user"}, "servers": {"docs": {"command": "user-docs"}}, "total": 1},
+    "project": {"destination": {"kind": "project"}, "servers": {"docs": {"command": "project-docs"}}, "total": 1}
+  },
+  "total": 2
+}
+```
+
+Explicit-selector JSON keeps the existing `data.destination`, `data.servers`,
+and `data.total` shape. Scripts expecting the former project-only default should
+pass `--scope project`. Other MCP commands retain their existing defaults.
 
 ### mcp get
 

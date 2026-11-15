@@ -102,6 +102,9 @@ Resolve supported legacy component sources once in
 resolution, validation, copying, inventories, MCP-only updates, and profile file
 planning. Consumers must not interpret `strict` as a component allowlist or
 independently choose a different manifest.
+During manifest selection, skip explicitly declared portable Agent Plugins schemas
+only when a supported manifest remains; preserve failures for malformed or unsafe
+sources and for portable-only plugins.
 Keep `PluginComponents.legacyRepository` separate from GitHub overlay eligibility:
 ordinary manifest-free repositories retain nested-skill precedence, while a
 marketplace root skill stays authoritative over unsupported flat children.

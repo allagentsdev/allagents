@@ -190,6 +190,29 @@ describe('plugin component source failures', () => {
     await expectFailedUpdate(original);
   });
 
+  for (const failure of ['portable only', 'malformed preferred', 'malformed fallback', 'invalid native components'] as const) {
+    it(`preserves installed output when manifest selection encounters ${failure}`, async () => {
+      await installBaseline();
+      const original = await snapshotOutputs();
+      const portable = JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+        name: 'portable',
+      });
+      await writeFile(join(plugin, 'plugin.json'), failure === 'malformed preferred' ? '{invalid' : portable);
+      if (failure === 'portable only') {
+        await writeFile(join(plugin, '.github/plugin/plugin.json'), portable);
+      } else if (failure === 'malformed fallback') {
+        await writeFile(join(plugin, '.github/plugin/plugin.json'), '{invalid');
+        await mkdir(join(plugin, '.claude-plugin'), { recursive: true });
+        await writeFile(join(plugin, '.claude-plugin/plugin.json'), JSON.stringify(manifest));
+      } else if (failure === 'invalid native components') {
+        manifest.skills = 42;
+        await writeManifest();
+      }
+      await expectFailedUpdate(original);
+    });
+  }
+
   it('reconciles explicit empty component arrays without rediscovering conventional components', async () => {
     await installBaseline();
     for (const [path, content] of [

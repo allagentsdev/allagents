@@ -343,6 +343,31 @@ describe('marketplace component resolution', () => {
     expect(existsSync(join(project, '.claude/commands/root.md'))).toBe(false);
     expect(existsSync(join(project, '.github/skills/default/SKILL.md'))).toBe(false);
   });
+  it('loads the supported Claude manifest when earlier candidates declare the portable schema', async () => {
+    await mkdir(join(plugin, '.plugin'), { recursive: true });
+    await mkdir(join(plugin, '.claude-plugin'), { recursive: true });
+    await mkdir(join(plugin, 'custom/selected'), { recursive: true });
+    await writeFile(join(plugin, 'custom/selected/SKILL.md'),
+      '---\nname: selected\ndescription: Selected\n---\nNative skill.\n');
+    for (const path of ['.plugin/plugin.json', 'plugin.json', '.github/plugin/plugin.json']) {
+      await writeFile(join(plugin, path), JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+        name: 'portable', skills: './missing-portable-skill',
+        mcpServers: { portable: { url: 'http://127.0.0.1:9/portable' } },
+      }));
+    }
+    await writeFile(join(plugin, '.claude-plugin/plugin.json'), JSON.stringify({
+      name: 'native', skills: './custom/selected',
+      mcpServers: { native: { url: 'http://127.0.0.1:9/native' } },
+    }));
+
+    expect((await syncWorkspace(project)).success).toBe(true);
+    for (const client of ['.claude', '.github', '.codex']) {
+      expect(await readFile(join(project, client, 'skills/selected/SKILL.md'), 'utf-8')).toContain('Native skill.');
+    }
+    expect(JSON.parse(await readFile(join(project, '.mcp.json'), 'utf-8')).mcpServers)
+      .toEqual({ native: { url: 'http://127.0.0.1:9/native' } });
+  });
   it('does not copy a lower-priority raw GitHub MCP file over personal project servers', async () => {
     await writeFile(join(plugin, '.github/mcp.json'), JSON.stringify({
       mcpServers: { ignored: { type: 'http', url: 'http://127.0.0.1:9/ignored' } },

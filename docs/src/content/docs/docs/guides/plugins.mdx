@@ -109,10 +109,13 @@ no install-time distinction between these modes; malformed marketplace
 component fields were rejected in every mode. AllAgents never relaxes source
 containment or user exclusions based on `strict`.
 
-For legacy plugins, the first plugin manifest is selected in this order:
+For legacy plugins, the first supported plugin manifest is selected in this order:
 `.plugin/plugin.json`, `plugin.json`, `.github/plugin/plugin.json`, then
-`.claude-plugin/plugin.json`. Invalid preferred manifests and escaping paths
-fail closed in AllAgents, even where native feature loading falls back.
+`.claude-plugin/plugin.json`. Candidates that explicitly declare the portable
+Agent Plugins `$schema` are skipped so a supported Copilot/Claude manifest can
+coexist with them. If only portable manifests exist, resolution fails with the
+unsupported-schema error. Malformed JSON, invalid selected native declarations,
+and escaping paths still fail closed, even where native feature loading falls back.
 
 | Component | Conventional source | Explicit plugin-manifest form |
 |---|---|---|

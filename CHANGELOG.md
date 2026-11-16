@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.2](https://github.com/allagentsdev/allagents/compare/v1.27.1...v1.27.2) (2026-11-16)
+
+
+### Fixed
+
+* **deps:** upgrade undici and require Node.js 22.19 ([#628](https://github.com/allagentsdev/allagents/issues/628)) ([0bb5078](https://github.com/allagentsdev/allagents/commit/0bb507882885097bc46946bfe0e7941359d4f4fc))
+
 ## [1.27.1](https://github.com/allagentsdev/allagents/compare/v1.27.0...v1.27.1) (2026-11-16)
 
 

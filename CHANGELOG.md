@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.27.0](https://github.com/allagentsdev/allagents/compare/v1.26.0...v1.27.0) (2026-11-16)
+
+
+### Added
+
+* **plugin:** install portable Agent Plugins skills and tools ([#626](https://github.com/allagentsdev/allagents/issues/626)) ([4329c44](https://github.com/allagentsdev/allagents/commit/4329c44cb1427e0d82dafff36a1a9909d2121e7a))
+
+
+### Fixed
+
+* **plugin:** allow native manifests alongside portable schemas ([#624](https://github.com/allagentsdev/allagents/issues/624)) ([5fb08ff](https://github.com/allagentsdev/allagents/commit/5fb08ffe03a108ba5fb7d3d4b6205f053db41cd0))
+
 ## [1.26.0](https://github.com/allagentsdev/allagents/compare/v1.25.0...v1.26.0) (2026-11-13)
 
 

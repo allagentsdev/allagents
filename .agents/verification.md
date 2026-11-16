@@ -79,6 +79,10 @@ cache identity; a shallow pull can hide ancestry and break fast-forward updates.
 
 ## Package size failures
 
+Keep Undici on its public entry point: it initializes dispatcher APIs used by
+CONNECT proxies. Its supported Node floor also covers APIs used during real
+requests, so validate the packaged HTTP flow at that floor as well as startup.
+
 Before raising `PACKAGE_SIZE_BUDGETS` in `scripts/check-package-size.ts`, inspect
 `dist/THIRD_PARTY_NOTICES.txt` and `bun.lock` for duplicate dependency versions.
 Routine updates can resolve a shared dependency separately for a transitive

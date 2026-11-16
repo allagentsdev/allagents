@@ -89,6 +89,7 @@ export function createMcpNetwork(options: McpNetworkOptions): {
     ? undefined
     : policy.enableProxy
       ? new EnvHttpProxyAgent({
+          proxyTunnel: true,
           ...(httpProxy === undefined ? {} : { httpProxy }),
           ...(httpsProxy === undefined ? {} : { httpsProxy }),
           ...(noProxy === undefined ? {} : { noProxy }),

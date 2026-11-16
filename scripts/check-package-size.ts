@@ -26,9 +26,9 @@ export type CheckedPackageTarball = {
 };
 
 export const PACKAGE_SIZE_BUDGETS: PackageSizes = {
-  emittedJavaScript: 2_550_000,
-  unpackedPackage: 2_700_000,
-  compressedTarball: 780_000,
+  emittedJavaScript: 2_800_000,
+  unpackedPackage: 2_950_000,
+  compressedTarball: 850_000,
 };
 
 const LABELS: Record<keyof PackageSizes, string> = {

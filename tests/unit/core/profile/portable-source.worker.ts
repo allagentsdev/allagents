@@ -7,6 +7,7 @@ import { resetFetchCache } from '../../../../src/core/plugin.js';
 import { resolveProfileFileSource } from '../../../../src/core/profile/source.js';
 import { readPluginMcpConfig } from '../../../../src/core/vscode-mcp.js';
 import { getPluginCachePath } from '../../../../src/utils/plugin-path.js';
+import { getProfileAdapter } from '../../../../src/core/profile/adapters/registry.js';
 import { applyProfilePlan, planProfileOperation } from '../../../../src/core/profile/index.js';
 import { stringify } from 'yaml';
 
@@ -112,7 +113,14 @@ describe('portable profile source lifetime', () => {
       clients: [{ name: client, install: 'file' }],
     } } }));
     const options = { homeDir: join(root, 'home'), userConfigPath, workspaceDirectory: root, binDir: join(root, 'bin'), offline: true };
-    const plan = await planProfileOperation('portable', 'install', options);
+    const plan = await planProfileOperation('portable', 'install', options, {
+      getAdapter(name) {
+        const adapter = getProfileAdapter(name);
+        return adapter && Object.create(adapter, {
+          isRuntimeAvailable: { value: async () => true },
+        });
+      },
+    });
     const result = await applyProfilePlan(plan, options);
     expect(result.success).toBe(true);
     const files = {

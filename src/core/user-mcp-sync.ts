@@ -1,3 +1,4 @@
+import { getHomeDir } from '../constants.js';
 import type { SyncState } from '../models/sync-state.js';
 import { mcpClientIdsForScope } from '../models/client-mapping.js';
 import type {
@@ -13,6 +14,7 @@ import { getCopilotMcpConfigPath } from './copilot-mcp.js';
 import { applyMcpProxy } from './mcp-proxy.js';
 import type { ValidatedPlugin } from './sync.js';
 import { getPreviouslySyncedMcpServers, type McpScope } from './sync-state.js';
+import { getUniversalMcpConfigPath } from './universal-mcp.js';
 import {
   collectMcpServers,
   type McpMergeResult,
@@ -124,6 +126,19 @@ export async function syncUserMcpAdapters({
     warnings.push(...result.warnings);
     mcpResults.copilot = result;
     trackedServers.copilot = result.trackedServers;
+  }
+
+  if (syncClients.includes('universal')) {
+    const result = syncClaudeMcpConfig(validPlugins, {
+      dryRun,
+      force,
+      configPath: getUniversalMcpConfigPath(getHomeDir()),
+      trackedServers: getPreviouslySyncedMcpServers(previousState, 'universal'),
+      serverOverrides: serversByClient.get('universal')!,
+    });
+    warnings.push(...result.warnings);
+    mcpResults.universal = result;
+    trackedServers.universal = result.trackedServers;
   }
 
   if (allServers.size > 0) {

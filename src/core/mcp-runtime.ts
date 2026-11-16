@@ -23,6 +23,7 @@ import {
   resolveMcpDestination,
 } from './mcp-servers.js';
 import { LinearStdioClientTransport } from './mcp-stdio-client-transport.js';
+import { getUniversalMcpServer } from './universal-mcp.js';
 
 const ENVIRONMENT_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 const DEFAULT_HTTP_CLEANUP_TIMEOUT_MS = 2_000;
@@ -508,7 +509,7 @@ async function connectStdioSession(
   return { client, credentialGuard, close };
 }
 
-/** Select a declaration before connecting; errors never trigger fallback. */
+/** Select inline, then same-scope Universal config; errors never trigger fallback. */
 export async function resolveConfiguredMcpServer(
   destination: McpDestination,
   serverName: string,
@@ -516,10 +517,18 @@ export async function resolveConfiguredMcpServer(
 ): Promise<ResolvedMcpServer> {
   const config = await getMcpServer(destination, serverName);
   if (config) return { destination, config };
+  if (destination.kind !== 'profile') {
+    const managed = await getUniversalMcpServer(destination, serverName);
+    if (managed) return { destination, config: managed };
+  }
   if (fallbackToUser && destination.kind === 'project') {
     const user = resolveMcpDestination({ scope: 'user' });
     const userConfig = await getMcpServer(user, serverName);
     if (userConfig) return { destination: user, config: userConfig };
+    if (user.kind === 'user') {
+      const managed = await getUniversalMcpServer(user, serverName);
+      if (managed) return { destination: user, config: managed };
+    }
     throw new Error(
       `MCP server '${serverName}' is not defined in workspace.yaml or the user workspace`,
     );

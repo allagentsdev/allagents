@@ -21,6 +21,7 @@ import {
   saveSyncState,
 } from './sync-state.js';
 import { syncUserMcpAdapters } from './user-mcp-sync.js';
+import { getUniversalMcpConfigPath } from './universal-mcp.js';
 import { getUserWorkspaceConfig } from './user-workspace.js';
 import type { McpMergeResult } from './vscode-mcp.js';
 import { collectMcpServers, syncVscodeMcpConfig } from './vscode-mcp.js';
@@ -37,7 +38,7 @@ const PROJECT_MCP_CLIENTS: ReadonlySet<ClientType> = new Set(
  * Result of running the MCP sync pipeline across all scopes.
  */
 export interface SyncMcpServersResult {
-  /** Per-scope merge results keyed by McpScope ('vscode' | 'claude' | 'codex' | 'copilot') */
+  /** Per-client merge results, including the Universal managed configuration. */
   mcpResults: Partial<Record<McpScope, McpMergeResult>>;
   /** Warnings from collection, proxy, or per-client sync */
   warnings: string[];
@@ -85,6 +86,12 @@ function buildSyncSpecs(workspacePath: string): McpSyncSpec[] {
       client: 'copilot',
       scope: 'copilot',
       configPath: join(workspacePath, '.github', 'mcp.json'),
+      syncFn: syncClaudeMcpConfig,
+    },
+    {
+      client: 'universal',
+      scope: 'universal',
+      configPath: getUniversalMcpConfigPath(workspacePath),
       syncFn: syncClaudeMcpConfig,
     },
   ];

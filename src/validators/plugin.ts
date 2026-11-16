@@ -106,7 +106,17 @@ export async function validateLocalPlugin(
     return result();
   }
 
-  for (const location of [
+  let components: PluginComponents | undefined;
+  let componentError: unknown;
+  try {
+    components = resolvePluginComponents(root);
+  } catch (error) {
+    componentError = error;
+  }
+  const portable = components?.format === 'portable';
+  recognized ||= portable;
+
+  for (const location of portable ? [] : [
     '.claude-plugin/plugin.json',
     '.github/plugin/plugin.json',
     '.codex-plugin/plugin.json',
@@ -117,7 +127,7 @@ export async function validateLocalPlugin(
   }
 
   // These declarations have different accepted syntaxes but share an object container.
-  for (const [location, label, format] of [
+  for (const [location, label, format] of portable ? [] : [
     ['.mcp.json', 'MCP declaration', 'JSON5'],
     ['hooks.json', 'Hook declaration', 'JSON'],
     ['hooks/hooks.json', 'Hook declaration', 'JSON'],
@@ -129,7 +139,7 @@ export async function validateLocalPlugin(
   }
 
   // Match the precedence and lenient semantics used during installation.
-  for (const location of [
+  for (const location of portable ? [] : [
     '.github/plugin/marketplace.json',
     '.claude-plugin/marketplace.json',
   ]) {
@@ -145,14 +155,11 @@ export async function validateLocalPlugin(
 
   // Component selection depends on readable, valid declarations. A failed
   // prerequisite already has a diagnostic at its source, not a skill read error.
-  let components: PluginComponents | undefined;
-  if (!diagnostics.some((entry) => entry.severity === 'error')) {
-    try {
-      components = resolvePluginComponents(root);
-    } catch (error) {
-      diagnostic('.', `Cannot resolve plugin components: ${error instanceof Error ? error.message : String(error)}`);
-    }
+  if (!diagnostics.some((entry) => entry.severity === 'error') && componentError) {
+    diagnostic('.', `Cannot resolve plugin components: ${componentError instanceof Error ? componentError.message : String(componentError)}`);
   }
+  if (diagnostics.some((entry) => entry.severity === 'error')) components = undefined;
+  for (const warning of components?.warnings ?? []) diagnostic('.', warning, 'warning');
 
   if (components) {
     try {
@@ -176,7 +183,7 @@ export async function validateLocalPlugin(
     }
   }
 
-  for (const location of ['commands', 'agents', 'hooks', '.github']) {
+  for (const location of portable ? [] : ['commands', 'agents', 'hooks', '.github']) {
     const entry = await inspect(location);
     if (!entry) continue;
     if (!entry.isDirectory()) {

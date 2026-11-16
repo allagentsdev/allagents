@@ -12,7 +12,7 @@ import type { ClientType } from '../models/workspace-config.js';
 import { ensureConfigGitignore } from './config-gitignore.js';
 
 /** MCP client identifier (e.g., "vscode" for project .vscode/mcp.json) */
-export type McpScope = 'vscode' | 'codex' | 'claude' | 'copilot';
+export type McpScope = 'vscode' | 'codex' | 'claude' | 'copilot' | 'universal';
 
 /**
  * Data structure for saving sync state with optional MCP servers

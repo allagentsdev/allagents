@@ -65,6 +65,22 @@ unsupported rather than inferred from another client.
   </tbody>
 </table>
 
+## Universal
+
+Select `universal` to install skills in the shared `.agents/skills/` project
+directory or `~/.agents/skills/` user directory. Clients that discover these
+shared directories can use the skills without a separate client-specific copy.
+
+AllAgents also synchronizes plugin MCP servers to `.allagents/mcp.json` in the
+project, or `~/.allagents/mcp.json` at user scope. The `allagents mcp tools` and
+`allagents mcp call` commands can use those servers after synchronization.
+Other clients do not automatically read this MCP file; select their client IDs
+to write their own supported MCP configuration as well.
+
+Universal is an installation destination, so it accepts the same supported
+plugin sources as other file destinations, including
+[portable Agent Plugins](/docs/guides/plugins/#portable-agent-plugins).
+
 ## How global profiles choose directories
 
 An AllAgents profile selects a client's configuration and file destinations.

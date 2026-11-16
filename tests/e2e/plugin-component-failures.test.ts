@@ -190,16 +190,16 @@ describe('plugin component source failures', () => {
     await expectFailedUpdate(original);
   });
 
-  for (const failure of ['portable only', 'malformed preferred', 'malformed fallback', 'invalid native components'] as const) {
+  for (const failure of ['unsupported portable version', 'malformed preferred', 'malformed fallback', 'invalid native components'] as const) {
     it(`preserves installed output when manifest selection encounters ${failure}`, async () => {
       await installBaseline();
       const original = await snapshotOutputs();
       const portable = JSON.stringify({
-        $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+        $schema: `https://agent-plugins.org/schemas/${failure === 'unsupported portable version' ? '2.0.0' : '1.0.0'}/plugin.schema.json`,
         name: 'portable',
       });
       await writeFile(join(plugin, 'plugin.json'), failure === 'malformed preferred' ? '{invalid' : portable);
-      if (failure === 'portable only') {
+      if (failure === 'unsupported portable version') {
         await writeFile(join(plugin, '.github/plugin/plugin.json'), portable);
       } else if (failure === 'malformed fallback') {
         await writeFile(join(plugin, '.github/plugin/plugin.json'), '{invalid');

@@ -20,6 +20,18 @@ function makePlugin(resolved: string, plugin = 'test-plugin'): ValidatedPlugin {
 }
 
 describe('serverToToml', () => {
+  test('keeps a dotted server name as one configuration key', () => {
+    const source = serverToToml('reports.tools', { command: 'node', env: { MODE: 'safe' } });
+    const value = Bun.TOML.parse(source) as { mcp_servers: Record<string, { command: string }> };
+    expect(Object.keys(value.mcp_servers)).toEqual(['reports.tools']);
+    expect(value.mcp_servers['reports.tools']?.command).toBe('node');
+    expect([...parseCodexConfigToml(source).serverNames]).toEqual(['reports.tools']);
+  });
+  test('round-trips executable arguments containing newlines and control escapes', () => {
+    const args = ['line one\nline two', 'tab\tvalue', 'quoted "value"', 'C:\\tools\\server.js'];
+    const value = Bun.TOML.parse(serverToToml('portable', { command: 'node', args })) as { mcp_servers: { portable: { args: string[] } } };
+    expect(value.mcp_servers.portable.args).toEqual(args);
+  });
   test('generates TOML for HTTP server', () => {
     const toml = serverToToml('deepwiki', { type: 'http', url: 'https://mcp.deepwiki.com/mcp' });
     expect(toml).toBe('[mcp_servers.deepwiki]\nurl = "https://mcp.deepwiki.com/mcp"');
@@ -110,6 +122,32 @@ describe('syncCodexProjectMcpConfig', () => {
     const content = readFileSync(configPath, 'utf-8');
     expect(content).toContain('model = "gpt-5"');
     expect(content).toContain('[mcp_servers.deepwiki]');
+  });
+
+  test.each([
+    [String.raw`"\U0001F600"`, '😀'],
+    [String.raw`"literal\\U0001F600"`, String.raw`literal\U0001F600`],
+    [String.raw`"\U0000005C\U00000022"`, '\\"'],
+    ['"with\ttab"', 'with\ttab'],
+  ])('preserves the existing server with TOML key %s', (quoted, name) => {
+    const configPath = join(tempDir, '.codex', 'config.toml');
+    mkdirSync(dirname(configPath), { recursive: true });
+    const existing = `[mcp_servers.${quoted}]\ncommand = "personal"\n`;
+    writeFileSync(configPath, existing);
+    const result = syncCodexProjectMcpConfig([], {
+      configPath,
+      trackedServers: [],
+      serverOverrides: new Map([
+        [name!, { command: 'managed' }],
+        ['added', { command: 'node' }],
+      ]),
+    });
+    expect(result.skippedServers).toEqual([name!]);
+    expect(result.addedServers).toEqual(['added']);
+    const content = readFileSync(configPath, 'utf8');
+    expect(content).toContain(existing.trim());
+    const parsed = Bun.TOML.parse(content) as { mcp_servers: Record<string, { command: string }> };
+    expect(parsed.mcp_servers[name!]?.command).toBe('personal');
   });
 
   test('skips user-managed servers', () => {

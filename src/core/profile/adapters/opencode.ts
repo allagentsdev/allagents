@@ -1,7 +1,6 @@
 import { join, resolve } from 'node:path';
 import {
   OpenCodeProfileSettingsSchema,
-  ProfileMcpServerConfigSchema,
   ProfileNameSchema,
 } from '../../../models/workspace-config.js';
 import type { FileOnlyProfileAdapter } from '../types.js';
@@ -62,8 +61,7 @@ function serializeOpenCodeMcp(
   const selected = serializeProfileMcpServers(input, 'opencode', profile);
   if (selected === null) return undefined;
   const mcp: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(selected)) {
-    const server = ProfileMcpServerConfigSchema.parse(value);
+  for (const [name, server] of Object.entries(selected)) {
     if ('url' in server) {
       mcp[name] = {
         type: 'remote',

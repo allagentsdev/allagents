@@ -30,6 +30,8 @@ export interface PluginComponentPolicy {
 
 /** Resolved distribution sources. Validation modes never define membership. */
 export interface PluginComponents {
+  /** Canonical Agent Plugins source format, independent of the destination. */
+  format?: 'portable';
   skills: string[];
   commands: string[];
   agents: string[];
@@ -37,6 +39,8 @@ export interface PluginComponents {
   /** Portable hook payload directories, separate from hook configuration. */
   hookResources?: string[];
   mcpServers: PluginConfigSource[];
+  /** Invalid portable MCP containers cannot authoritatively remove prior output. */
+  mcpError?: string;
   /** Supported GitHub assistant artifacts, independent of native manifest membership. */
   github: boolean;
   /** Manifest-free repository skill layout, independent of assistant overlays. */

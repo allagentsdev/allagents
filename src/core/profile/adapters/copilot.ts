@@ -1,7 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   CopilotProfileSettingsSchema,
-  ProfileMcpServerConfigSchema,
   ProfileNameSchema,
 } from '../../../models/workspace-config.js';
 import {
@@ -68,8 +67,7 @@ function serializeCopilotMcp(
   const selected = serializeProfileMcpServers(input, 'copilot', profile);
   if (selected === null) return null;
   const mcpServers: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(selected)) {
-    const server = ProfileMcpServerConfigSchema.parse(value);
+  for (const [name, server] of Object.entries(selected)) {
     mcpServers[name] =
       'url' in server
         ? {

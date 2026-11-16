@@ -1,7 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   CodexProfileSettingsSchema,
-  ProfileMcpServerConfigSchema,
   ProfileNameSchema,
 } from '../../../models/workspace-config.js';
 import {
@@ -123,8 +122,7 @@ function serializeCodexMcp(
   const selected = serializeProfileMcpServers(input, 'codex', profile);
   if (selected === null) return null;
   const servers: Record<string, TomlTable> = {};
-  for (const [name, value] of Object.entries(selected)) {
-    const server = ProfileMcpServerConfigSchema.parse(value);
+  for (const [name, server] of Object.entries(selected)) {
     if ('url' in server) {
       rejectUnsupportedReference(server.url, `MCP server '${name}' URL`);
       const envHttpHeaders: Record<string, string> = {};
@@ -144,6 +142,15 @@ function serializeCodexMcp(
         ...(Object.keys(envHttpHeaders).length > 0 && {
           env_http_headers: envHttpHeaders,
         }),
+      };
+      continue;
+    }
+
+    if (input.portableMcpServers?.has(name)) {
+      servers[name] = {
+        command: server.command,
+        ...(server.args && { args: server.args }),
+        ...(server.env && { env: server.env }),
       };
       continue;
     }

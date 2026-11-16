@@ -960,9 +960,20 @@ export async function planProfileOperation(
       })), declaration.mcpServers, client);
       warnings.push(...pluginMcp.warnings);
 
+      const portableMcpServers = new Set<string>();
+      for (const { source } of resolvedFileSources) {
+        if (source.components.format !== 'portable') continue;
+        for (const declaration of source.components.mcpServers) {
+          for (const [name, server] of Object.entries(declaration.inline ?? {})) {
+            if (pluginMcp.servers.get(name) === server) portableMcpServers.add(name);
+          }
+        }
+      }
+
       const selectedMcpServers = serializeProfileMcpServers(
         {
           plugins: [],
+          portableMcpServers,
           ...((pluginMcp.servers.size > 0 || declaration.mcpServers !== undefined) && {
             mcpServers: Object.fromEntries(pluginMcp.servers) as Record<string, McpServerConfig>,
           }),
@@ -1297,6 +1308,7 @@ export async function planProfileOperation(
           ...filePlugins,
         ],
         settings: declaredClient.settings,
+        portableMcpServers,
         ...(effectiveMcpServers && { mcpServers: effectiveMcpServers }),
       };
       if (

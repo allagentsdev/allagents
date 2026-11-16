@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.27.1](https://github.com/allagentsdev/allagents/compare/v1.27.0...v1.27.1) (2026-11-16)
+
+
+### Fixed
+
+* **deps-dev:** bump @biomejs/biome ([#627](https://github.com/allagentsdev/allagents/issues/627)) ([4c3b60c](https://github.com/allagentsdev/allagents/commit/4c3b60c58629cae802f1a31b82fe492d2163d1ea))
+* **deps-dev:** bump eventsource-parser from 3.1.1 to 4.1.3 ([#629](https://github.com/allagentsdev/allagents/issues/629)) ([26f58d9](https://github.com/allagentsdev/allagents/commit/26f58d989e3646d52262586b1c1d04b0bde85bbb))
+* **deps:** update vulnerable Hono dependencies ([#631](https://github.com/allagentsdev/allagents/issues/631)) ([639d15a](https://github.com/allagentsdev/allagents/commit/639d15a1657d104b1336e659d390921a477fe716))
+
 ## [1.27.0](https://github.com/allagentsdev/allagents/compare/v1.26.0...v1.27.0) (2026-11-16)
 
 

@@ -1,7 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   ClaudeProfileSettingsSchema,
-  ProfileMcpServerConfigSchema,
   ProfileNameSchema,
 } from '../../../models/workspace-config.js';
 import {
@@ -112,8 +111,7 @@ function serializeClaudeMcp(
 ): Readonly<Record<string, unknown>> {
   const selected = serializeProfileMcpServers(input, 'claude', profile) ?? {};
   const servers: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(selected)) {
-    const server = ProfileMcpServerConfigSchema.parse(value);
+  for (const [name, server] of Object.entries(selected)) {
     servers[name] =
       'url' in server
         ? {

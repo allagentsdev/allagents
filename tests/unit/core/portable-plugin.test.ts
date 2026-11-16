@@ -252,6 +252,31 @@ describe('portable MCP launcher', () => {
     expect(result.stderr).toContain('outside');
   });
 
+  test.skipIf(process.platform === 'win32')('terminates a server that ignores graceful shutdown before its launcher exits', async () => {
+    file('stubborn.cjs', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); console.log(process.pid);");
+    mcp({ probe: { type: 'stdio', command: 'node', args: ['${PLUGIN_ROOT}/stubborn.cjs'] } });
+    const config = launcher();
+    const child = Bun.spawn([config.command, ...config.args], { env: { ...process.env, ...config.env }, stdout: 'pipe', stderr: 'pipe' });
+    let serverPid: number | undefined;
+    let timedOut = false;
+    const deadline = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 2500);
+    try {
+      const reader = child.stdout.getReader();
+      const { value } = await reader.read();
+      reader.releaseLock();
+      serverPid = Number(new TextDecoder().decode(value).trim());
+      expect(serverPid).toBeGreaterThan(0);
+      child.kill('SIGTERM');
+      await child.exited;
+      expect(timedOut).toBe(false);
+      expect(() => process.kill(serverPid!, 0)).toThrow();
+    } finally {
+      clearTimeout(deadline);
+      child.kill('SIGKILL');
+      if (serverPid) { try { process.kill(serverPid, 'SIGKILL'); } catch {} }
+    }
+  });
+
   test('preserves literal URL/headers and declared remote transport through the shared proxy', () => {
     const bin = fakeNpx();
     mcp({ probe: { type: 'streamable-http', url: 'https://example.com/${URL_LITERAL}?token=private', headers: { Authorization: '${HEADER_LITERAL}' } } });

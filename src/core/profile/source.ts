@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { lstat, rm } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { cloneToTemp, createGit, gitHubUrl } from '../git.js';
+import { fetchPlugin } from '../plugin.js';
 import {
   isPluginSpec,
   parsePluginSpec,
@@ -85,9 +86,28 @@ async function resolveRemoteRepository(
   try {
     const pluginPath = parsed.subpath ? join(temporary, parsed.subpath) : temporary;
     assertPluginComponentPath(temporary, pluginPath);
+    const components = resolvePluginComponents(pluginPath);
+    if (components.format === 'portable' && !runtime.dryRun && components.mcpServers.length > 0) {
+      // Portable tools may execute files outside a skill directory. Keep their
+      // source in the normal ref-qualified cache after the inspection checkout ends.
+      const fetched = await fetchPlugin(source, { ...(ref && { branch: ref }) });
+      if (!fetched.success) throw new Error(fetched.error ?? 'Cannot retain portable profile source');
+      const retained = parsed.subpath ? join(fetched.cachePath, parsed.subpath) : fetched.cachePath;
+      assertPluginComponentPath(fetched.cachePath, retained);
+      const retainedComponents = resolvePluginComponents(retained);
+      await rm(temporary, { recursive: true, force: true });
+      return {
+        path: retained,
+        components: retainedComponents,
+        source,
+        ...(requestedRef && { requestedRef }),
+        ...(ref && { resolvedRef: ref }),
+        ...(fetched.resolvedSha && { resolvedSha: fetched.resolvedSha }),
+      };
+    }
     return {
       path: pluginPath,
-      components: resolvePluginComponents(pluginPath),
+      components,
       source,
       ...(requestedRef && { requestedRef }),
       ...(ref && { resolvedRef: ref }),

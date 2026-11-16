@@ -104,6 +104,7 @@ export function collectMcpServers(
     if (targetClient && !plugin.clients.includes(targetClient)) continue;
     if (!plugin.success) continue;
     const components = plugin.components ?? resolvePluginComponents(plugin.resolved, undefined, { exclude: plugin.exclude, hooks: plugin.hooks });
+    if (components.mcpError) throw new Error(components.mcpError);
     const mcpServers = readPluginMcpConfig(plugin.resolved, components, plugin.exclude);
     if (!mcpServers) {
       if (components.mcpServers.some((source) => {

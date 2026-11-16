@@ -63,6 +63,83 @@ filter the copy. Keep the source separate from its installation destination:
 AllAgents reports an error when a root skill's recursive copy would overlap its
 source directory.
 
+## Portable Agent Plugins
+
+For example, a portable reporting plugin can contain a `reports` skill and a
+local MCP tool:
+
+```text
+reporting/
+├── plugin.json
+├── mcp.json
+├── server.mjs
+└── skills/
+    └── reports/
+        ├── SKILL.md
+        └── references/
+            └── report-template.md
+```
+
+Its root `plugin.json` identifies the [Agent Plugins](https://agent-plugins.org/)
+1.0.0 format:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "reporting",
+  "description": "Prepare reports and inspect report data"
+}
+```
+
+`$schema` tells AllAgents which rules describe this file. With this exact value,
+AllAgents reads skills from `skills/*/SKILL.md` and MCP servers from `mcp.json`.
+It does not treat the file as a Claude or Copilot manifest with custom component
+paths. Each skill must have frontmatter whose `name` matches its directory name
+and a nonempty `description`. Supporting files inside each valid skill directory
+are included. AllAgents checks only immediate children of `skills/`; it does
+not search nested collections for more skills.
+
+For the example above, `mcp.json` could contain:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "report-data": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.mjs"]
+    }
+  }
+}
+```
+
+File installation copies the skill to each selected client's skill directory
+and adds the tool to clients that support MCP synchronization. This includes
+the shared [Universal destination](/docs/reference/clients/#universal).
+Portable 1.0.0 supplies skills and MCP servers; root `commands/`, `agents/`,
+`hooks/`, and `.github/` resources are not added to a portable installation.
+
+For local MCP tools, AllAgents sets `PLUGIN_ROOT` to the source directory and
+starts the tool there unless `cwd` selects another permitted directory. It
+provides a writable `PLUGIN_DATA` directory under
+`~/.allagents/plugins/data/`. That directory survives updates and is shared by
+installations using the same canonical source path. `${PLUGIN_ROOT}` and
+`${PLUGIN_DATA}` are expanded once in arguments, environment values, and
+`cwd`; other placeholders stay literal. Remote `streamable-http` and `sse`
+servers retain their declared transport, URL, and headers without placeholder
+expansion. MCP launchers require Node.js; remote connections also require npm's
+`npx` to run the AllAgents MCP bridge.
+
+An invalid skill or MCP server is skipped with a warning while valid siblings
+remain available. An unreadable or malformed `mcp.json` reports a failure and
+preserves previously managed MCP configuration. Valid skills can still update.
+
+If the package also contains a supported legacy Claude or Copilot manifest,
+AllAgents keeps that manifest's existing component discovery rules. It does
+not combine the two formats. Native installation continues to delegate to the
+selected client's plugin manager.
+
 ## Copilot hooks
 When you install a plugin for Copilot in a project, AllAgents reads its
 `hooks.json` or `hooks/hooks.json` and writes the hooks to
@@ -112,10 +189,12 @@ containment or user exclusions based on `strict`.
 For legacy plugins, the first supported plugin manifest is selected in this order:
 `.plugin/plugin.json`, `plugin.json`, `.github/plugin/plugin.json`, then
 `.claude-plugin/plugin.json`. Candidates that explicitly declare the portable
-Agent Plugins `$schema` are skipped so a supported Copilot/Claude manifest can
-coexist with them. If only portable manifests exist, resolution fails with the
-unsupported-schema error. Malformed JSON, invalid selected native declarations,
-and escaping paths still fail closed, even where native feature loading falls back.
+Agent Plugins `$schema` are set aside while searching for a supported legacy
+manifest. If none exists, a root `plugin.json` declaring the supported 1.0.0
+schema uses [portable discovery](#portable-agent-plugins). Other portable schema
+versions or locations remain unsupported. Malformed JSON, invalid selected
+native declarations, and escaping paths still fail closed, even where native
+feature loading falls back.
 
 | Component | Conventional source | Explicit plugin-manifest form |
 |---|---|---|

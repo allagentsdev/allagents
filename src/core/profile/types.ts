@@ -93,6 +93,8 @@ export interface ProfileSerializationInput {
   readonly plugins: readonly ProfileResolvedPlugin[];
   readonly settings?: Readonly<Record<string, unknown>>;
   readonly mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** Internally generated portable launchers, never authored profile values. */
+  readonly portableMcpServers?: ReadonlySet<string>;
 }
 
 export interface ProfileMcpPrerequisite {

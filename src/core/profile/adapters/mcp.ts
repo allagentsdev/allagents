@@ -1,6 +1,7 @@
 import {
   type ClientType,
   type McpServerConfig,
+  McpServerConfigSchema,
   ProfileMcpServerConfigSchema,
   ProfileMcpServerNameSchema,
 } from '../../../models/workspace-config.js';
@@ -21,13 +22,14 @@ export function serializeProfileMcpServers(
   if (input.mcpServers === undefined) return null;
   const selected: Record<string, McpServerConfig> = {};
   for (const name of Object.keys(input.mcpServers).sort()) {
-    const nameValidation = ProfileMcpServerNameSchema.safeParse(name);
-    if (!nameValidation.success) {
+    const portable = input.portableMcpServers?.has(name);
+    if (!portable && !ProfileMcpServerNameSchema.safeParse(name).success) {
       throw new Error(`Invalid profile MCP server name '${name}'`);
     }
-    const parsed = ProfileMcpServerConfigSchema.safeParse(
-      input.mcpServers[name],
-    );
+    const schema = portable
+      ? McpServerConfigSchema
+      : ProfileMcpServerConfigSchema;
+    const parsed = schema.safeParse(input.mcpServers[name]);
     if (!parsed.success) {
       const issue = flattenZodIssues(parsed.error)[0];
       throw new Error(

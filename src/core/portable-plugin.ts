@@ -1,6 +1,5 @@
-import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import picomatch from 'picomatch';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type {
   PluginComponentPolicy,
   PluginComponents,
@@ -11,42 +10,13 @@ import {
   assertPluginComponentTree,
 } from './plugin-components.js';
 import { resolvePortableMcp } from './portable-mcp.js';
+import { excluded, exists, isRecord } from './plugin-component-utils.js';
 
 export const PORTABLE_PLUGIN_SCHEMA =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 
-export function isPortableRecord(
-  value: unknown,
-): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function portablePathExists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
-export function portablePathExcluded(
-  root: string,
-  path: string,
-  policy: PluginComponentPolicy,
-): boolean {
-  const source = relative(root, path).replaceAll('\\', '/');
-  return (
-    policy.exclude?.some((pattern) => {
-      const match = picomatch(pattern);
-      return match(source) || match(`${source}/`);
-    }) ?? false
-  );
-}
-
 function validateManifest(value: unknown, warnings: string[]): string {
-  if (!isPortableRecord(value))
+  if (!isRecord(value))
     throw new Error('Portable plugin.json must be an object');
   if (value.$schema !== PORTABLE_PLUGIN_SCHEMA)
     throw new Error(
@@ -72,7 +42,7 @@ function validateManifest(value: unknown, warnings: string[]): string {
   }
   if (Object.hasOwn(value, 'author')) {
     if (
-      !isPortableRecord(value.author) ||
+      !isRecord(value.author) ||
       Object.entries(value.author).some(
         ([key, entry]) =>
           !['name', 'email', 'url'].includes(key) || typeof entry !== 'string',
@@ -108,13 +78,12 @@ function validateManifest(value: unknown, warnings: string[]): string {
   }
   if (
     Object.hasOwn(value, 'extensions') &&
-    !isPortableRecord(value.extensions)
+    !isRecord(value.extensions)
   ) {
     warnings.push(
       'Portable plugin.json extensions is not an object and is ignored',
     );
   }
-  // No extension namespaces are implemented. Their values remain opaque.
   return value.name;
 }
 
@@ -160,7 +129,7 @@ function validateSkill(path: string, name: string): void {
   }
   if (
     Object.hasOwn(metadata, 'metadata') &&
-    (!isPortableRecord(metadata.metadata) ||
+    (!isRecord(metadata.metadata) ||
       Object.values(metadata.metadata).some(
         (entry) => typeof entry !== 'string',
       ))
@@ -179,23 +148,23 @@ function discoverSkills(
   warnings: string[],
 ): string[] {
   const directory = join(root, 'skills');
-  if (portablePathExcluded(root, directory, policy)) return [];
+  if (excluded(root, directory, policy.exclude)) return [];
   try {
     assertPluginComponentPath(root, directory, policy.exclude);
-    if (!portablePathExists(directory)) return [];
+    if (!exists(directory)) return [];
     if (!statSync(directory).isDirectory())
       throw new Error('skills must be a directory');
     const skills: string[] = [];
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name);
-      if (portablePathExcluded(root, path, policy)) continue;
+      if (excluded(root, path, policy.exclude)) continue;
       try {
         assertPluginComponentPath(root, path, policy.exclude);
         if (!statSync(path).isDirectory()) continue;
         const document = join(path, 'SKILL.md');
         if (
-          portablePathExcluded(root, document, policy) ||
-          !portablePathExists(document)
+          excluded(root, document, policy.exclude) ||
+          !exists(document)
         )
           continue;
         assertPluginComponentPath(root, document, policy.exclude);

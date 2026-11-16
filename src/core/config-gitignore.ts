@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR, SYNC_STATE_FILE } from '../constants.js';
 
-const GITIGNORE_ENTRIES = [SYNC_STATE_FILE];
+const GITIGNORE_ENTRIES = [SYNC_STATE_FILE, 'mcp.json'];
 
 /**
  * Ensure .allagents/.gitignore exists and contains entries for machine-local files.

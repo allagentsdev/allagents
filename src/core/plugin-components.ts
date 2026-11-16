@@ -1,9 +1,10 @@
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import JSON5 from 'json5';
 import { MarketplacePluginEntrySchema, type MarketplacePluginEntry } from '../models/marketplace-manifest.js';
 import { GITHUB_ASSISTANT_ENTRIES, ROOT_SKILL_EXCLUDED_ENTRIES, type PluginComponentPolicy, type PluginComponents, type PluginConfigSource } from '../models/plugin-components.js';
-import picomatch from 'picomatch';
+import { PORTABLE_PLUGIN_SCHEMA, resolvePortablePlugin } from './portable-plugin.js';
+import { excluded, exists, isRecord } from './plugin-component-utils.js';
 
 const PLUGIN_MANIFEST_PATHS = [
   '.plugin/plugin.json',
@@ -15,26 +16,6 @@ const MARKETPLACE_MANIFEST_PATHS = [
   '.github/plugin/marketplace.json',
   '.claude-plugin/marketplace.json',
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function excluded(root: string, path: string, patterns?: string[]): boolean {
-  const source = relative(root, path).replaceAll('\\', '/');
-  return patterns?.some((pattern) => {
-    const matches = picomatch(pattern);
-    return matches(source) || matches(`${source}/`);
-  }) ?? false;
-}
-
-function exists(path: string): boolean {
-  try { lstatSync(path); return true; }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
 
 /** Recheck source containment immediately before reading a resolved component. */
 export function assertPluginComponentPath(pluginRoot: string, sourcePath: string, exclude?: string[]): void {
@@ -89,7 +70,7 @@ export function assertPluginComponentTree(root: string, path: string, exclude?: 
 }
 
 class UnsupportedPortableSchemaError extends Error {
-  constructor() {
+  constructor(readonly schema: string) {
     super('The portable Agent Plugins schema is not supported; use the existing Copilot/Claude plugin manifest and .mcp.json format');
   }
 }
@@ -105,7 +86,7 @@ function readObject(root: string, path: string, json5 = false): Record<string, u
   }
   if (!isRecord(value)) throw new Error(`Plugin configuration '${relative(root, path)}' must be an object`);
   if (typeof value.$schema === 'string' && /agent[-_]?plugins(?:\.dev|\.org|\/)/i.test(value.$schema)) {
-    throw new UnsupportedPortableSchemaError();
+    throw new UnsupportedPortableSchemaError(value.$schema);
   }
   return value;
 }
@@ -119,8 +100,9 @@ function firstExisting(root: string, candidates: readonly string[], exclude?: st
   return undefined;
 }
 
-function selectPluginManifest(root: string): { path: string; manifest: Record<string, unknown> } | undefined {
+function selectPluginManifest(root: string): { path: string; manifest: Record<string, unknown> } | 'portable' | undefined {
   let unsupported: UnsupportedPortableSchemaError | undefined;
+  let portable = false;
   for (const candidate of PLUGIN_MANIFEST_PATHS) {
     const path = firstExisting(root, [candidate]);
     if (!path) continue;
@@ -128,9 +110,11 @@ function selectPluginManifest(root: string): { path: string; manifest: Record<st
       return { path, manifest: readObject(root, path) };
     } catch (error) {
       if (!(error instanceof UnsupportedPortableSchemaError)) throw error;
+      if (candidate === 'plugin.json' && error.schema === PORTABLE_PLUGIN_SCHEMA) portable = true;
       unsupported = error;
     }
   }
+  if (portable) return 'portable';
   if (unsupported) throw unsupported;
   return undefined;
 }
@@ -155,11 +139,12 @@ function embeddedEntry(root: string, path: string): MarketplacePluginEntry | und
 export function resolvePluginComponents(pluginPath: string, entry?: MarketplacePluginEntry, policy: PluginComponentPolicy = {}): PluginComponents {
   const root = resolve(pluginPath);
   if (!statSync(root).isDirectory()) throw new Error('Plugin source must be a directory');
+  const selectedManifest = selectPluginManifest(root);
+  if (selectedManifest === 'portable') return resolvePortablePlugin(root, policy);
   const marketplacePath = firstExisting(root, MARKETPLACE_MANIFEST_PATHS);
   // An embedded catalogue is still validated when an outer catalogue selected this root.
   const ownEntry = marketplacePath ? embeddedEntry(root, marketplacePath) : undefined;
   const selectedEntry = entry ?? ownEntry;
-  const selectedManifest = selectPluginManifest(root);
   const manifestPath = selectedManifest?.path;
   const manifest = selectedManifest?.manifest;
   const legacyRepository = !manifestPath && !marketplacePath && !entry;

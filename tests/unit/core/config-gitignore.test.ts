@@ -16,11 +16,11 @@ describe('ensureConfigGitignore', () => {
     await rm(workspacePath, { recursive: true, force: true });
   });
 
-  it('creates .gitignore with sync-state.json when none exists', async () => {
+  it('ignores machine-local sync state and synchronized MCP configuration', async () => {
     await ensureConfigGitignore(workspacePath);
 
     const content = await readFile(join(workspacePath, '.allagents', '.gitignore'), 'utf-8');
-    expect(content).toBe('sync-state.json\n');
+    expect(content).toBe('sync-state.json\nmcp.json\n');
   });
 
   it('is idempotent — does not duplicate entries', async () => {
@@ -28,7 +28,7 @@ describe('ensureConfigGitignore', () => {
     await ensureConfigGitignore(workspacePath);
 
     const content = await readFile(join(workspacePath, '.allagents', '.gitignore'), 'utf-8');
-    expect(content).toBe('sync-state.json\n');
+    expect(content).toBe('sync-state.json\nmcp.json\n');
   });
 
   it('preserves existing user entries and appends missing ones', async () => {
@@ -38,16 +38,16 @@ describe('ensureConfigGitignore', () => {
     await ensureConfigGitignore(workspacePath);
 
     const content = await readFile(gitignorePath, 'utf-8');
-    expect(content).toBe('my-custom-file.txt\nsync-state.json\n');
+    expect(content).toBe('my-custom-file.txt\nsync-state.json\nmcp.json\n');
   });
 
   it('does not append when entry already present in user-managed file', async () => {
     const gitignorePath = join(workspacePath, '.allagents', '.gitignore');
-    await writeFile(gitignorePath, 'sync-state.json\nother-stuff\n', 'utf-8');
+    await writeFile(gitignorePath, 'sync-state.json\nmcp.json\nother-stuff\n', 'utf-8');
 
     await ensureConfigGitignore(workspacePath);
 
     const content = await readFile(gitignorePath, 'utf-8');
-    expect(content).toBe('sync-state.json\nother-stuff\n');
+    expect(content).toBe('sync-state.json\nmcp.json\nother-stuff\n');
   });
 });

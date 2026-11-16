@@ -10,11 +10,7 @@ import type {
   PluginComponents,
 } from '../models/plugin-components.js';
 import { assertPluginComponentPath } from './plugin-components.js';
-import {
-  isPortableRecord,
-  portablePathExcluded,
-  portablePathExists,
-} from './portable-plugin.js';
+import { excluded, exists, isRecord } from './plugin-component-utils.js';
 
 const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const CONFIG_ENV = 'ALLAGENTS_PORTABLE_MCP';
@@ -42,7 +38,7 @@ function within(root: string, path: string): boolean {
 
 function existingAncestor(path: string): string {
   let ancestor = path;
-  while (!portablePathExists(ancestor)) {
+  while (!exists(ancestor)) {
     const parent = dirname(ancestor);
     if (parent === ancestor)
       throw new Error('MCP path cannot be resolved safely');
@@ -114,7 +110,7 @@ function workingDirectory(
 
 function stringMap(value: unknown): value is Record<string, string> {
   return (
-    isPortableRecord(value) &&
+    isRecord(value) &&
     Object.values(value).every((entry) => typeof entry === 'string')
   );
 }
@@ -124,7 +120,7 @@ function validateServer(
   root: string,
   data: string,
 ): StdioServer | RemoteServer {
-  if (!isPortableRecord(value)) throw new Error('server must be an object');
+  if (!isRecord(value)) throw new Error('server must be an object');
   if (value.type === 'stdio') {
     if (
       Object.keys(value).some(
@@ -309,13 +305,19 @@ try {
   }
   const child = spawn(command, args, {env, cwd, shell: false, stdio: 'inherit'});
   const handlers = new Map();
+  let shutdown;
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    const handler = () => child.kill(signal);
+    const handler = () => {
+      child.kill(signal);
+      shutdown ??= setTimeout(() => child.kill('SIGKILL'), 1000);
+      shutdown.unref();
+    };
     handlers.set(signal, handler);
     process.on(signal, handler);
   }
   child.on('error', error => { console.error('Portable MCP startup failed: ' + error.message); process.exitCode = 1; });
   child.on('exit', (code, signal) => {
+    clearTimeout(shutdown);
     for (const [name, handler] of handlers) process.removeListener(name, handler);
     if (signal) { try { process.kill(process.pid, signal); } catch { process.exitCode = 1; } }
     else process.exitCode = code === null ? 1 : code;
@@ -335,18 +337,18 @@ export function resolvePortableMcp(
   warnings: string[],
 ): McpComponents {
   const path = join(root, 'mcp.json');
-  if (portablePathExcluded(root, path, policy)) return { mcpServers: [] };
+  if (excluded(root, path, policy.exclude)) return { mcpServers: [] };
   let value: unknown;
   try {
     assertPluginComponentPath(root, path, policy.exclude);
-    if (!portablePathExists(path)) return { mcpServers: [] };
+    if (!exists(path)) return { mcpServers: [] };
     if (!statSync(path).isFile())
       throw new Error('mcp.json must be a regular file');
     value = JSON.parse(readFileSync(path, 'utf8'));
     if (
-      !isPortableRecord(value) ||
+      !isRecord(value) ||
       value.$schema !== MCP_SCHEMA ||
-      !isPortableRecord(value.mcpServers) ||
+      !isRecord(value.mcpServers) ||
       Object.keys(value).some((key) => !['$schema', 'mcpServers'].includes(key))
     ) {
       throw new Error(

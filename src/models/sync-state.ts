@@ -71,7 +71,6 @@ export const SyncStateSchema = z
         hooks: z.record(z.string(), z.array(z.unknown())),
       })
       .optional(),
-    // MCP servers owned per client, including Universal's .allagents/mcp.json.
     mcpServers: z.record(z.string(), z.array(z.string())).optional(),
     // Legacy native plugin tracking. Loaded for conservative migration only;
     // string identities never authorize cleanup on their own.

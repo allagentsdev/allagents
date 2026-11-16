@@ -204,7 +204,7 @@ export async function syncCodexMcpServers(
  */
 function toTomlValue(value: unknown): string {
   if (typeof value === 'string')
-    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    return JSON.stringify(value);
   if (typeof value === 'number' || typeof value === 'boolean')
     return String(value);
   if (Array.isArray(value)) return `[${value.map(toTomlValue).join(', ')}]`;
@@ -218,7 +218,8 @@ export function serverToToml(
   name: string,
   config: Record<string, unknown>,
 ): string {
-  const lines: string[] = [`[mcp_servers.${name}]`];
+  const serverKey = /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
+  const lines: string[] = [`[mcp_servers.${serverKey}]`];
   const envEntries: [string, unknown][] = [];
 
   for (const [key, value] of Object.entries(config)) {
@@ -232,13 +233,23 @@ export function serverToToml(
 
   if (envEntries.length > 0) {
     lines.push('');
-    lines.push(`[mcp_servers.${name}.env]`);
+    lines.push(`[mcp_servers.${serverKey}.env]`);
     for (const [envKey, envValue] of envEntries) {
       lines.push(`${envKey} = ${toTomlValue(envValue)}`);
     }
   }
 
   return lines.join('\n');
+}
+
+function decodeTomlKey(key: string): string {
+  const json = key.replace(
+    /\\(?:U([0-9A-Fa-f]{8})|["\\bfnrt]|u[0-9A-Fa-f]{4})/g,
+    (sequence, scalar: string | undefined) => scalar === undefined
+      ? sequence
+      : JSON.stringify(String.fromCodePoint(Number.parseInt(scalar, 16))).slice(1, -1),
+  ).replace(/\t/g, '\\t');
+  return JSON.parse(json);
 }
 
 /**
@@ -261,7 +272,7 @@ export function parseCodexConfigToml(content: string): {
   for (const line of lines) {
     // Match [mcp_servers.<name>] or [mcp_servers.<name>.env]
     const sectionMatch = line.match(
-      /^\[mcp_servers\.([^\].]+?)(?:\.[^\]]+)?\]$/,
+      /^\[mcp_servers\.("(?:[^"\\]|\\.)*"|[^\].]+?)(?:\.[^\]]+)?\]$/,
     );
     if (sectionMatch) {
       // Save previous server if any
@@ -273,7 +284,8 @@ export function parseCodexConfigToml(content: string): {
             currentLines.join('\n'),
         );
       }
-      currentServer = sectionMatch[1] ?? null;
+      const key = sectionMatch[1];
+      currentServer = key?.startsWith('"') ? decodeTomlKey(key) : key ?? null;
       if (currentServer) serverNames.add(currentServer);
       currentLines = [line];
       continue;

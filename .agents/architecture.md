@@ -42,7 +42,11 @@ server request during an outstanding tool call, to detect relay deadlocks.
 
 ## MCP server ownership
 
-MCP servers from plugins are synchronized into VS Code's `mcp.json`.
+MCP servers from plugins are synchronized into each selected client's supported
+configuration. Universal uses `<scope-root>/.allagents/mcp.json`; AllAgents MCP
+runtime commands read that file in the selected project or user scope after
+checking authored workspace declarations. Profile runtime resolution remains
+profile-scoped.
 
 - Track only servers AllAgents added.
 - Preserve a server that existed in the user's configuration before plugin installation.
@@ -97,14 +101,28 @@ when changing client targets.
 
 ## Plugin component sources
 
-Resolve supported legacy component sources once in
+Resolve supported plugin component sources once in
 `src/core/plugin-components.ts` and carry `PluginComponents` through marketplace
 resolution, validation, copying, inventories, MCP-only updates, and profile file
 planning. Consumers must not interpret `strict` as a component allowlist or
 independently choose a different manifest.
-During manifest selection, skip explicitly declared portable Agent Plugins schemas
-only when a supported manifest remains; preserve failures for malformed or unsafe
-sources and for portable-only plugins.
+During manifest selection, retain supported legacy manifest precedence. If none
+exists, resolve the canonical root `plugin.json` with the exact supported Agent
+Plugins 1.0.0 schema through `portable-plugin.ts`. Portable discovery reads only
+immediate `skills/*/SKILL.md` and root `mcp.json`; legacy components and GitHub
+overlays do not supplement it. Preserve failures for malformed or unsafe
+sources and unsupported portable schema versions or locations. Invalid portable
+skills and individual MCP entries warn and skip; an invalid MCP envelope sets
+`mcpError`, so reconciliation preserves prior MCP output and ownership.
+
+Portable MCP launchers own one-pass ROOT/DATA expansion, working-directory
+selection, and declared remote transport. Keep source files alive for generated
+launchers: profile online planning retains MCP-bearing portable sources in the
+ref-qualified plugin cache rather than a temporary checkout. Data identity uses
+the canonical source root, so profiles sharing that source also share its
+persistent data directory. Keep generated launcher provenance separate from
+authored profile MCP secret-reference validation.
+
 Keep `PluginComponents.legacyRepository` separate from GitHub overlay eligibility:
 ordinary manifest-free repositories retain nested-skill precedence, while a
 marketplace root skill stays authoritative over unsupported flat children.

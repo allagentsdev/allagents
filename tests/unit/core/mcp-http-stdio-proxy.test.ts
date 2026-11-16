@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveMcpOAuthServerUrl } from '../../../src/core/mcp-oauth-url.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import {
@@ -26,6 +27,45 @@ import {
   startDummyMcpOAuthServer,
 } from '../../helpers/dummy-mcp-oauth-server.js';
 
+
+describe('portable whole-URL literal bindings', () => {
+  test('keeps literal query references while retaining whole-URL credential tracking', () => {
+    const credentials = new Set<string>();
+    const url = 'https://example.test/mcp?token=${TOKEN}&path=${PATH}&options=${NODE_OPTIONS}';
+    const resolved = resolveMcpOAuthServerUrl('${PORTABLE_URL}', {
+      PORTABLE_URL: url,
+      ALLAGENTS_PORTABLE_LITERAL_URL: 'PORTABLE_URL',
+      TOKEN: 'must-not-expand',
+    }, credentials);
+    expect(new URL(resolved).searchParams.get('token')).toBe('${TOKEN}');
+    expect(new URL(resolved).searchParams.get('path')).toBe('${PATH}');
+    expect(credentials.has(url)).toBe(true);
+    expect(credentials.has('must-not-expand')).toBe(false);
+  });
+
+  test('expands ordinary whole-URL query references when the marker is absent or mismatched', () => {
+    for (const marker of [undefined, 'OTHER_URL']) {
+      const resolved = resolveMcpOAuthServerUrl('${PORTABLE_URL}', {
+        PORTABLE_URL: 'https://example.test/mcp?token=${TOKEN}',
+        TOKEN: 'expanded',
+        ALLAGENTS_PORTABLE_LITERAL_URL: marker,
+      });
+      expect(new URL(resolved).searchParams.get('token')).toBe('expanded');
+    }
+  });
+
+  test('does not change authored query-reference behavior or validation', () => {
+    expect(resolveMcpOAuthServerUrl('https://example.test/mcp?token=${TOKEN}', {
+      TOKEN: 'expanded', ALLAGENTS_PORTABLE_LITERAL_URL: 'TOKEN',
+    })).toBe('https://example.test/mcp?token=expanded');
+    expect(() => resolveMcpOAuthServerUrl('${PORTABLE_URL}', {
+      PORTABLE_URL: 'invalid URL', ALLAGENTS_PORTABLE_LITERAL_URL: 'PORTABLE_URL',
+    })).toThrow('Invalid MCP URL environment reference');
+    expect(() => resolveMcpOAuthServerUrl('${MISSING}', {
+      ALLAGENTS_PORTABLE_LITERAL_URL: 'MISSING',
+    })).toThrow("missing environment variable 'MISSING'");
+  });
+});
 
 describe('resolveMcpHeaderReferences', () => {
   test('resolves exact environment references and preserves literal values', () => {

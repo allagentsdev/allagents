@@ -16,7 +16,15 @@ export function resolveMcpOAuthServerUrl(
     return value;
   };
   if (whole) serverUrl = read(whole);
-  if (!serverUrl.includes('${') && !/(?:\$|%24)(?:\{|%7b)/i.test(serverUrl)) {
+  // Generated portable bridges bind literal URLs through env. Their marker is
+  // scoped to that exact whole-value reference, so authored query references
+  // keep their usual expansion and cache/credential identity behavior.
+  const literalWhole =
+    whole !== undefined && environment.ALLAGENTS_PORTABLE_LITERAL_URL === whole;
+  if (
+    literalWhole ||
+    (!serverUrl.includes('${') && !/(?:\$|%24)(?:\{|%7b)/i.test(serverUrl))
+  ) {
     if (!whole) return serverUrl;
     try {
       return new URL(serverUrl).toString();

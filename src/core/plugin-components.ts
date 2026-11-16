@@ -88,6 +88,12 @@ export function assertPluginComponentTree(root: string, path: string, exclude?: 
   }
 }
 
+class UnsupportedPortableSchemaError extends Error {
+  constructor() {
+    super('The portable Agent Plugins schema is not supported; use the existing Copilot/Claude plugin manifest and .mcp.json format');
+  }
+}
+
 function readObject(root: string, path: string, json5 = false): Record<string, unknown> {
   assertPluginComponentPath(root, path);
   let value: unknown;
@@ -99,7 +105,7 @@ function readObject(root: string, path: string, json5 = false): Record<string, u
   }
   if (!isRecord(value)) throw new Error(`Plugin configuration '${relative(root, path)}' must be an object`);
   if (typeof value.$schema === 'string' && /agent[-_]?plugins(?:\.dev|\.org|\/)/i.test(value.$schema)) {
-    throw new Error('The portable Agent Plugins schema is not supported; use the existing Copilot/Claude plugin manifest and .mcp.json format');
+    throw new UnsupportedPortableSchemaError();
   }
   return value;
 }
@@ -110,6 +116,22 @@ function firstExisting(root: string, candidates: readonly string[], exclude?: st
     assertPluginComponentPath(root, path, exclude);
     if (exists(path)) return path;
   }
+  return undefined;
+}
+
+function selectPluginManifest(root: string): { path: string; manifest: Record<string, unknown> } | undefined {
+  let unsupported: UnsupportedPortableSchemaError | undefined;
+  for (const candidate of PLUGIN_MANIFEST_PATHS) {
+    const path = firstExisting(root, [candidate]);
+    if (!path) continue;
+    try {
+      return { path, manifest: readObject(root, path) };
+    } catch (error) {
+      if (!(error instanceof UnsupportedPortableSchemaError)) throw error;
+      unsupported = error;
+    }
+  }
+  if (unsupported) throw unsupported;
   return undefined;
 }
 
@@ -137,8 +159,9 @@ export function resolvePluginComponents(pluginPath: string, entry?: MarketplaceP
   // An embedded catalogue is still validated when an outer catalogue selected this root.
   const ownEntry = marketplacePath ? embeddedEntry(root, marketplacePath) : undefined;
   const selectedEntry = entry ?? ownEntry;
-  const manifestPath = firstExisting(root, PLUGIN_MANIFEST_PATHS);
-  const manifest = manifestPath ? readObject(root, manifestPath) : undefined;
+  const selectedManifest = selectPluginManifest(root);
+  const manifestPath = selectedManifest?.path;
+  const manifest = selectedManifest?.manifest;
   const legacyRepository = !manifestPath && !marketplacePath && !entry;
   const warnings: string[] = [];
 

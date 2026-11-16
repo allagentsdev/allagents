@@ -43,10 +43,13 @@ jobs:
       - run: bun run build
       - run: bun run package:smoke
 
-  node-24-smoke:
-    name: Node 24 smoke
+  node-smoke:
+    name: Node ${{ matrix.node-version }} smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        node-version: ["22.19.0", "24.x"]
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -54,7 +57,7 @@ jobs:
           bun-version-file: package.json
       - uses: actions/setup-node@v7
         with:
-          node-version: "24.x"
+          node-version: ${{ matrix.node-version }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run build
       - run: bun run package:smoke

@@ -26,6 +26,7 @@ describe('MCP connection networking', () => {
     const network = createMcpNetwork({ serverUrl: target.url.toString(), connection: { enableProxy: true }, environment: { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl, NO_PROXY: '' } });
     try {
       const response = await network.fetch(target.url);
+      expect(response.status).toBe(200);
       expect(await response.text()).toBe('through proxy');
       expect(tunnels).toBe(1);
     } finally {

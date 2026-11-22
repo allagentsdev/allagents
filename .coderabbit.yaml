@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: 'Be concise. Prioritize reproducible correctness, security, lifecycle and regression issues. Explain the failing scenario. Avoid cosmetic suggestions and speculative rewrites.'
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary_in_walkthrough: true
+  poem: false
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Request another review with @coderabbitai review after a behavior change.
+    auto_incremental_review: false
+  path_filters:
+    - '!bun.lock'
+    - '!docs/bun.lock'
+  path_instructions:
+    - path: 'src/core/**'
+      instructions: >-
+        Follow AGENTS.md and .agents/architecture.md. Preserve user-owned
+        configuration and keep workspace, plugin, and synchronization operations
+        deterministic. Check reconciliation scope and ownership when updates
+        fail or are retried.
+    - path: 'src/cli/**'
+      instructions: >-
+        Preserve JSON and redirected-output contracts. Check that non-interactive
+        runs remain usable and that interactive commands show accurate progress,
+        errors, and recovery options.
+    - path: '.github/workflows/**'
+      instructions: >-
+        Keep PR jobs that run untrusted code on read-only tokens without
+        repository secrets. Avoid direct shell interpolation of untrusted inputs.
+        Preserve the Release Please workflow and publish only validated releases.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - '**/AGENTS.md'
+      - '.agents/*.md'
+      - 'CONTRIBUTING.md'

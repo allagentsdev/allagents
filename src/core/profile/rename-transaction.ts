@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import {
   link,
   lstat,
+  mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   unlink,
@@ -32,27 +34,25 @@ const Replacement = z.object({
   before: ProfileSha256Schema,
   content: z.string(),
 });
+const DirectoryIdentity = z.object({ device: z.string(), inode: z.string() });
 export const RenameRecordSchema = z.object({
   version: z.literal(1),
   id: z.uuid(),
   profile: ProfileNameSchema,
   newProfile: ProfileNameSchema,
+  declarationDigest: ProfileSha256Schema,
   workspaceBefore: ProfileSha256Schema,
-  workspaceAfter: ProfileSha256Schema,
-  root: z
-    .object({
-      device: z.string(),
-      inode: z.string(),
-      namedFiles: z.array(
-        z.object({
-          from: RelativePath,
-          to: RelativePath,
-          fingerprint: ProfileSha256Schema,
-        }),
-      ),
-      state: Replacement.optional(),
-    })
-    .optional(),
+  root: DirectoryIdentity.extend({
+    reservation: DirectoryIdentity.optional(),
+    namedFiles: z.array(
+      z.object({
+        from: RelativePath,
+        to: RelativePath,
+        fingerprint: ProfileSha256Schema,
+      }),
+    ),
+    state: Replacement.optional(),
+  }).optional(),
   launchers: z.array(
     Replacement.extend({
       name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,67}$/),
@@ -63,25 +63,11 @@ export const RenameRecordSchema = z.object({
 
 export type RenameRecord = z.infer<typeof RenameRecordSchema>;
 
-export function profileRenameRecordPath(workspacePath: string): string {
-  return `${workspacePath}.profile-rename.json`;
-}
-
 export async function profileRenameStats(path: string) {
   return lstat(path).catch((error) => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   });
-}
-
-export async function assertNoPendingProfileRename(
-  workspacePath: string,
-): Promise<void> {
-  if (await profileRenameStats(profileRenameRecordPath(workspacePath))) {
-    throw new Error(
-      'A profile rename is incomplete. Rerun the same profile rename with --yes before changing profiles.',
-    );
-  }
 }
 
 export async function readProfileRenameRecord(
@@ -102,14 +88,23 @@ export async function readProfileRenameRecord(
   return result.data;
 }
 
-/** Publish one replacement atomically. The recovery record tracks either version. */
-export async function publishRenameFile(
+export function capturedRenameFile(
+  path: string,
+  transactionId: string,
+): string {
+  return join(
+    dirname(path),
+    `.${basename(path)}.profile-rename-${transactionId}.previous`,
+  );
+}
+
+async function stageRenameFile<T>(
   path: string,
   content: string,
-  previous: string | null,
   mode: number,
-  transactionId?: string,
-): Promise<void> {
+  transactionId: string | undefined,
+  publish: (temporary: string) => Promise<T>,
+): Promise<T> {
   const parent = dirname(path);
   await assertSafeProfilePath(parent, path);
   const temporary = join(
@@ -128,18 +123,112 @@ export async function publishRenameFile(
     await handle.sync();
     await handle.close();
     await assertSafeProfilePath(parent, path);
-    if (previous === null) {
-      await link(temporary, path);
-    } else {
-      const current = await fingerprintProfileFile(path);
-      if (current === sha256Fingerprint(content)) return;
-      if (current !== previous) throw changed(path);
-      await rename(temporary, path);
-    }
+    return await publish(temporary);
   } finally {
     await handle.close();
     await rm(temporary, { force: true });
   }
+}
+
+export async function writeRenameRecord(
+  path: string,
+  record: RenameRecord,
+  replace = false,
+): Promise<void> {
+  await stageRenameFile(
+    path,
+    JSON.stringify(record),
+    0o600,
+    undefined,
+    (temporary) => (replace ? rename(temporary, path) : link(temporary, path)),
+  );
+}
+
+export async function inspectReplacement(
+  path: string,
+  before: string,
+  after: string,
+  transactionId: string,
+) {
+  const capture = capturedRenameFile(path, transactionId);
+  await assertSafeProfilePath(dirname(path), capture);
+  const [current, previous] = await Promise.all([
+    fingerprintProfileFile(path),
+    fingerprintProfileFile(capture),
+  ]);
+  if (previous !== null && previous !== before) {
+    throw new Error(
+      `Profile rename found an intervening edit preserved at ${capture}`,
+    );
+  }
+  if (
+    current !== before &&
+    current !== after &&
+    !(current === null && previous !== null)
+  ) {
+    throw changed(path);
+  }
+  return { current, capture, captured: previous !== null };
+}
+
+/** Capture before replacing so a concurrent edit can win without losing bytes. */
+export async function publishRenameFile(
+  path: string,
+  content: string,
+  before: string,
+  mode: number,
+  transactionId: string,
+): Promise<void> {
+  const after = sha256Fingerprint(content);
+  await stageRenameFile(
+    path,
+    content,
+    mode,
+    transactionId,
+    async (temporary) => {
+      const { current, capture, captured } = await inspectReplacement(
+        path,
+        before,
+        after,
+        transactionId,
+      );
+      if (current === after) {
+        if (captured) await unlink(capture);
+        return;
+      }
+      if (!captured) await rename(path, capture);
+      else if (current !== null) {
+        const [source, previous] = await Promise.all([
+          lstat(path, { bigint: true }),
+          lstat(capture, { bigint: true }),
+        ]);
+        if (source.ino !== previous.ino || source.dev !== previous.dev)
+          throw changed(path);
+        await unlink(path);
+      }
+
+      if ((await fingerprintProfileFile(capture)) !== before) {
+        // Restore the captured edit only if the original pathname is still free.
+        try {
+          await link(capture, path);
+          await unlink(capture);
+        } catch (error) {
+          throw new Error(
+            `Profile rename preserved a concurrent edit at ${capture}`,
+            { cause: error },
+          );
+        }
+        throw changed(path);
+      }
+      await link(temporary, path);
+      if ((await fingerprintProfileFile(capture)) !== before) {
+        throw new Error(
+          `Profile rename preserved a concurrent edit at ${capture}`,
+        );
+      }
+      await unlink(capture);
+    },
+  );
 }
 
 function changed(path: string): Error {
@@ -158,6 +247,48 @@ export async function getRenameRootIdentity(path: string) {
       throw error;
     },
   );
+}
+
+function sameDirectory(
+  left: z.infer<typeof DirectoryIdentity> | null | undefined,
+  right: z.infer<typeof DirectoryIdentity> | null | undefined,
+): boolean {
+  return left?.device === right?.device && left?.inode === right?.inode;
+}
+
+export async function moveProfileRoot(
+  record: RenameRecord,
+  journal: string,
+  oldRoot: string,
+  newRoot: string,
+): Promise<void> {
+  if (!record.root) throw changed(oldRoot);
+  if (process.platform !== 'win32') {
+    // POSIX rename can replace an empty directory. Exclusively reserve our
+    // destination and only replace an empty directory with the recorded inode.
+    let reservation = record.root.reservation;
+    if (!(await profileRenameStats(newRoot))) {
+      await mkdir(newRoot, { mode: 0o700 });
+      reservation = (await getRenameRootIdentity(newRoot)) ?? undefined;
+      if (!reservation) throw changed(newRoot);
+      await writeRenameRecord(
+        journal,
+        { ...record, root: { ...record.root, reservation } },
+        true,
+      );
+    }
+    if (
+      !sameDirectory(reservation, await getRenameRootIdentity(newRoot)) ||
+      (await readdir(newRoot)).length > 0
+    ) {
+      throw new Error(`Profile destination already exists: ${newRoot}`);
+    }
+  } else if (await profileRenameStats(newRoot)) {
+    throw new Error(`Profile destination already exists: ${newRoot}`);
+  }
+  if (!sameDirectory(await getRenameRootIdentity(oldRoot), record.root))
+    throw changed(oldRoot);
+  await rename(oldRoot, newRoot);
 }
 
 export function relativeRenamePath(root: string, path: string): string {
@@ -179,16 +310,20 @@ export async function inspectRenameProgress(
   const oldIdentity = await getRenameRootIdentity(oldRoot);
   const newIdentity = await getRenameRootIdentity(newRoot);
   const identity = oldIdentity ?? newIdentity;
-  if (newIdentity && (!record.root || oldIdentity)) {
+  if (
+    newIdentity &&
+    (!record.root ||
+      (oldIdentity && !sameDirectory(newIdentity, record.root.reservation)))
+  ) {
     throw new Error(`Profile destination already exists: ${newRoot}`);
   }
-  if (
-    identity?.inode !== record.root?.inode ||
-    identity?.device !== record.root?.device
-  ) {
+  if (!sameDirectory(identity, record.root)) {
     throw new Error(`Profile directory changed during rename: ${oldRoot}`);
   }
-  const currentRoot = newIdentity ? newRoot : oldRoot;
+  if (oldIdentity && newIdentity && (await readdir(newRoot)).length > 0) {
+    throw new Error(`Profile destination already exists: ${newRoot}`);
+  }
+  const currentRoot = oldIdentity ? oldRoot : newRoot;
   const moves = [];
   for (const move of record.root?.namedFiles ?? []) {
     const from = join(currentRoot, move.from);
@@ -228,13 +363,12 @@ export async function inspectRenameProgress(
   }
   for (const entry of replacements) {
     await assertSafeProfilePath(dirname(entry.path), entry.path);
-    const fingerprint = await fingerprintProfileFile(entry.path);
-    if (
-      fingerprint !== entry.before &&
-      fingerprint !== sha256Fingerprint(entry.content)
-    ) {
-      throw changed(entry.path);
-    }
+    await inspectReplacement(
+      entry.path,
+      entry.before,
+      sha256Fingerprint(entry.content),
+      record.id,
+    );
   }
   return { moveRoot: oldIdentity !== null, moves };
 }

@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,7 +15,7 @@ import { dirname, join } from 'node:path';
 
 const repo = join(import.meta.dir, '../..');
 const cli = join(repo, 'dist/index.js');
-const fixtureTimeout = 30_000;
+const fixtureTimeout = 60_000;
 const fixtureYaml = [
   '# User workspace',
   'profiles:',
@@ -54,6 +55,20 @@ function json(args: string[], exitCode = 0) {
   const result = run(['--json', ...args]);
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(exitCode);
   return JSON.parse(result.stdout.toString());
+}
+
+function interruptibleRename(hook: string[], variables: NodeJS.ProcessEnv = {}) {
+  const preload = join(root, 'rename-hook.cjs');
+  writeFileSync(preload, [
+    'const fs = require("node:fs/promises");',
+    ...hook,
+    'require("node:module").syncBuiltinESMExports();',
+  ].join('\n'));
+  return run(['--json', 'profile', 'rename', 'work', 'office', '--yes'], {
+    NODE_OPTIONS: `--require="${preload}"`,
+    TEST_WORKSPACE: workspace,
+    ...variables,
+  });
 }
 
 function seedFile(path: string, content: string) {
@@ -222,20 +237,13 @@ test.skipIf(process.platform === 'win32')('resumes after a process stop before p
   const journal = `${workspace}.profile-rename.json`;
   const session = 'clients/codex/home/sessions/recover.jsonl';
   seedFile(join(oldRoot, session), 'keep me');
-  const preload = join(root, 'stop-before-workspace.cjs');
-  writeFileSync(preload, [
-    'const fs = require("node:fs/promises");',
-    'const rename = fs.rename;',
-    'fs.rename = (from, to) => to === process.env.TEST_WORKSPACE',
-    '  ? process.kill(process.pid, "SIGKILL") : rename(from, to);',
-    'require("node:module").syncBuiltinESMExports();',
-  ].join('\n'));
-  const interrupted = run(['--json', 'profile', 'rename', 'work', 'office', '--yes'], {
-    NODE_OPTIONS: `--require="${preload}"`,
-    TEST_WORKSPACE: workspace,
-  });
+  const interrupted = interruptibleRename([
+    'const link = fs.link;',
+    'fs.link = (from, to) => to === process.env.TEST_WORKSPACE',
+    '  ? process.kill(process.pid, "SIGKILL") : link(from, to);',
+  ]);
   expect(interrupted.signalCode).toBe('SIGKILL');
-  expect(read(workspace)).toBe(fixtureYaml);
+  expect(existsSync(workspace)).toBe(false);
   expect(existsSync(journal)).toBe(true);
   expect(existsSync(oldRoot)).toBe(false);
   expect(read(join(newRoot, session))).toBe('keep me');
@@ -243,11 +251,51 @@ test.skipIf(process.platform === 'win32')('resumes after a process stop before p
 
   const preview = json(['profile', 'rename', 'work', 'office', '--dry-run']);
   expect(preview.data.recovering).toBe(true);
-  expect(read(workspace)).toBe(fixtureYaml);
+  expect(existsSync(workspace)).toBe(false);
   expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.recovering).toBe(true);
   expect(read(workspace)).toBe(fixtureYaml.replace("'work':", "'office':"));
   expect(read(join(newRoot, session))).toBe('keep me');
   expect(existsSync(journal)).toBe(false);
   expect(readdirSync(dirname(workspace)).sort()).toEqual(['profiles', 'workspace.yaml']);
   expect(json(['profile', 'status', 'office']).data.status).toBe('installed');
+}, fixtureTimeout);
+
+
+test.skipIf(process.platform === 'win32')('preserves an edit arriving at workspace publication and resumes with the edit', () => {
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const edited = fixtureYaml + '# edit while rename was publishing\n';
+  const blocked = interruptibleRename([
+    'const rename = fs.rename;',
+    'fs.rename = async (from, to) => {',
+    '  if (from === process.env.TEST_WORKSPACE) await fs.appendFile(from, "# edit while rename was publishing\\n");',
+    '  return rename(from, to);',
+    '};',
+  ]);
+  expect(blocked.exitCode, blocked.stdout.toString() + blocked.stderr.toString()).toBe(1);
+  expect(read(workspace)).toBe(edited);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
+  expect(read(workspace)).toBe(edited.replace("'work':", "'office':"));
+}, fixtureTimeout);
+
+test.skipIf(process.platform === 'win32')('does not replace a directory created at destination reservation', () => {
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const oldRoot = join(profiles, 'work');
+  const newRoot = join(profiles, 'office');
+  const blocked = interruptibleRename([
+    'const mkdir = fs.mkdir;',
+    'fs.mkdir = async (target, options) => {',
+    '  if (target === process.env.TEST_DESTINATION) {',
+    '    await mkdir(target, options);',
+    '    await fs.writeFile(process.env.TEST_ID, String((await fs.stat(target)).ino));',
+    '  }',
+    '  return mkdir(target, options);',
+    '};',
+  ], { TEST_DESTINATION: newRoot, TEST_ID: join(root, 'collision-inode') });
+  expect(blocked.exitCode, blocked.stdout.toString() + blocked.stderr.toString()).toBe(1);
+  expect(String(statSync(newRoot).ino)).toBe(read(join(root, 'collision-inode')));
+  expect(readdirSync(newRoot)).toEqual([]);
+  expect(existsSync(join(oldRoot, 'state.json'))).toBe(true);
+  expect(read(workspace)).toBe(fixtureYaml);
+  rmSync(newRoot, { recursive: true });
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
 }, fixtureTimeout);

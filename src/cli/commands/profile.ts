@@ -342,8 +342,16 @@ async function executeRename(
   if (!runtime.isJson()) {
     const action = plan.recovering ? 'Resume renaming' : 'Rename';
     runtime.print(`${action} profile '${plan.profile}' to '${plan.newProfile}'`);
+    const labels = {
+      root: 'Move profile data',
+      settings: 'Move client settings',
+      launcher: 'Retarget launcher',
+      state: 'Transfer installation state',
+      workspace: 'Update workspace declaration',
+    };
     for (const { kind, from, to } of plan.steps) {
-      runtime.print(`  ${kind}: ${terminalSafe(from)}${from === to ? '' : ` → ${terminalSafe(to)}`}`);
+      runtime.print(`  ${labels[kind]}: ${terminalSafe(from)}`);
+      if (from !== to) runtime.print(`    → ${terminalSafe(to)}`);
     }
     for (const warning of plan.warnings) runtime.print(warning);
   }

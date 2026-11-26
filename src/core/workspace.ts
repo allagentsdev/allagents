@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve, dirname, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import { serializeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { syncWorkspace, type SyncResult, type SyncOptions } from './sync.js';
 import { ensureWorkspaceRules } from './transform.js';
@@ -231,7 +232,12 @@ export async function initWorkspace(
         : input,
       configPath,
     );
-    await writeFile(configPath, workspaceYamlContent, 'utf-8');
+    await withWorkspaceConfigMutation(configPath, async () => {
+      if (existsSync(configPath) && !options.force) {
+        throw new Error(`Workspace already exists: ${absoluteTarget}`);
+      }
+      await writeFile(configPath, workspaceYamlContent, 'utf-8');
+    });
 
     // Inspect the validated config for post-write template work.
     const clients = parsed.clients;

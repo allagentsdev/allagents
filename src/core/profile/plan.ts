@@ -50,7 +50,7 @@ import type {
   ProfileStepKind,
 } from './index.js';
 import { renderProfileLaunchers } from './launcher.js';
-import { assertNoPendingProfileRename } from './rename-transaction.js';
+import { assertNoPendingProfileRename } from '../../utils/workspace-config-lock.js';
 import { resolveProfileFileSource, type ResolvedProfileFileSource } from './source.js';
 import {
   hashProfileDeclaration,

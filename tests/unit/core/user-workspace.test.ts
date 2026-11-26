@@ -181,6 +181,19 @@ describe('user-workspace', () => {
       expect(result.success).toBe(false);
       expect(await readFile(configPath, 'utf-8')).toBe(invalid);
     });
+
+    test('leaves the user workspace alone while a profile rename is pending', async () => {
+      await ensureUserWorkspace();
+      const path = getUserWorkspaceConfigPath();
+      const original = await readFile(path, 'utf-8');
+      await writeFile(`${path}.profile-rename.json`, '{}');
+
+      const result = await setUserClients(['omp']);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('profile rename is incomplete');
+      expect(await readFile(path, 'utf-8')).toBe(original);
+    });
   });
 
   describe('addUserPlugin', () => {

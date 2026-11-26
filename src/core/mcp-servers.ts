@@ -30,10 +30,9 @@ import {
   validateProjectWorkspaceConfig,
   validateUserWorkspaceConfig,
 } from '../utils/workspace-parser.js';
-import { withWorkspaceConfigLock } from '../utils/workspace-config-lock.js';
+import { assertNoPendingProfileRename, withWorkspaceConfigLock } from '../utils/workspace-config-lock.js';
 import { serializeWorkspaceConfigFile } from '../utils/workspace-writer.js';
 import { flattenZodIssues } from '../utils/zod-issues.js';
-import { assertNoPendingProfileRename } from './profile/rename-transaction.js';
 import {
   ensureUserWorkspace,
   getUserWorkspaceConfigPath,
@@ -330,7 +329,7 @@ export async function addMcpServer(
 
     await ensureDestinationForAdd(destination);
     return await withWorkspaceConfigLock(destination.configPath, async () => {
-      await assertNoPendingProfileRename(destination.configPath);
+      if (destination.kind !== 'project') await assertNoPendingProfileRename(destination.configPath);
       const document = await readDestinationConfig(destination);
       const container = selectDestinationContainer(destination, document);
       container.mcpServers ??= {};
@@ -372,7 +371,7 @@ export async function removeMcpServer(
     }
 
     return await withWorkspaceConfigLock(destination.configPath, async () => {
-      await assertNoPendingProfileRename(destination.configPath);
+      if (destination.kind !== 'project') await assertNoPendingProfileRename(destination.configPath);
       const document = await readDestinationConfig(destination);
       const container = selectDestinationContainer(destination, document);
       if (!container.mcpServers || !(name in container.mcpServers)) {

@@ -1,6 +1,7 @@
+import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fetchPlugin, type FetchOptions } from './plugin.js';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
@@ -101,8 +102,9 @@ export async function ensureUserWorkspace(
     clients: clients ? [...clients] : [...DEFAULT_USER_CLIENTS],
   };
 
-  await mkdir(getAllagentsDir(), { recursive: true });
-  await writeWorkspaceConfig(configPath, defaultConfig);
+  await withWorkspaceConfigMutation(configPath, async () => {
+    if (!existsSync(configPath)) await writeWorkspaceConfig(configPath, defaultConfig);
+  });
 }
 
 /**
@@ -277,58 +279,60 @@ export async function removeUserPlugin(plugin: string, configurationIndex?: numb
   const configPath = getUserWorkspaceConfigPath();
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    if (configurationIndex !== undefined) {
-      const selected = config.plugins[configurationIndex];
-      if (!selected || getPluginSource(selected) !== plugin) {
-        return { success: false, error: 'Selected plugin declaration changed. Reopen Plugins before removing.' };
+      if (configurationIndex !== undefined) {
+        const selected = config.plugins[configurationIndex];
+        if (!selected || getPluginSource(selected) !== plugin) {
+          return { success: false, error: 'Selected plugin declaration changed. Reopen Plugins before removing.' };
+        }
       }
-    }
-    // Indexed TUI selections never fall back to a different declaration.
-    let index = configurationIndex ?? config.plugins.findIndex(
-      (entry) => getPluginSource(entry) === plugin,
-    );
+      // Indexed TUI selections never fall back to a different declaration.
+      let index = configurationIndex ?? config.plugins.findIndex(
+        (entry) => getPluginSource(entry) === plugin,
+      );
 
-    // Partial match: plugin name without marketplace suffix
-    if (index === -1) {
-      index = config.plugins.findIndex((entry) => {
-        const source = getPluginSource(entry);
-        return source.startsWith(`${plugin}@`) || source === plugin;
-      });
-    }
+      // Partial match: plugin name without marketplace suffix
+      if (index === -1) {
+        index = config.plugins.findIndex((entry) => {
+          const source = getPluginSource(entry);
+          return source.startsWith(`${plugin}@`) || source === plugin;
+        });
+      }
 
-    // Semantic match: same GitHub repo under a different format
-    if (index === -1) {
-      const identity = await resolveGitHubIdentity(plugin);
-      if (identity) {
-        for (let i = 0; i < config.plugins.length; i++) {
-          const p = config.plugins[i];
-          if (!p) continue;
-          const existing = await resolveGitHubIdentity(getPluginSource(p));
-          if (existing === identity) {
-            index = i;
-            break;
+      // Semantic match: same GitHub repo under a different format
+      if (index === -1) {
+        const identity = await resolveGitHubIdentity(plugin);
+        if (identity) {
+          for (let i = 0; i < config.plugins.length; i++) {
+            const p = config.plugins[i];
+            if (!p) continue;
+            const existing = await resolveGitHubIdentity(getPluginSource(p));
+            if (existing === identity) {
+              index = i;
+              break;
+            }
           }
         }
       }
-    }
 
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin not found in user config: ${plugin}`,
-      };
-    }
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin not found in user config: ${plugin}`,
+        };
+      }
 
-    const removedEntry = getPluginSource(config.plugins[index] as PluginEntry);
-    config.plugins.splice(index, 1);
-    if (!config.plugins.some((entry) => getPluginSource(entry) === removedEntry)) {
-      pruneDisabledSkillsForPlugin(config, removedEntry);
-      pruneEnabledSkillsForPlugin(config, removedEntry);
-    }
-    await writeWorkspaceConfig(configPath, config, { removedPluginIndexes: [index] });
-    return { success: true };
+      const removedEntry = getPluginSource(config.plugins[index] as PluginEntry);
+      config.plugins.splice(index, 1);
+      if (!config.plugins.some((entry) => getPluginSource(entry) === removedEntry)) {
+        pruneDisabledSkillsForPlugin(config, removedEntry);
+        pruneEnabledSkillsForPlugin(config, removedEntry);
+      }
+      await writeWorkspaceConfig(configPath, config, { removedPluginIndexes: [index] });
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -363,18 +367,20 @@ export async function removeUserPluginsForMarketplace(
 ): Promise<string[]> {
   const configPath = getUserWorkspaceConfigPath();
   if (!existsSync(configPath)) return [];
-  const config = await parseUserWorkspaceConfigForEdit(configPath);
+  return withWorkspaceConfigMutation(configPath, async () => {
+    const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-  const matching = config.plugins.filter((entry) => {
-    const parsed = parsePluginSpec(getPluginSource(entry));
-    return parsed?.marketplaceName === marketplaceName;
+    const matching = config.plugins.filter((entry) => {
+      const parsed = parsePluginSpec(getPluginSource(entry));
+      return parsed?.marketplaceName === marketplaceName;
+    });
+
+    if (matching.length === 0) return [];
+
+    config.plugins = config.plugins.filter((entry) => !matching.includes(entry));
+    await writeWorkspaceConfig(configPath, config);
+    return matching.map((entry) => getPluginSource(entry));
   });
-
-  if (matching.length === 0) return [];
-
-  config.plugins = config.plugins.filter((entry) => !matching.includes(entry));
-  await writeWorkspaceConfig(configPath, config);
-  return matching.map((entry) => getPluginSource(entry));
 }
 
 /**
@@ -389,89 +395,93 @@ async function addPluginToUserConfig(
   initialConfig?: WorkspaceConfig,
 ): Promise<ModifyResult> {
   try {
-    const config =
-      initialConfig ?? (await parseUserWorkspaceConfigForEdit(configPath));
-    const source = getPluginSource(plugin);
-    const exactIndex = config.plugins.findIndex(
-      (entry) => getPluginSource(entry) === source,
-    );
-    if (exactIndex !== -1 && !force) {
-      return {
-        success: false,
-        error: `Plugin already exists in user config: ${source}`,
-      };
-    }
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config =
+        initialConfig && !existsSync(configPath)
+          ? initialConfig
+          : await parseUserWorkspaceConfigForEdit(configPath);
+      const source = getPluginSource(plugin);
+      const exactIndex = config.plugins.findIndex(
+        (entry) => getPluginSource(entry) === source,
+      );
+      if (exactIndex !== -1 && !force) {
+        return {
+          success: false,
+          error: `Plugin already exists in user config: ${source}`,
+        };
+      }
 
-    let semanticIndex = -1;
-    const newIdentity = await resolveGitHubIdentity(source);
-    if (newIdentity) {
-      for (let i = 0; i < config.plugins.length; i++) {
-        if (i === exactIndex) continue;
-        const existing = config.plugins[i];
-        if (!existing) continue;
-        if (
-          (await resolveGitHubIdentity(getPluginSource(existing))) ===
-          newIdentity
-        ) {
-          semanticIndex = i;
-          break;
+      let semanticIndex = -1;
+      const newIdentity = await resolveGitHubIdentity(source);
+      if (newIdentity) {
+        for (let i = 0; i < config.plugins.length; i++) {
+          if (i === exactIndex) continue;
+          const existing = config.plugins[i];
+          if (!existing) continue;
+          if (
+            (await resolveGitHubIdentity(getPluginSource(existing))) ===
+            newIdentity
+          ) {
+            semanticIndex = i;
+            break;
+          }
         }
       }
-    }
 
-    if (semanticIndex !== -1 && !force) {
-      const existingSource = getPluginSource(
-        config.plugins[semanticIndex] as PluginEntry,
-      );
-      return {
-        success: false,
-        error: `Plugin duplicates existing entry '${existingSource}': both resolve to ${newIdentity}`,
-      };
-    }
-
-    let targetedReplaceIndex = -1;
-    if (targetedDependencies !== undefined) {
-      targetedReplaceIndex = exactIndex !== -1 ? exactIndex : semanticIndex;
-      const nextEntry = mergeTargetedPluginEntry(
-        targetedReplaceIndex === -1
-          ? undefined
-          : config.plugins[targetedReplaceIndex],
-        plugin,
-        source,
-        config.clients,
-      );
-      if (targetedReplaceIndex === -1) config.plugins.push(nextEntry);
-      else config.plugins[targetedReplaceIndex] = nextEntry;
-      await writeWorkspaceConfigAtomically(
-        configPath,
-        config,
-        'user',
-        targetedDependencies,
-      );
-    } else {
-      if (exactIndex !== -1) config.plugins.splice(exactIndex, 1);
-      const adjustedSemanticIndex =
-        exactIndex !== -1 && semanticIndex > exactIndex
-          ? semanticIndex - 1
-          : semanticIndex;
-      if (adjustedSemanticIndex !== -1) {
-        config.plugins.splice(adjustedSemanticIndex, 1);
+      if (semanticIndex !== -1 && !force) {
+        const existingSource = getPluginSource(
+          config.plugins[semanticIndex] as PluginEntry,
+        );
+        return {
+          success: false,
+          error: `Plugin duplicates existing entry '${existingSource}': both resolve to ${newIdentity}`,
+        };
       }
-      config.plugins.push(plugin);
-      await writeWorkspaceConfig(configPath, config);
-    }
 
-    return {
-      success: true,
-      ...(autoRegistered && { autoRegistered }),
-      normalizedPlugin: source,
-      ...(force && {
-        replaced:
-          targetedDependencies !== undefined
-            ? targetedReplaceIndex !== -1
-            : exactIndex !== -1,
-      }),
-    };
+      let targetedReplaceIndex = -1;
+      if (targetedDependencies !== undefined) {
+        targetedReplaceIndex = exactIndex !== -1 ? exactIndex : semanticIndex;
+        const nextEntry = mergeTargetedPluginEntry(
+          targetedReplaceIndex === -1
+            ? undefined
+            : config.plugins[targetedReplaceIndex],
+          plugin,
+          source,
+          config.clients,
+        );
+        if (targetedReplaceIndex === -1) config.plugins.push(nextEntry);
+        else config.plugins[targetedReplaceIndex] = nextEntry;
+        await writeWorkspaceConfigAtomically(
+          configPath,
+          config,
+          'user',
+          targetedDependencies,
+        );
+      } else {
+        if (exactIndex !== -1) config.plugins.splice(exactIndex, 1);
+        const adjustedSemanticIndex =
+          exactIndex !== -1 && semanticIndex > exactIndex
+            ? semanticIndex - 1
+            : semanticIndex;
+        if (adjustedSemanticIndex !== -1) {
+          config.plugins.splice(adjustedSemanticIndex, 1);
+        }
+        config.plugins.push(plugin);
+        await writeWorkspaceConfig(configPath, config);
+      }
+
+      return {
+        success: true,
+        ...(autoRegistered && { autoRegistered }),
+        normalizedPlugin: source,
+        ...(force && {
+          replaced:
+            targetedDependencies !== undefined
+              ? targetedReplaceIndex !== -1
+              : exactIndex !== -1,
+        }),
+      };
+    });
   } catch (error) {
     return {
       success: false,
@@ -504,10 +514,12 @@ export async function setUserClients(
   const configPath = getUserWorkspaceConfigPath();
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
-    config.clients = clients;
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
+      config.clients = clients;
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -582,36 +594,38 @@ export async function addUserDisabledSkill(
   const { pluginName, skillName } = parsed;
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
 
-    const entry = ensureObjectPluginEntry(config, index);
+      const entry = ensureObjectPluginEntry(config, index);
 
-    if (Array.isArray(entry.skills)) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' is in allowlist mode; use removeUserEnabledSkill to disable a skill`,
-      };
-    }
+      if (Array.isArray(entry.skills)) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' is in allowlist mode; use removeUserEnabledSkill to disable a skill`,
+        };
+      }
 
-    const existing = entry.skills?.exclude ?? [];
-    if (existing.includes(skillName)) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already disabled`,
-      };
-    }
+      const existing = entry.skills?.exclude ?? [];
+      if (existing.includes(skillName)) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already disabled`,
+        };
+      }
 
-    entry.skills = { exclude: [...existing, skillName] };
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+      entry.skills = { exclude: [...existing, skillName] };
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -640,46 +654,48 @@ export async function removeUserDisabledSkill(
   const { pluginName, skillName } = parsed;
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
 
-    const entry = config.plugins[index];
-    if (!entry) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
-    if (
-      typeof entry === 'string' ||
-      !entry.skills ||
-      Array.isArray(entry.skills)
-    ) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already enabled`,
-      };
-    }
+      const entry = config.plugins[index];
+      if (!entry) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
+      if (
+        typeof entry === 'string' ||
+        !entry.skills ||
+        Array.isArray(entry.skills)
+      ) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already enabled`,
+        };
+      }
 
-    if (!entry.skills.exclude.includes(skillName)) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already enabled`,
-      };
-    }
+      if (!entry.skills.exclude.includes(skillName)) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already enabled`,
+        };
+      }
 
-    const newExclude = entry.skills.exclude.filter((s) => s !== skillName);
-    entry.skills = newExclude.length > 0 ? { exclude: newExclude } : undefined;
+      const newExclude = entry.skills.exclude.filter((s) => s !== skillName);
+      entry.skills = newExclude.length > 0 ? { exclude: newExclude } : undefined;
 
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -737,36 +753,38 @@ export async function addUserEnabledSkill(
   const { pluginName, skillName } = parsed;
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
 
-    const entry = ensureObjectPluginEntry(config, index);
+      const entry = ensureObjectPluginEntry(config, index);
 
-    if (entry.skills && !Array.isArray(entry.skills)) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' is in blocklist mode; use removeUserDisabledSkill to enable a skill`,
-      };
-    }
+      if (entry.skills && !Array.isArray(entry.skills)) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' is in blocklist mode; use removeUserDisabledSkill to enable a skill`,
+        };
+      }
 
-    const existing = (entry.skills as string[] | undefined) ?? [];
-    if (existing.includes(skillName)) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already enabled`,
-      };
-    }
+      const existing = (entry.skills as string[] | undefined) ?? [];
+      if (existing.includes(skillName)) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already enabled`,
+        };
+      }
 
-    entry.skills = [...existing, skillName];
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+      entry.skills = [...existing, skillName];
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -795,46 +813,48 @@ export async function removeUserEnabledSkill(
   const { pluginName, skillName } = parsed;
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
 
-    const entry = config.plugins[index];
-    if (!entry) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
-    if (
-      typeof entry === 'string' ||
-      !entry.skills ||
-      !Array.isArray(entry.skills)
-    ) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already disabled`,
-      };
-    }
+      const entry = config.plugins[index];
+      if (!entry) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
+      if (
+        typeof entry === 'string' ||
+        !entry.skills ||
+        !Array.isArray(entry.skills)
+      ) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already disabled`,
+        };
+      }
 
-    if (!entry.skills.includes(skillName)) {
-      return {
-        success: false,
-        error: `Skill '${skillKey}' is already disabled`,
-      };
-    }
+      if (!entry.skills.includes(skillName)) {
+        return {
+          success: false,
+          error: `Skill '${skillKey}' is already disabled`,
+        };
+      }
 
-    const newSkills = entry.skills.filter((s) => s !== skillName);
-    entry.skills = newSkills;
+      const newSkills = entry.skills.filter((s) => s !== skillName);
+      entry.skills = newSkills;
 
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -860,29 +880,31 @@ export async function setUserPluginSkillsMode(
   const configPath = getUserWorkspaceConfigPath();
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      return {
-        success: false,
-        error: `Plugin '${pluginName}' not found in user workspace config`,
-      };
-    }
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        return {
+          success: false,
+          error: `Plugin '${pluginName}' not found in user workspace config`,
+        };
+      }
 
-    const entry = ensureObjectPluginEntry(config, index);
+      const entry = ensureObjectPluginEntry(config, index);
 
-    if (mode === 'allowlist') {
-      // Always set the array to preserve allowlist mode, even if empty
-      entry.skills = [...skillNames];
-    } else {
-      // For blocklist, clear the field if no exclusions (= all enabled)
-      entry.skills =
-        skillNames.length > 0 ? { exclude: [...skillNames] } : undefined;
-    }
+      if (mode === 'allowlist') {
+        // Always set the array to preserve allowlist mode, even if empty
+        entry.skills = [...skillNames];
+      } else {
+        // For blocklist, clear the field if no exclusions (= all enabled)
+        entry.skills =
+          skillNames.length > 0 ? { exclude: [...skillNames] } : undefined;
+      }
 
-    await writeWorkspaceConfig(configPath, config);
-    return { success: true };
+      await writeWorkspaceConfig(configPath, config);
+      return { success: true };
+    });
   } catch (error) {
     return {
       success: false,
@@ -903,16 +925,18 @@ export async function setUserPluginMcpServersExcluded(
   }
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
-    const result = setPluginMcpServersExcludedInConfig(
-      config,
-      source,
-      excludedNames,
-      configurationIndex,
-    );
-    if (!result.success) return result;
-    await writeWorkspaceConfig(configPath, config);
-    return result;
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
+      const result = setPluginMcpServersExcludedInConfig(
+        config,
+        source,
+        excludedNames,
+        configurationIndex,
+      );
+      if (!result.success) return result;
+      await writeWorkspaceConfig(configPath, config);
+      return result;
+    });
   } catch (error) {
     return {
       success: false,
@@ -929,16 +953,18 @@ export async function upsertUserGitHubPluginSourceAllowlist(
   const configPath = getUserWorkspaceConfigPath();
 
   try {
-    const config = await parseUserWorkspaceConfigForEdit(configPath);
-    const result = await upsertGitHubPluginSourceAllowlistInConfig(
-      config,
-      source,
-      skillNames,
-    );
-    if (!result.success) return result;
+    return await withWorkspaceConfigMutation(configPath, async (): Promise<ModifyResult> => {
+      const config = await parseUserWorkspaceConfigForEdit(configPath);
+      const result = await upsertGitHubPluginSourceAllowlistInConfig(
+        config,
+        source,
+        skillNames,
+      );
+      if (!result.success) return result;
 
-    await writeWorkspaceConfig(configPath, config);
-    return result;
+      await writeWorkspaceConfig(configPath, config);
+      return result;
+    });
   } catch (error) {
     return {
       success: false,
@@ -1056,70 +1082,72 @@ export async function migrateUserWorkspaceSkillsV1toV2(): Promise<void> {
   const configPath = getUserWorkspaceConfigPath();
   if (!existsSync(configPath)) return;
 
-  const config = await parseUserWorkspaceConfigForEdit(configPath);
+  await withWorkspaceConfigMutation(configPath, async () => {
+    const config = await parseUserWorkspaceConfigForEdit(configPath);
 
-  if (!config || (config.version !== undefined && config.version >= 2)) return;
+    if (!config || (config.version !== undefined && config.version >= 2)) return;
 
-  const enabledSkills: string[] = config.enabledSkills ?? [];
-  const disabledSkills: string[] = config.disabledSkills ?? [];
+    const enabledSkills: string[] = config.enabledSkills ?? [];
+    const disabledSkills: string[] = config.disabledSkills ?? [];
 
-  const enabledByPlugin = new Map<string, string[]>();
-  for (const skillKey of enabledSkills) {
-    const colonIdx = skillKey.indexOf(':');
-    if (colonIdx === -1) continue;
-    const pluginName = skillKey.slice(0, colonIdx);
-    const skillName = skillKey.slice(colonIdx + 1);
-    const list = enabledByPlugin.get(pluginName) ?? [];
-    list.push(skillName);
-    enabledByPlugin.set(pluginName, list);
-  }
+    const enabledByPlugin = new Map<string, string[]>();
+    for (const skillKey of enabledSkills) {
+      const colonIdx = skillKey.indexOf(':');
+      if (colonIdx === -1) continue;
+      const pluginName = skillKey.slice(0, colonIdx);
+      const skillName = skillKey.slice(colonIdx + 1);
+      const list = enabledByPlugin.get(pluginName) ?? [];
+      list.push(skillName);
+      enabledByPlugin.set(pluginName, list);
+    }
 
-  const disabledByPlugin = new Map<string, string[]>();
-  for (const skillKey of disabledSkills) {
-    const colonIdx = skillKey.indexOf(':');
-    if (colonIdx === -1) continue;
-    const pluginName = skillKey.slice(0, colonIdx);
-    const skillName = skillKey.slice(colonIdx + 1);
-    const list = disabledByPlugin.get(pluginName) ?? [];
-    list.push(skillName);
-    disabledByPlugin.set(pluginName, list);
-  }
+    const disabledByPlugin = new Map<string, string[]>();
+    for (const skillKey of disabledSkills) {
+      const colonIdx = skillKey.indexOf(':');
+      if (colonIdx === -1) continue;
+      const pluginName = skillKey.slice(0, colonIdx);
+      const skillName = skillKey.slice(colonIdx + 1);
+      const list = disabledByPlugin.get(pluginName) ?? [];
+      list.push(skillName);
+      disabledByPlugin.set(pluginName, list);
+    }
 
-  for (const [pluginName, skillNames] of enabledByPlugin) {
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
+    for (const [pluginName, skillNames] of enabledByPlugin) {
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        console.warn(
+          `[migrate v1→v2] No user plugin found for '${pluginName}', skipping`,
+        );
+        continue;
+      }
+      const entry = ensureObjectPluginEntry(config, index);
+      entry.skills = skillNames;
+    }
+
+    for (const [pluginName, skillNames] of disabledByPlugin) {
+      const index = findPluginEntryByName(config, pluginName);
+      if (index === -1) {
+        console.warn(
+          `[migrate v1→v2] No user plugin found for '${pluginName}', skipping`,
+        );
+        continue;
+      }
+      const entry = ensureObjectPluginEntry(config, index);
+      if (!Array.isArray(entry.skills)) {
+        entry.skills = { exclude: skillNames };
+      }
+    }
+
+    config.enabledSkills = undefined;
+    config.disabledSkills = undefined;
+    config.version = 2;
+
+    try {
+      await writeWorkspaceConfig(configPath, config);
+    } catch (error) {
       console.warn(
-        `[migrate v1→v2] No user plugin found for '${pluginName}', skipping`,
+        `[migrate v1→v2] Failed to write migrated user config: ${error instanceof Error ? error.message : String(error)}`,
       );
-      continue;
     }
-    const entry = ensureObjectPluginEntry(config, index);
-    entry.skills = skillNames;
-  }
-
-  for (const [pluginName, skillNames] of disabledByPlugin) {
-    const index = findPluginEntryByName(config, pluginName);
-    if (index === -1) {
-      console.warn(
-        `[migrate v1→v2] No user plugin found for '${pluginName}', skipping`,
-      );
-      continue;
-    }
-    const entry = ensureObjectPluginEntry(config, index);
-    if (!Array.isArray(entry.skills)) {
-      entry.skills = { exclude: skillNames };
-    }
-  }
-
-  config.enabledSkills = undefined;
-  config.disabledSkills = undefined;
-  config.version = 2;
-
-  try {
-    await writeWorkspaceConfig(configPath, config);
-  } catch (error) {
-    console.warn(
-      `[migrate v1→v2] Failed to write migrated user config: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  });
 }

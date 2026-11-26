@@ -157,7 +157,7 @@ interface ProfileAdapterBase {
   readonly rename?: {
     readonly nativeLocations?: readonly string[];
     readonly namedFiles?: (profile: string) => readonly string[];
-    assertRelocatable?(context: ProfileClientContext): Promise<void>;
+    assertRelocatable?(context: ProfileClientContext, options: ProfileContextOptions): Promise<void>;
   };
 
   serializeSettings(

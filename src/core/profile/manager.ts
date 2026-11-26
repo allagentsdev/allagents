@@ -13,7 +13,7 @@ import {
   getPluginClients,
   resolveInstallMode,
 } from '../../models/workspace-config.js';
-import { withWorkspaceConfigLock } from '../../utils/workspace-config-lock.js';
+import { assertNoPendingProfileRename, withWorkspaceConfigLock } from '../../utils/workspace-config-lock.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
   assertSafeProfilePath,
@@ -44,7 +44,6 @@ import {
   readProfileWorkspace,
   resolveProfileRuntimeOptions,
 } from './plan.js';
-import { assertNoPendingProfileRename } from './rename-transaction.js';
 import {
   checkpointProfileResource,
   createProfileState,

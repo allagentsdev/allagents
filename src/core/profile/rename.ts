@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { readFile, readdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
@@ -10,7 +10,10 @@ import {
   type ProfileDeclaration,
   ProfileNameSchema,
 } from '../../models/workspace-config.js';
-import { withWorkspaceConfigLock } from '../../utils/workspace-config-lock.js';
+import {
+  profileRenameRecordPath,
+  withWorkspaceConfigLock,
+} from '../../utils/workspace-config-lock.js';
 import { validateUserWorkspaceConfig } from '../../utils/workspace-parser.js';
 import { serializeWorkspaceConfig } from '../../utils/workspace-writer.js';
 import { loadYaml } from '../../utils/yaml.js';
@@ -28,15 +31,18 @@ import {
   resolveProfileRuntimeOptions,
 } from './plan.js';
 import {
+  capturedRenameFile,
   getRenameRootIdentity,
   inspectRenameProgress,
+  inspectReplacement,
   moveNamedProfileFile,
-  profileRenameRecordPath,
+  moveProfileRoot,
   profileRenameStats,
   publishRenameFile,
   readProfileRenameRecord,
   relativeRenamePath,
   type RenameRecord,
+  writeRenameRecord,
 } from './rename-transaction.js';
 import {
   getProfileStatePath,
@@ -65,6 +71,7 @@ interface RenamePlanDetails {
   readonly runtime: ResolvedProfileRuntime;
   readonly record: RenameRecord;
   readonly workspaceContent: string;
+  readonly workspaceBefore: string;
   readonly workspaceMode: number;
 }
 
@@ -135,8 +142,12 @@ async function planInstalledRename(
 > {
   const oldRoot = getProfileRoot(runtime, profile);
   const newRoot = getProfileRoot(runtime, newProfile);
-  if (JSON.stringify(declaration).includes(JSON.stringify(oldRoot).slice(1, -1))) {
-    throw new Error('The profile declaration contains a path inside the old profile directory. Update it before renaming.');
+  if (
+    JSON.stringify(declaration).includes(JSON.stringify(oldRoot).slice(1, -1))
+  ) {
+    throw new Error(
+      'The profile declaration contains a path inside the old profile directory. Update it before renaming.',
+    );
   }
   if (
     state.profile !== profile ||
@@ -221,7 +232,7 @@ async function planInstalledRename(
         `Profile client directory is missing or unowned: ${managedRoot}`,
       );
     }
-    await adapter.rename.assertRelocatable?.(before);
+    await adapter.rename.assertRelocatable?.(before, runtime);
     for (const name of adapter.rename.nativeLocations ?? []) {
       const path = join(before.root, name);
       await assertSafeProfilePath(before.root, path);
@@ -385,11 +396,36 @@ async function prepareRename(
 > {
   const workspacePath = runtime.userConfigPath;
   await assertSafeProfilePath(dirname(workspacePath), workspacePath);
-  const workspaceStats = await lstat(workspacePath);
-  if (!workspaceStats.isFile())
-    throw new Error(`Workspace is not a regular file: ${workspacePath}`);
-  const workspaceMode = workspaceStats.mode & 0o777;
-  const original = await readFile(workspacePath);
+  const existing = await readProfileRenameRecord(
+    profileRenameRecordPath(workspacePath),
+  );
+  if (
+    existing &&
+    (existing.profile !== profile || existing.newProfile !== newProfile)
+  ) {
+    throw new Error(
+      `Profile rename is incomplete. Rerun 'allagents profile rename ${existing.profile} ${existing.newProfile} --yes'.`,
+    );
+  }
+  const capturedPath = existing
+    ? capturedRenameFile(workspacePath, existing.id)
+    : undefined;
+  if (capturedPath)
+    await assertSafeProfilePath(dirname(workspacePath), capturedPath);
+  const workspaceStats = await profileRenameStats(workspacePath);
+  const capturedStats = capturedPath
+    ? await profileRenameStats(capturedPath)
+    : null;
+  const selected = workspaceStats ?? capturedStats;
+  if (!selected?.isFile() || (capturedStats && !capturedStats.isFile())) {
+    throw new Error(
+      `Workspace is unavailable or is not a regular file: ${workspacePath}`,
+    );
+  }
+  const workspaceMode = selected.mode & 0o777;
+  const original = await readFile(
+    workspaceStats ? workspacePath : (capturedPath ?? workspacePath),
+  );
   const current = original.toString('utf8');
   const fingerprint = sha256Fingerprint(original);
   if (sha256Fingerprint(current) !== fingerprint) {
@@ -397,35 +433,74 @@ async function prepareRename(
   }
   const oldRoot = getProfileRoot(runtime, profile);
   const newRoot = getProfileRoot(runtime, newProfile);
-  const existing = await readProfileRenameRecord(
-    profileRenameRecordPath(workspacePath),
-  );
+
   if (existing) {
-    if (existing.profile !== profile || existing.newProfile !== newProfile) {
-      throw new Error(
-        `Profile rename is incomplete. Rerun 'allagents profile rename ${existing.profile} ${existing.newProfile} --yes'.`,
-      );
-    }
-    const updated =
-      fingerprint === existing.workspaceAfter
-        ? current
-        : fingerprint === existing.workspaceBefore
-          ? replaceDeclaration(current, workspacePath, profile, newProfile)
-              .content
-          : undefined;
+    const { profiles } = validateUserWorkspaceConfig(
+      loadYaml(current),
+      workspacePath,
+    );
+    const oldDeclaration =
+      profiles && Object.hasOwn(profiles, profile)
+        ? profiles[profile]
+        : undefined;
+    const newDeclaration =
+      profiles && Object.hasOwn(profiles, newProfile)
+        ? profiles[newProfile]
+        : undefined;
+    let workspaceContent = current;
+    let workspaceBefore = existing.workspaceBefore;
     if (
-      updated === undefined ||
-      sha256Fingerprint(updated) !== existing.workspaceAfter
+      oldDeclaration &&
+      !newDeclaration &&
+      hashProfileDeclaration(oldDeclaration) === existing.declarationDigest
     ) {
+      workspaceContent = replaceDeclaration(
+        current,
+        workspacePath,
+        profile,
+        newProfile,
+      ).content;
+      workspaceBefore = fingerprint;
+    } else if (
+      !oldDeclaration &&
+      newDeclaration &&
+      hashProfileDeclaration(newDeclaration) === existing.declarationDigest
+    ) {
+      if (capturedPath && capturedStats) {
+        const captured = await readFile(capturedPath, 'utf8');
+        const previous = replaceDeclaration(
+          captured,
+          workspacePath,
+          profile,
+          newProfile,
+        );
+        if (
+          hashProfileDeclaration(previous.declaration) !==
+          existing.declarationDigest
+        ) {
+          throw new Error(
+            `Profile rename preserved an intervening declaration edit at ${capturedPath}`,
+          );
+        }
+        workspaceBefore = sha256Fingerprint(captured);
+      }
+    } else {
       throw new Error(
-        'The workspace changed during profile rename. Restore either recorded workspace version before retrying.',
+        'The profile declaration changed during rename. Restore it before retrying.',
       );
     }
+    await inspectReplacement(
+      workspacePath,
+      workspaceBefore,
+      sha256Fingerprint(workspaceContent),
+      existing.id,
+    );
     await inspectRenameProgress(existing, oldRoot, newRoot, runtime.binDir);
     return {
       runtime,
       record: existing,
-      workspaceContent: updated,
+      workspaceContent,
+      workspaceBefore,
       workspaceMode,
       installed: !!existing.root?.state,
       recovering: true,
@@ -487,8 +562,8 @@ async function prepareRename(
     id,
     profile,
     newProfile,
+    declarationDigest: hashProfileDeclaration(updated.declaration),
     workspaceBefore: fingerprint,
-    workspaceAfter: sha256Fingerprint(updated.content),
     ...(identity && {
       root: { ...identity, namedFiles: assets.namedFiles, state: assets.state },
     }),
@@ -499,6 +574,7 @@ async function prepareRename(
     runtime,
     record,
     workspaceContent: updated.content,
+    workspaceBefore: fingerprint,
     workspaceMode,
     installed,
     recovering: false,
@@ -581,15 +657,18 @@ export async function applyProfileRename(
       initial.record.id,
     );
     const { record } = current;
-    if (!isDeepStrictEqual(initial.record, record)) {
+    if (
+      !isDeepStrictEqual(initial.record, record) ||
+      initial.workspaceBefore !== current.workspaceBefore ||
+      initial.workspaceContent !== current.workspaceContent
+    ) {
       throw new Error(
         'The profile changed after preview. Rerun the rename to see the updated plan.',
       );
     }
     const oldRoot = getProfileRoot(runtime, record.profile);
     const newRoot = getProfileRoot(runtime, record.newProfile);
-    if (!current.recovering)
-      await publishRenameFile(journal, JSON.stringify(record), null, 0o600);
+    if (!current.recovering) await writeRenameRecord(journal, record);
     try {
       const progress = await inspectRenameProgress(
         record,
@@ -597,11 +676,8 @@ export async function applyProfileRename(
         newRoot,
         runtime.binDir,
       );
-      if (progress.moveRoot) {
-        if (await profileRenameStats(newRoot))
-          throw new Error(`Profile destination already exists: ${newRoot}`);
-        await rename(oldRoot, newRoot);
-      }
+      if (progress.moveRoot)
+        await moveProfileRoot(record, journal, oldRoot, newRoot);
       for (const move of progress.moves)
         await moveNamedProfileFile(newRoot, move);
       for (const { name, content, before, mode } of record.launchers) {
@@ -626,7 +702,7 @@ export async function applyProfileRename(
       await publishRenameFile(
         workspace,
         current.workspaceContent,
-        record.workspaceBefore,
+        current.workspaceBefore,
         current.workspaceMode,
         record.id,
       );

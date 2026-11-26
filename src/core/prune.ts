@@ -1,4 +1,5 @@
 import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
+import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
@@ -87,16 +88,17 @@ export async function pruneOrphanedPlugins(
     keptEntries: [],
   };
   const userConfigPath = getUserWorkspaceConfigPath();
-  const userConfig = existsSync(userConfigPath)
-    ? await parseUserWorkspaceConfigForEdit(userConfigPath)
-    : null;
-  if (userConfig) {
-    userResult = await prunePlugins(userConfig.plugins);
+  if (existsSync(userConfigPath)) {
+    userResult = await withWorkspaceConfigMutation(userConfigPath, async () => {
+      const userConfig = await parseUserWorkspaceConfigForEdit(userConfigPath);
+      const result = await prunePlugins(userConfig.plugins);
 
-    if (userResult.removed.length > 0) {
-      userConfig.plugins = userResult.keptEntries;
-      await writeWorkspaceConfig(userConfigPath, userConfig);
-    }
+      if (result.removed.length > 0) {
+        userConfig.plugins = result.keptEntries;
+        await writeWorkspaceConfig(userConfigPath, userConfig);
+      }
+      return result;
+    });
   }
 
   return {

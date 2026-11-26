@@ -74,6 +74,7 @@ export interface ResolvedProfileRuntime {
   readonly platform: NodeJS.Platform;
   readonly offline: boolean;
   readonly dryRun: boolean;
+  readonly purgeSessionData: boolean;
 }
 
 export interface ProfilePlanDependencies {
@@ -82,7 +83,7 @@ export interface ProfilePlanDependencies {
 }
 
 export interface InternalProfilePlanStep {
-  readonly public: ProfilePlanStep;
+  readonly public: ProfilePlanStep & { readonly client: ClientType };
   readonly relationship: ProfileResourceRelationship;
   readonly root?: string;
   readonly path?: string;
@@ -106,6 +107,7 @@ export interface InternalProfilePlan {
   readonly adapters: ReadonlyMap<ClientType, ProfileAdapter>;
   readonly priorState: ProfileState | null;
   readonly steps: readonly InternalProfilePlanStep[];
+  readonly oauthCleanup?: ProfilePlanStep;
 }
 
 const INTERNAL_PLANS = new WeakMap<ProfilePlan, InternalProfilePlan>();
@@ -127,6 +129,7 @@ export function resolveProfileRuntimeOptions(
     platform: options.platform ?? process.platform,
     offline: options.offline ?? false,
     dryRun: options.dryRun ?? false,
+    purgeSessionData: options.purgeSessionData ?? false,
   });
 }
 
@@ -283,14 +286,14 @@ function relationship(input: {
   };
 }
 
-function publicStep(
-  client: ClientType,
+function publicStep<Client extends ProfilePlanStep['client']>(
+  client: Client,
   kind: ProfileStepKind,
   identity: string,
   action: ProfilePlanAction,
   refs: { requestedRef?: string; resolvedRef?: string } = {},
   detail?: ProfilePlanStepDetail,
-): ProfilePlanStep {
+): ProfilePlanStep & { readonly client: Client } {
   return Object.freeze({
     client,
     kind,
@@ -722,6 +725,7 @@ export async function planProfileOperation(
 
   const warnings: string[] = [];
   const steps: InternalProfilePlanStep[] = [];
+  let oauthCleanup: ProfilePlanStep | undefined;
   const desiredKeys = new Set<string>();
   const inspections = new Map<ClientType, NativeInspectionResult>();
   const inspectionFor = async (client: ClientType) => {
@@ -843,8 +847,18 @@ export async function planProfileOperation(
           context,
         });
       } else if (resource.kind === 'root') {
+        const retainedResource = steps.some(
+          (step) =>
+            step.public.client === resource.client &&
+            step.public.action === 'retain',
+        );
         const action: ProfilePlanAction =
-          resource.ownership === 'managed' ? 'remove' : 'retain';
+          runtime.purgeSessionData &&
+          resource.ownership === 'managed' &&
+          adapter.capabilities.recursiveRootCleanup &&
+          !retainedResource
+            ? 'remove'
+            : 'retain';
         steps.push({
           public: publicStep(
             resource.client,
@@ -869,6 +883,19 @@ export async function planProfileOperation(
           context,
         });
       }
+    }
+    const oauthRoot = join(profileRoot, 'oauth-proxy');
+    const oauthExists = await lstat(oauthRoot).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    });
+    if (oauthExists) {
+      oauthCleanup = publicStep(
+        'profile',
+        'root',
+        oauthRoot,
+        runtime.purgeSessionData ? 'remove' : 'retain',
+      );
     }
   } else if (declaration) {
     for (const declaredClient of declaration.clients) {
@@ -1588,7 +1615,10 @@ export async function planProfileOperation(
     operation,
     declarationDigest: digest,
     clients: Object.freeze(plannedClients),
-    steps: Object.freeze(orderedSteps.map((step) => step.public)),
+    steps: Object.freeze([
+      ...orderedSteps.map((step) => step.public),
+      ...(oauthCleanup ? [oauthCleanup] : []),
+    ]),
     warnings: Object.freeze(
       warnings.map(
         (warning) =>
@@ -1605,6 +1635,7 @@ export async function planProfileOperation(
     adapters,
     priorState,
     steps: Object.freeze(orderedSteps),
+    ...(oauthCleanup && { oauthCleanup }),
   });
   INTERNAL_PLANS.set(result, internal);
   return result;

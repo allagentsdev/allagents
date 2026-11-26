@@ -119,10 +119,12 @@ type ProfileSelectionKind = 'install' | 'status' | 'remove';
 function runtimeOptions(flags: {
   readonly offline?: boolean;
   readonly dryRun?: boolean;
+  readonly purgeSessionData?: boolean;
 }): ProfileRuntimeOptions {
   return {
     ...(flags.offline ? { offline: true } : {}),
     ...(flags.dryRun ? { dryRun: true } : {}),
+    ...(flags.purgeSessionData ? { purgeSessionData: true } : {}),
   };
 }
 
@@ -240,6 +242,7 @@ async function executeMutation(
     readonly yes: boolean;
     readonly dryRun: boolean;
     readonly offline: boolean;
+    readonly purgeSessionData?: boolean;
   },
   dependencies: ProfileCommandDependencies,
   runtime: ProfileCommandRuntime,
@@ -442,6 +445,10 @@ export function createProfileCommand(
         long: 'yes',
         short: 'y',
         description: 'Apply without asking for confirmation',
+      }),
+      purgeSessionData: flag({
+        long: 'purge-session-data',
+        description: 'Also delete session data in owned profile runtime roots',
       }),
       dryRun: flag({
         long: 'dry-run',

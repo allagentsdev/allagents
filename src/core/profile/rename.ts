@@ -51,6 +51,7 @@ import {
   sanitizeProfileError,
   sanitizeProfileState,
 } from './state.js';
+import type { ProfileClientContext } from './types.js';
 
 export interface ProfileRenamePlan {
   readonly profile: string;
@@ -70,12 +71,24 @@ export interface ProfileRenamePlan {
 interface RenamePlanDetails {
   readonly runtime: ResolvedProfileRuntime;
   readonly record: RenameRecord;
+  readonly declaration: ProfileDeclaration;
   readonly workspaceContent: string;
   readonly workspaceBefore: string;
   readonly workspaceMode: number;
 }
 
 const plans = new WeakMap<ProfileRenamePlan, RenamePlanDetails>();
+
+async function assertLauncherFiles(
+  context: ProfileClientContext,
+): Promise<void> {
+  for (const path of context.launcher.requiredFiles ?? []) {
+    await assertSafeProfilePath(context.root, path);
+    if (!(await profileRenameStats(path))?.isFile()) {
+      throw new Error(`Profile launcher requires a regular file at ${path}`);
+    }
+  }
+}
 
 async function checkProfileTree(root: string): Promise<void> {
   for (const item of await readdir(root, { withFileTypes: true })) {
@@ -233,12 +246,7 @@ async function planInstalledRename(
       );
     }
     await adapter.rename.assertRelocatable?.(before, runtime);
-    for (const path of launcher ? (before.launcher.requiredFiles ?? []) : []) {
-      await assertSafeProfilePath(before.root, path);
-      if (!(await profileRenameStats(path))?.isFile()) {
-        throw new Error(`Profile launcher requires a regular file at ${path}`);
-      }
-    }
+    if (launcher) await assertLauncherFiles(before);
     for (const name of adapter.rename.nativeLocations ?? []) {
       const path = join(before.root, name);
       await assertSafeProfilePath(before.root, path);
@@ -453,29 +461,23 @@ async function prepareRename(
       profiles && Object.hasOwn(profiles, newProfile)
         ? profiles[newProfile]
         : undefined;
-    let workspaceContent = current;
-    let workspaceBefore = existing.workspaceBefore;
+    const declaration = oldDeclaration ?? newDeclaration;
     if (
-      oldDeclaration &&
-      !newDeclaration &&
-      hashProfileDeclaration(oldDeclaration) === existing.declarationDigest
-    ) {
-      workspaceContent = replaceDeclaration(
-        current,
-        workspacePath,
-        profile,
-        newProfile,
-      ).content;
-      if (workspaceStats && !capturedStats) workspaceBefore = fingerprint;
-    } else if (
-      oldDeclaration ||
-      !newDeclaration ||
-      hashProfileDeclaration(newDeclaration) !== existing.declarationDigest
+      !declaration ||
+      (oldDeclaration && newDeclaration) ||
+      hashProfileDeclaration(declaration) !== existing.declarationDigest
     ) {
       throw new Error(
         'The profile declaration changed during rename. Restore it before retrying.',
       );
     }
+    const workspaceContent = oldDeclaration
+      ? replaceDeclaration(current, workspacePath, profile, newProfile).content
+      : current;
+    const workspaceBefore =
+      oldDeclaration && workspaceStats && !capturedStats
+        ? fingerprint
+        : existing.workspaceBefore;
     await inspectReplacement(
       workspacePath,
       workspaceBefore,
@@ -486,6 +488,7 @@ async function prepareRename(
     return {
       runtime,
       record: existing,
+      declaration,
       workspaceContent,
       workspaceBefore,
       workspaceMode,
@@ -560,6 +563,7 @@ async function prepareRename(
   return {
     runtime,
     record,
+    declaration: updated.declaration,
     workspaceContent: updated.content,
     workspaceBefore: fingerprint,
     workspaceMode,
@@ -675,6 +679,19 @@ export async function applyProfileRename(
         await moveProfileRoot(record, journal, oldRoot, newRoot);
       for (const move of progress.moves)
         await moveNamedProfileFile(newRoot, move, record.id);
+      if (record.launchers.length) {
+        for (const { name, launcher } of current.declaration.clients) {
+          if (!launcher) continue;
+          const adapter = getProfileAdapter(name);
+          if (!adapter?.rename)
+            throw new Error(
+              `Installed profile rename is unsupported for '${name}'`,
+            );
+          await assertLauncherFiles(
+            adapter.resolveContext(record.newProfile, runtime),
+          );
+        }
+      }
       for (const { name, content, before, mode } of record.launchers) {
         await publishRenameFile(
           join(runtime.binDir, name),

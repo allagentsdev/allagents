@@ -77,6 +77,16 @@ function seedFile(path: string, content: string) {
   writeFileSync(path, content);
 }
 
+function installClaudeFixture() {
+  seedFile(workspace, 'profiles: {work: {clients: [{name: claude, launcher: run-claude}]}}\n');
+  writeFileSync(join(bin, 'claude'), [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then echo "99.0.0 (Claude Code)"; exit; fi',
+    'echo "install list marketplace uninstall update"',
+  ].join('\n'), { mode: 0o755 });
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+}
+
 beforeAll(() => {
   const result = Bun.spawnSync(['bun', 'run', 'build'], { cwd: repo });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -236,14 +246,8 @@ test.skipIf(process.platform === 'win32')('rejects an installed client without a
 }, fixtureTimeout);
 
 test.skipIf(process.platform === 'win32' || process.platform === 'darwin')('refuses to retarget a launcher whose required MCP file is missing', () => {
-  const yaml = 'profiles: {work: {clients: [{name: claude, launcher: run-claude}]}}\n';
-  seedFile(workspace, yaml);
-  writeFileSync(join(bin, 'claude'), [
-    '#!/bin/sh',
-    'if [ "$1" = "--version" ]; then echo "99.0.0 (Claude Code)"; exit; fi',
-    'echo "install list marketplace uninstall update"',
-  ].join('\n'), { mode: 0o755 });
-  json(['profile', 'install', 'work', '--yes', '--offline']);
+  installClaudeFixture();
+  const yaml = read(workspace);
   const required = join(profiles, 'work', 'clients/claude/config/allagents.mcp.json');
   const launcher = join(bin, 'run-claude');
   const original = read(launcher);
@@ -254,6 +258,31 @@ test.skipIf(process.platform === 'win32' || process.platform === 'darwin')('refu
   expect(read(launcher)).toBe(original);
   expect(existsSync(join(profiles, 'office'))).toBe(false);
   expect(existsSync(`${workspace}.profile-rename.json`)).toBe(false);
+}, fixtureTimeout);
+
+test.skipIf(process.platform === 'win32' || process.platform === 'darwin')('keeps recovery pending until a relocated launcher prerequisite is restored', () => {
+  installClaudeFixture();
+  const destination = join(profiles, 'office');
+  const launcher = join(bin, 'run-claude');
+  const original = read(launcher);
+  const stopped = interruptibleRename([
+    'const rename = fs.rename;',
+    'fs.rename = async (from, to) => {',
+    '  await rename(from, to);',
+    '  if (to === process.env.TEST_DESTINATION) process.kill(process.pid, "SIGKILL");',
+    '};',
+  ], { TEST_DESTINATION: destination });
+  expect(stopped.signalCode).toBe('SIGKILL');
+  const required = join(destination, 'clients/claude/config/allagents.mcp.json');
+  const contents = read(required);
+  rmSync(required);
+
+  expect(json(['profile', 'rename', 'work', 'office', '--yes'], 1).error).toContain(required);
+  expect(read(launcher)).toBe(original);
+  expect(existsSync(`${workspace}.profile-rename.json`)).toBe(true);
+  seedFile(required, contents);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
+  expect(read(launcher)).toContain(required);
 }, fixtureTimeout);
 
 test.skipIf(process.platform === 'win32')('resumes after a process stop before publishing the declaration', () => {

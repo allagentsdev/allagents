@@ -1,0 +1,21 @@
+  office: # keep this comment
+exec 'claude' '--mcp-config' '/tmp/aa638.eGnKkQ/home/.allagents/profiles/office/clients/claude/config/allagents.mcp.json' "$@"
+{"type":"user","message":{"role":"user","content":"session fixture"}}
+{"fixture":"credential bytes"}
+{
+  "success": true,
+  "data": {
+    "profile": "office",
+    "status": "installed",
+    "installed": true
+  }
+}
+Rename profile 'spare' to 'backup'
+  Update workspace declaration: /tmp/aa638.eGnKkQ/home/.allagents/workspace.yaml
+Dry run; no changes applied.
+{
+  "profile": "spare",
+  "newProfile": "backup",
+  "status": "renamed",
+  "installed": false
+}

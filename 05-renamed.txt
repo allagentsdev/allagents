@@ -1,0 +1,12 @@
+Rename profile 'work' to 'office'
+  Move profile data: /tmp/aa638.eGnKkQ/home/.allagents/profiles/work
+    → /tmp/aa638.eGnKkQ/home/.allagents/profiles/office
+  Retarget launcher: /tmp/aa638.eGnKkQ/home/.local/bin/work-claude
+  Transfer installation state: /tmp/aa638.eGnKkQ/home/.allagents/profiles/work/state.json
+    → /tmp/aa638.eGnKkQ/home/.allagents/profiles/office/state.json
+  Update workspace declaration: /tmp/aa638.eGnKkQ/home/.allagents/workspace.yaml
+Close clients using this profile before applying. Update external references such as T3 provider paths after the rename.
+│
+◇  Rename profile 'work' to 'office' using this plan?
+│  Yes
+Renamed profile 'work' to 'office'.

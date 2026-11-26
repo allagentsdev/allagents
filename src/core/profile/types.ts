@@ -153,6 +153,13 @@ interface ProfileAdapterBase {
   stepOrder?(kind: ProfileStepKind, operation: ProfileOperationKind): number;
   readonly mcpPrerequisite?: ProfileMcpPrerequisite;
 
+  /** Opt in to moving an isolated file-only installation. Paths are relative to its client root. */
+  readonly rename?: {
+    readonly nativeLocations?: readonly string[];
+    readonly namedFiles?: (profile: string) => readonly string[];
+    assertRelocatable?(context: ProfileClientContext): Promise<void>;
+  };
+
   serializeSettings(
     context: ProfileClientContext,
     input: ProfileSerializationInput,

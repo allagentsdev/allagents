@@ -113,10 +113,11 @@ allagents profile install <name> [--yes] [--dry-run] [--offline]
 allagents profile list
 allagents profile status [name]
 allagents profile remove <name> [--yes] [--dry-run] [--offline]
+allagents profile rename <old> <new> [--yes] [--dry-run]
 ```
 
-Profile declarations exist only in `~/.allagents/workspace.yaml`. `install`
-and `remove` display a complete plan before mutation and require confirmation;
+Profile declarations exist only in `~/.allagents/workspace.yaml`. `install`,
+`remove`, and `rename` display a complete plan before mutation and require confirmation;
 scripts and JSON mode must pass `--yes`. `--dry-run` emits the same resolved
 plan without writing profile state, client files, native package state, or
 launchers.
@@ -137,6 +138,25 @@ deletes only unchanged managed resources, releases referenced resources, and
 retains modified, shared, failed, or uncorroborated resources for inspection
 and retry. There is intentionally no `allagents profile update`; use repeatable
 `allagents update --profile <name>`.
+
+`rename` changes the declaration key and keeps any configured launcher names.
+For installed Claude Code, Codex, and OpenCode profiles, it can move a complete,
+file-only installation with its isolated client files, session data, and stored
+credentials. OpenCode data shared outside the profile stays where OpenCode keeps
+it. Uninstalled declarations can be renamed regardless of client.
+
+Close clients using the profile before applying. Rename stops on a destination
+collision, native plugin data, a symbolic link in the profile tree, a modified
+launcher, or generated settings that embed a profile selector or the old root.
+Codex session databases contain absolute paths and require a separate migration,
+as do installed Copilot, Pi, and OMP profiles and installations with partial
+state. External references, including T3 provider config
+or home paths and custom scripts, need to be updated separately.
+
+If rename is interrupted after it starts moving files, rerun the same
+`allagents profile rename <old> <new> --yes` command to resume. Keep the recovery
+record beside `workspace.yaml` and wait until rename completes before editing
+the workspace or starting the affected clients.
 
 ### status
 

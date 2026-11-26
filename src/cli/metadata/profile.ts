@@ -228,3 +228,38 @@ export const profileRemoveMeta: AgentCommandMeta = {
   },
   jsonFields: profileMutationJsonFields,
 };
+
+const profileRenamePlanOutput = {
+  profile: 'string',
+  newProfile: 'string',
+  operation: 'rename',
+  status: 'planned',
+  installed: 'boolean',
+  recovering: 'boolean',
+  steps: [{ kind: 'workspace | root | settings | launcher | state', from: 'string', to: 'string' }],
+  warnings: ['string'],
+};
+
+export const profileRenameMeta: AgentCommandMeta = {
+  command: 'profile rename',
+  description: 'Rename a declared profile and relocate a supported installation',
+  whenToUse: 'When you want to change a global profile name while keeping its launcher names and session data',
+  examples: [
+    'allagents profile rename work office --dry-run',
+    'allagents --json profile rename work office --yes',
+  ],
+  expectedOutput: 'Shows the declaration, client directory, settings, state, and launcher changes before confirmation.',
+  positionals: [
+    { name: 'old', type: 'string', required: true, description: 'Current declared profile name.' },
+    { name: 'new', type: 'string', required: true, description: 'New profile name.' },
+  ],
+  options: mutationOptions.slice(0, 2),
+  outputSchema: {
+    ...profileRenamePlanOutput,
+    status: 'planned | renamed | failed',
+    plan: profileRenamePlanOutput,
+    error: 'string?',
+  },
+  jsonFields: ['profile', 'newProfile', 'operation', 'status', 'installed', 'recovering', 'plan', 'steps', 'warnings', 'error'],
+  skipUpdateCheck: true,
+};

@@ -859,6 +859,7 @@ describe('profile root registration', () => {
       'profile list',
       'profile status',
       'profile remove',
+      'profile rename',
     ]);
   });
 

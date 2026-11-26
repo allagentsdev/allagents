@@ -131,6 +131,7 @@ function serializeClaudeMcp(
 
 export class ClaudeProfileAdapter implements NativeProfileAdapter {
   readonly client = 'claude' as const;
+  readonly rename = { nativeLocations: ['plugins'] };
   readonly capabilities = CAPABILITIES;
   readonly nativeClient = new ClaudeNativeClient({
     minimumVersion: CLAUDE_MINIMUM_VERSION,

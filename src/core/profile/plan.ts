@@ -50,6 +50,7 @@ import type {
   ProfileStepKind,
 } from './index.js';
 import { renderProfileLaunchers } from './launcher.js';
+import { assertNoPendingProfileRename } from './rename-transaction.js';
 import { resolveProfileFileSource, type ResolvedProfileFileSource } from './source.js';
 import {
   hashProfileDeclaration,
@@ -675,6 +676,7 @@ export async function planProfileOperation(
 ): Promise<ProfilePlan> {
   ProfileNameSchema.parse(profile);
   const runtime = resolveProfileRuntimeOptions(options);
+  await assertNoPendingProfileRename(runtime.userConfigPath);
   const workspace =
     operation === 'remove'
       ? await readOptionalProfileWorkspace(runtime, dependencies)

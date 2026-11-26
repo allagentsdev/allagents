@@ -254,6 +254,7 @@ export const profileRenameMeta: AgentCommandMeta = {
     { name: 'new', type: 'string', required: true, description: 'New profile name.' },
   ],
   options: mutationOptions.slice(0, 2),
+  interaction: 'conditional',
   outputSchema: {
     ...profileRenamePlanOutput,
     status: 'planned | renamed | failed',

@@ -164,9 +164,17 @@ to be updated separately.
 If rename is interrupted after it starts moving files, rerun the same
 `allagents profile rename <old> <new> --yes` command to resume. Keep the recovery
 record beside `workspace.yaml` and wait until rename completes before editing
-the workspace or starting the affected clients. If a conflict is reported, move
-the conflicting file or directory aside before retrying. If the error reports a
-preserved edit, keep that file and reconcile its contents before resuming.
+the workspace or either profile directory, or starting the affected clients.
+Run workspace writers from the same host and PID namespace when they share a
+workspace.
+
+If the destination already exists, move it aside before retrying. This includes
+an empty directory left by an interruption before the reservation was recorded.
+If the command has published a replacement and reports a preserved edit, move
+the reported capture file out of its recovery path, resume the rename, and then
+reconcile the saved edit with the published file. If `workspace.yaml` is missing
+and its capture contains a pending workspace edit, move the capture back to
+`workspace.yaml` before retrying.
 
 ### status
 

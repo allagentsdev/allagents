@@ -166,6 +166,22 @@ describe('pruneOrphanedPlugins', () => {
     expect(result.user.removed).toEqual([]);
   });
 
+  it('preserves project declarations when a pending rename blocks user pruning', async () => {
+    const projectDir = join(testDir, 'project');
+    const projectConfig = join(projectDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
+    const userConfig = join(testDir, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
+    const yaml = 'repositories: []\nclients: []\nplugins: [plugin@missing-marketplace]\n';
+    await mkdir(join(projectDir, CONFIG_DIR), { recursive: true });
+    await mkdir(join(testDir, CONFIG_DIR), { recursive: true });
+    await writeFile(projectConfig, yaml);
+    await writeFile(userConfig, yaml);
+    await writeFile(`${userConfig}.profile-rename.json`, '{}');
+
+    await expect(pruneOrphanedPlugins(projectDir)).rejects.toThrow('profile rename is incomplete');
+    expect(await readFile(projectConfig, 'utf-8')).toBe(yaml);
+    expect(await readFile(userConfig, 'utf-8')).toBe(yaml);
+  });
+
   it('should skip non-marketplace plugins (local paths, GitHub URLs)', async () => {
     await writeRegistry({});
 

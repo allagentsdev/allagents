@@ -62,6 +62,7 @@ export const RenameRecordSchema = z.object({
 });
 
 export type RenameRecord = z.infer<typeof RenameRecordSchema>;
+type NamedFileMove = NonNullable<RenameRecord['root']>['namedFiles'][number];
 
 export async function profileRenameStats(path: string) {
   return lstat(path).catch((error) => {
@@ -324,31 +325,14 @@ export async function inspectRenameProgress(
     throw new Error(`Profile destination already exists: ${newRoot}`);
   }
   const currentRoot = oldIdentity ? oldRoot : newRoot;
-  const moves = [];
-  for (const move of record.root?.namedFiles ?? []) {
-    const from = join(currentRoot, move.from);
-    const to = join(currentRoot, move.to);
-    await assertSafeProfilePath(currentRoot, from);
-    await assertSafeProfilePath(currentRoot, to);
-    const source = await fingerprintProfileFile(from);
-    const destination = await fingerprintProfileFile(to);
-    if (destination !== null) {
-      const sourceStats = await profileRenameStats(from);
-      const targetStats = await profileRenameStats(to);
-      if (
-        oldIdentity ||
-        destination !== move.fingerprint ||
-        (sourceStats &&
-          (sourceStats.ino !== targetStats?.ino ||
-            sourceStats.dev !== targetStats.dev))
-      ) {
-        throw new Error(`Profile file destination already exists: ${to}`);
-      }
-    }
-    if (source !== null ? source !== move.fingerprint : destination === null) {
-      throw changed(from);
-    }
-    moves.push({ ...move, source, destination });
+  const moves = record.root?.namedFiles ?? [];
+  for (const move of moves) {
+    await inspectNamedFileMove(
+      currentRoot,
+      move,
+      record.id,
+      oldIdentity !== null,
+    );
   }
   const replacements = record.launchers.map(({ name, ...entry }) => ({
     ...entry,
@@ -373,21 +357,63 @@ export async function inspectRenameProgress(
   return { moveRoot: oldIdentity !== null, moves };
 }
 
-export async function moveNamedProfileFile(
+async function inspectNamedFileMove(
   root: string,
-  move: Awaited<ReturnType<typeof inspectRenameProgress>>['moves'][number],
-): Promise<void> {
-  if (move.source === null) return;
+  move: NamedFileMove,
+  transactionId: string,
+  atOldRoot = false,
+) {
   const from = join(root, move.from);
   const to = join(root, move.to);
+  const capture = capturedRenameFile(from, transactionId);
   await assertSafeProfilePath(root, from);
   await assertSafeProfilePath(root, to);
-  if ((await fingerprintProfileFile(from)) !== move.fingerprint)
+  await assertSafeProfilePath(root, capture);
+  const [source, destination, captured] = await Promise.all([
+    fingerprintProfileFile(from),
+    fingerprintProfileFile(to),
+    fingerprintProfileFile(capture),
+  ]);
+  if (captured !== null && (atOldRoot || captured !== move.fingerprint)) {
+    throw new Error(
+      `Profile rename found an intervening edit preserved at ${capture}`,
+    );
+  }
+  if (source !== null && (captured !== null || source !== move.fingerprint)) {
     throw changed(from);
-  if (move.destination === null) await link(from, to);
-  const source = await lstat(from, { bigint: true });
-  const destination = await lstat(to, { bigint: true });
-  if (source.ino !== destination.ino || source.dev !== destination.dev)
+  }
+  if (destination !== null) {
+    if (atOldRoot || destination !== move.fingerprint) {
+      throw new Error(`Profile file destination already exists: ${to}`);
+    }
+    if (source !== null || captured !== null) {
+      const previous = await lstat(source !== null ? from : capture, {
+        bigint: true,
+      });
+      const current = await lstat(to, { bigint: true });
+      if (previous.ino !== current.ino || previous.dev !== current.dev) {
+        throw new Error(`Profile file destination already exists: ${to}`);
+      }
+    }
+  }
+  if (source === null && destination === null && captured === null)
+    throw changed(from);
+  return { from, to, capture, source, destination, captured };
+}
+
+export async function moveNamedProfileFile(
+  root: string,
+  move: NamedFileMove,
+  transactionId: string,
+): Promise<void> {
+  const { from, to, capture, source, destination, captured } =
+    await inspectNamedFileMove(root, move, transactionId);
+  if (source === null && captured === null) return;
+  if (destination === null) await link(source === null ? capture : from, to);
+  // Capture the entry first. An editor can replace its pathname after link().
+  if (source !== null) await rename(from, capture);
+  const published = await inspectNamedFileMove(root, move, transactionId);
+  if (published.destination === null || published.captured === null)
     throw changed(to);
-  await unlink(from);
+  await unlink(capture);
 }

@@ -233,6 +233,12 @@ async function planInstalledRename(
       );
     }
     await adapter.rename.assertRelocatable?.(before, runtime);
+    for (const path of launcher ? (before.launcher.requiredFiles ?? []) : []) {
+      await assertSafeProfilePath(before.root, path);
+      if (!(await profileRenameStats(path))?.isFile()) {
+        throw new Error(`Profile launcher requires a regular file at ${path}`);
+      }
+    }
     for (const name of adapter.rename.nativeLocations ?? []) {
       const path = join(before.root, name);
       await assertSafeProfilePath(before.root, path);
@@ -460,31 +466,12 @@ async function prepareRename(
         profile,
         newProfile,
       ).content;
-      workspaceBefore = fingerprint;
+      if (workspaceStats && !capturedStats) workspaceBefore = fingerprint;
     } else if (
-      !oldDeclaration &&
-      newDeclaration &&
-      hashProfileDeclaration(newDeclaration) === existing.declarationDigest
+      oldDeclaration ||
+      !newDeclaration ||
+      hashProfileDeclaration(newDeclaration) !== existing.declarationDigest
     ) {
-      if (capturedPath && capturedStats) {
-        const captured = await readFile(capturedPath, 'utf8');
-        const previous = replaceDeclaration(
-          captured,
-          workspacePath,
-          profile,
-          newProfile,
-        );
-        if (
-          hashProfileDeclaration(previous.declaration) !==
-          existing.declarationDigest
-        ) {
-          throw new Error(
-            `Profile rename preserved an intervening declaration edit at ${capturedPath}`,
-          );
-        }
-        workspaceBefore = sha256Fingerprint(captured);
-      }
-    } else {
       throw new Error(
         'The profile declaration changed during rename. Restore it before retrying.',
       );
@@ -656,9 +643,12 @@ export async function applyProfileRename(
       runtime,
       initial.record.id,
     );
-    const { record } = current;
+    const record = {
+      ...current.record,
+      workspaceBefore: current.workspaceBefore,
+    };
     if (
-      !isDeepStrictEqual(initial.record, record) ||
+      !isDeepStrictEqual(initial.record, current.record) ||
       initial.workspaceBefore !== current.workspaceBefore ||
       initial.workspaceContent !== current.workspaceContent
     ) {
@@ -668,8 +658,13 @@ export async function applyProfileRename(
     }
     const oldRoot = getProfileRoot(runtime, record.profile);
     const newRoot = getProfileRoot(runtime, record.newProfile);
-    if (!current.recovering) await writeRenameRecord(journal, record);
     try {
+      if (
+        !current.recovering ||
+        record.workspaceBefore !== current.record.workspaceBefore
+      ) {
+        await writeRenameRecord(journal, record, current.recovering);
+      }
       const progress = await inspectRenameProgress(
         record,
         oldRoot,
@@ -679,7 +674,7 @@ export async function applyProfileRename(
       if (progress.moveRoot)
         await moveProfileRoot(record, journal, oldRoot, newRoot);
       for (const move of progress.moves)
-        await moveNamedProfileFile(newRoot, move);
+        await moveNamedProfileFile(newRoot, move, record.id);
       for (const { name, content, before, mode } of record.launchers) {
         await publishRenameFile(
           join(runtime.binDir, name),

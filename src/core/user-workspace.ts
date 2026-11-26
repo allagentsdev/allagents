@@ -1081,6 +1081,8 @@ export async function getInstalledProjectPlugins(
 export async function migrateUserWorkspaceSkillsV1toV2(): Promise<void> {
   const configPath = getUserWorkspaceConfigPath();
   if (!existsSync(configPath)) return;
+  const current = await parseUserWorkspaceConfigForEdit(configPath);
+  if ((current.version ?? 0) >= 2) return;
 
   await withWorkspaceConfigMutation(configPath, async () => {
     const config = await parseUserWorkspaceConfigForEdit(configPath);

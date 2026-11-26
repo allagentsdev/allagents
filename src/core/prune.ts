@@ -1,7 +1,7 @@
 import { writeWorkspaceConfig } from '../utils/workspace-writer.js';
 import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { CONFIG_DIR, WORKSPACE_CONFIG_FILE } from '../constants.js';
 import { isPluginSpec, parsePluginSpec, getMarketplace } from './marketplace.js';
 import { getUserWorkspaceConfigPath, isUserConfigPath } from './user-workspace.js';
@@ -67,6 +67,18 @@ async function prunePlugins(plugins: PluginEntry[]): Promise<InternalPruneScopeR
 export async function pruneOrphanedPlugins(
   workspacePath: string,
 ): Promise<PruneResult> {
+  const userConfigPath = getUserWorkspaceConfigPath();
+  // A pending rename can temporarily leave workspace.yaml at its capture path.
+  if (!existsSync(dirname(userConfigPath))) return pruneScopes(workspacePath);
+  return withWorkspaceConfigMutation(userConfigPath, () =>
+    pruneScopes(workspacePath, userConfigPath),
+  );
+}
+
+async function pruneScopes(
+  workspacePath: string,
+  userConfigPath?: string,
+): Promise<PruneResult> {
   // Prune project-level plugins
   let projectResult: InternalPruneScopeResult = { removed: [], kept: [], keptEntries: [] };
   const projectConfigPath = join(workspacePath, CONFIG_DIR, WORKSPACE_CONFIG_FILE);
@@ -87,18 +99,13 @@ export async function pruneOrphanedPlugins(
     kept: [],
     keptEntries: [],
   };
-  const userConfigPath = getUserWorkspaceConfigPath();
-  if (existsSync(userConfigPath)) {
-    userResult = await withWorkspaceConfigMutation(userConfigPath, async () => {
-      const userConfig = await parseUserWorkspaceConfigForEdit(userConfigPath);
-      const result = await prunePlugins(userConfig.plugins);
-
-      if (result.removed.length > 0) {
-        userConfig.plugins = result.keptEntries;
-        await writeWorkspaceConfig(userConfigPath, userConfig);
-      }
-      return result;
-    });
+  if (userConfigPath && existsSync(userConfigPath)) {
+    const userConfig = await parseUserWorkspaceConfigForEdit(userConfigPath);
+    userResult = await prunePlugins(userConfig.plugins);
+    if (userResult.removed.length > 0) {
+      userConfig.plugins = userResult.keptEntries;
+      await writeWorkspaceConfig(userConfigPath, userConfig);
+    }
   }
 
   return {

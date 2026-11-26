@@ -18,6 +18,7 @@ import {
   resolvePluginSourcePath,
 } from '../utils/marketplace-manifest-parser.js';
 import { normalizeGitRef } from '../utils/git-source.js';
+import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import {
   isFilesystemRoot,
   parseGitHubUrl,
@@ -1103,6 +1104,13 @@ async function removeMarketplaceRegistration(
   }
 }
 
+interface MarketplaceRemovalOptions {
+  cascade?: boolean;
+  scope?: MarketplaceScope | 'all';
+  workspacePath?: string;
+  userRegistryPath?: string;
+}
+
 /**
  * Remove a marketplace from the registry and delete its files.
  *
@@ -1118,12 +1126,7 @@ async function removeMarketplaceRegistration(
  */
 export async function removeMarketplace(
   name: string,
-  options: {
-    cascade?: boolean;
-    scope?: MarketplaceScope | 'all';
-    workspacePath?: string;
-    userRegistryPath?: string;
-  } = {},
+  options: MarketplaceRemovalOptions = {},
   deps: Partial<MarketplaceRemovalDeps> = {},
 ): Promise<MarketplaceResult> {
   const scope = options.scope ?? 'all';
@@ -1143,6 +1146,18 @@ export async function removeMarketplace(
     // scope === 'all' without workspacePath: fall back to user-only removal
   }
 
+  const remove = () => removeRegisteredMarketplace(name, scope, options, deps);
+  if (!options.cascade) return remove();
+  const { getUserWorkspaceConfigPath } = await import('./user-workspace.js');
+  return withWorkspaceConfigMutation(getUserWorkspaceConfigPath(), remove);
+}
+
+async function removeRegisteredMarketplace(
+  name: string,
+  scope: MarketplaceScope | 'all',
+  options: MarketplaceRemovalOptions,
+  deps: Partial<MarketplaceRemovalDeps>,
+): Promise<MarketplaceResult> {
   const userRegPath = options.userRegistryPath ?? getRegistryPath();
   let removedEntry: MarketplaceEntry | undefined;
   const warnings: string[] = [];

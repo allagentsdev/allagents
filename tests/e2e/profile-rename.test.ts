@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -111,6 +112,10 @@ beforeEach(() => {
 });
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+test('structured help declares conditional confirmation', () => {
+  expect(json(['profile', 'rename', '--help']).interaction).toBe('conditional');
+});
 
 test('previews a declared-only rename and requires confirmation before changing YAML', () => {
   const dryRun = json(['profile', 'rename', 'spare', 'backup', '--dry-run']);
@@ -230,6 +235,27 @@ test.skipIf(process.platform === 'win32')('rejects an installed client without a
   expect(existsSync(join(profiles, 'office'))).toBe(false);
 }, fixtureTimeout);
 
+test.skipIf(process.platform === 'win32' || process.platform === 'darwin')('refuses to retarget a launcher whose required MCP file is missing', () => {
+  const yaml = 'profiles: {work: {clients: [{name: claude, launcher: run-claude}]}}\n';
+  seedFile(workspace, yaml);
+  writeFileSync(join(bin, 'claude'), [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then echo "99.0.0 (Claude Code)"; exit; fi',
+    'echo "install list marketplace uninstall update"',
+  ].join('\n'), { mode: 0o755 });
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const required = join(profiles, 'work', 'clients/claude/config/allagents.mcp.json');
+  const launcher = join(bin, 'run-claude');
+  const original = read(launcher);
+  rmSync(required);
+
+  expect(json(['profile', 'rename', 'work', 'office', '--yes'], 1).error).toContain(required);
+  expect(read(workspace)).toBe(yaml);
+  expect(read(launcher)).toBe(original);
+  expect(existsSync(join(profiles, 'office'))).toBe(false);
+  expect(existsSync(`${workspace}.profile-rename.json`)).toBe(false);
+}, fixtureTimeout);
+
 test.skipIf(process.platform === 'win32')('resumes after a process stop before publishing the declaration', () => {
   json(['profile', 'install', 'work', '--yes', '--offline']);
   const oldRoot = join(profiles, 'work');
@@ -273,8 +299,96 @@ test.skipIf(process.platform === 'win32')('preserves an edit arriving at workspa
   ]);
   expect(blocked.exitCode, blocked.stdout.toString() + blocked.stderr.toString()).toBe(1);
   expect(read(workspace)).toBe(edited);
+  const interrupted = interruptibleRename([
+    'const link = fs.link;',
+    'fs.link = (from, to) => to === process.env.TEST_WORKSPACE',
+    '  ? process.kill(process.pid, "SIGKILL") : link(from, to);',
+  ]);
+  expect(interrupted.signalCode).toBe('SIGKILL');
   expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
   expect(read(workspace)).toBe(edited.replace("'work':", "'office':"));
+}, fixtureTimeout);
+
+test.skipIf(process.platform === 'win32').each(['workspace', 'launcher'])('retains an edit through an open %s handle across a retry', (asset) => {
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const target = asset === 'workspace' ? workspace : join(bin, 'run-codex');
+  const original = read(target);
+  const edited = original + '# saved through an open handle\n';
+  const blocked = interruptibleRename([
+    'let editor;',
+    'const { rename, link } = fs;',
+    'fs.rename = async (from, to) => {',
+    '  if (from === process.env.TEST_TARGET) editor = await fs.open(from, "a");',
+    '  return rename(from, to);',
+    '};',
+    'fs.link = async (from, to) => {',
+    '  await link(from, to);',
+    '  if (to === process.env.TEST_TARGET && editor) {',
+    '    await editor.writeFile("# saved through an open handle\\n");',
+    '    await editor.close();',
+    '  }',
+    '};',
+  ], { TEST_TARGET: target });
+  expect(blocked.exitCode, blocked.stdout.toString()).toBe(1);
+  const error = JSON.parse(blocked.stdout.toString()).error as string;
+  const captureName = readdirSync(dirname(target)).find((name) => name.endsWith('.previous'));
+  expect(captureName).toBeDefined();
+  const capture = join(dirname(target), captureName as string);
+  expect(error).toContain(capture);
+  expect(read(capture)).toBe(edited);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes'], 1).error).toContain(capture);
+  expect(read(capture)).toBe(edited);
+
+  const saved = join(root, 'saved-edit');
+  renameSync(capture, saved);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
+  expect(read(saved)).toBe(edited);
+}, fixtureTimeout);
+
+test.skipIf(process.platform === 'win32')('keeps a named settings edit that replaces the old entry after linking', () => {
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const client = join(profiles, 'office', 'clients/codex/home');
+  const from = join(client, 'work.config.toml');
+  const original = read(join(profiles, 'work', 'clients/codex/home/work.config.toml'));
+  const edited = 'model = "custom"\n';
+  const blocked = interruptibleRename([
+    'const { rename, unlink } = fs;',
+    'async function saveEdit(path) {',
+    '  if (path !== process.env.TEST_SETTINGS) return;',
+    '  await fs.writeFile(path + ".editor", \'model = "custom"\\n\');',
+    '  await rename(path + ".editor", path);',
+    '}',
+    'fs.unlink = async (path) => { await saveEdit(path); return unlink(path); };',
+    'fs.rename = async (from, to) => { await saveEdit(from); return rename(from, to); };',
+  ], { TEST_SETTINGS: from });
+  expect(blocked.exitCode, blocked.stdout.toString()).toBe(1);
+  expect(read(join(client, 'office.config.toml'))).toBe(original);
+  const captureName = readdirSync(client).find((name) => name.endsWith('.previous'));
+  expect(captureName).toBeDefined();
+  const capture = join(client, captureName as string);
+  expect(read(capture)).toBe(edited);
+  const saved = join(root, 'saved-settings');
+  renameSync(capture, saved);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
+  expect(read(saved)).toBe(edited);
+}, fixtureTimeout);
+
+test.skipIf(process.platform === 'win32')('resumes after capturing linked settings and before cleaning up the old entry', () => {
+  json(['profile', 'install', 'work', '--yes', '--offline']);
+  const client = join(profiles, 'office', 'clients/codex/home');
+  const original = read(join(profiles, 'work', 'clients/codex/home/work.config.toml'));
+  const stopped = interruptibleRename([
+    'const rename = fs.rename;',
+    'fs.rename = async (from, to) => {',
+    '  await rename(from, to);',
+    '  if (from === process.env.TEST_SETTINGS) process.kill(process.pid, "SIGKILL");',
+    '};',
+  ], { TEST_SETTINGS: join(client, 'work.config.toml') });
+  expect(stopped.signalCode).toBe('SIGKILL');
+  expect(read(join(client, 'office.config.toml'))).toBe(original);
+  expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.recovering).toBe(true);
+  expect(read(join(client, 'office.config.toml'))).toBe(original);
+  expect(readdirSync(client)).toEqual(['office.config.toml']);
 }, fixtureTimeout);
 
 test.skipIf(process.platform === 'win32')('does not replace a directory created at destination reservation', () => {
@@ -297,5 +411,20 @@ test.skipIf(process.platform === 'win32')('does not replace a directory created 
   expect(existsSync(join(oldRoot, 'state.json'))).toBe(true);
   expect(read(workspace)).toBe(fixtureYaml);
   rmSync(newRoot, { recursive: true });
+
+  const interrupted = interruptibleRename([
+    'const mkdir = fs.mkdir;',
+    'fs.mkdir = async (path, options) => {',
+    '  const result = await mkdir(path, options);',
+    '  if (path === process.env.TEST_DESTINATION) process.kill(process.pid, "SIGKILL");',
+    '  return result;',
+    '};',
+  ], { TEST_DESTINATION: newRoot });
+  expect(interrupted.signalCode).toBe('SIGKILL');
+  expect(json(['profile', 'rename', 'work', 'office', '--yes'], 1).error).toContain('destination already exists');
+  expect(existsSync(join(oldRoot, 'state.json'))).toBe(true);
+  const saved = join(root, 'empty-reservation');
+  renameSync(newRoot, saved);
   expect(json(['profile', 'rename', 'work', 'office', '--yes']).data.status).toBe('renamed');
+  expect(readdirSync(saved)).toEqual([]);
 }, fixtureTimeout);

@@ -1306,8 +1306,15 @@ describe('profile lifecycle manager', () => {
       },
     });
     const deps = dependencies(new MemoryProfileAdapter('omp', test.home));
-    const install = await planProfileOperation('work', 'install', test.options, deps);
-    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(true);
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
     const clientRoot = install.clients[0]?.root as string;
     const sessions = join(clientRoot, 'sessions');
     const history = join(sessions, 'current.jsonl');
@@ -1334,7 +1341,10 @@ describe('profile lifecycle manager', () => {
       deps,
     );
     const plannedRoots = removal.steps.filter((step) => step.kind === 'root');
-    expect(plannedRoots.map((step) => step.action)).toEqual(['retain', 'retain']);
+    expect(plannedRoots.map((step) => step.action)).toEqual([
+      'retain',
+      'retain',
+    ]);
     const result = await applyProfilePlan(
       removal,
       { ...test.options, purgeSessionData: true },
@@ -1346,7 +1356,9 @@ describe('profile lifecycle manager', () => {
       'retained',
       'retained',
     ]);
-    for (const step of owned) await expect(stat(step.identity)).rejects.toThrow();
+    for (const step of owned) {
+      await expect(stat(step.identity)).rejects.toThrow();
+    }
     expect(await readFile(history, 'utf8')).toBe('session history');
     expect((await stat(empty)).isDirectory()).toBe(true);
     expect(await readFile(oauthToken, 'utf8')).toBe('{}');
@@ -1385,8 +1397,15 @@ describe('profile lifecycle manager', () => {
     const root = pi.resolveContext('work', test.options).root;
     const sessions = join(root, 'sessions');
     await mkdir(sessions, { recursive: true });
-    const install = await planProfileOperation('work', 'install', test.options, deps);
-    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(true);
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
 
     const options = { ...test.options, purgeSessionData: true };
     const removal = await planProfileOperation('work', 'remove', options, deps);

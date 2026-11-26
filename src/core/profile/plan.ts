@@ -847,6 +847,31 @@ export async function planProfileOperation(
           context,
         });
       } else if (resource.kind === 'root') {
+        const rootPath = resource.path ?? resource.identity;
+        const generated =
+          resource.ownership === 'managed' &&
+          resolve(rootPath) === resolve(managedContextRoot(context))
+            ? adapter.rootCleanupFile?.(context)
+            : undefined;
+        if (
+          generated &&
+          !previousResource(priorState, 'file', resource.client, generated.path)
+        ) {
+          await assertSafeProfilePath(context.root, generated.path);
+          const fingerprint = await fingerprintProfileFile(generated.path);
+          if (fingerprint !== null) {
+            const file = relationship({
+              kind: 'file',
+              client: resource.client,
+              identity: generated.path,
+              path: generated.path,
+              ownership: 'managed',
+              cleanup: 'file',
+              fingerprint: generated.fingerprint,
+            });
+            steps.push(staleFileStep(file, fingerprint, context.root, context));
+          }
+        }
         const retainedResource = steps.some(
           (step) =>
             step.public.client === resource.client &&
@@ -868,7 +893,7 @@ export async function planProfileOperation(
           ),
           relationship: resource,
           root: resource.path ?? managedContextRoot(context),
-          path: resource.path ?? resource.identity,
+          path: rootPath,
           context,
         });
       } else {

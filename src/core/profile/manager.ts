@@ -260,7 +260,15 @@ async function applyOneStep(
         return { status: 'removed' };
       }
       await assertSafeProfilePath(expectedRoot, step.path);
-      await adapter.prepareRootCleanup?.(step.context);
+      const generated = adapter.rootCleanupFile?.(step.context);
+      if (generated) {
+        await removeManagedFile({
+          root: step.context.root,
+          path: generated.path,
+          ownership: 'managed',
+          expectedFingerprint: generated.fingerprint,
+        });
+      }
       return {
         status: (await removeEmptyManagedRoot(step.path))
           ? 'removed'

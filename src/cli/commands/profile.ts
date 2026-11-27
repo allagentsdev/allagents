@@ -32,9 +32,11 @@ import {
   profileInstallMeta,
   profileListMeta,
   profileRemoveMeta,
+  profileRenameMeta,
   profileStatusMeta,
 } from '../metadata/profile.js';
 import { terminalSafe } from '../terminal-output.js';
+import { applyProfileRename, planProfileRename } from '../../core/profile/rename.js';
 
 export interface ProfileCommandDependencies {
   readonly planProfileOperation: (
@@ -119,10 +121,12 @@ type ProfileSelectionKind = 'install' | 'status' | 'remove';
 function runtimeOptions(flags: {
   readonly offline?: boolean;
   readonly dryRun?: boolean;
+  readonly purgeSessionData?: boolean;
 }): ProfileRuntimeOptions {
   return {
     ...(flags.offline ? { offline: true } : {}),
     ...(flags.dryRun ? { dryRun: true } : {}),
+    ...(flags.purgeSessionData ? { purgeSessionData: true } : {}),
   };
 }
 
@@ -240,6 +244,7 @@ async function executeMutation(
     readonly yes: boolean;
     readonly dryRun: boolean;
     readonly offline: boolean;
+    readonly purgeSessionData?: boolean;
   },
   dependencies: ProfileCommandDependencies,
   runtime: ProfileCommandRuntime,
@@ -329,6 +334,66 @@ async function executeList(
   for (const line of formatProfileList(results)) runtime.print(line);
   if (error) runtime.printError(`Error: ${terminalSafe(error)}`);
   return success ? 0 : 1;
+}
+
+async function executeRename(
+  args: { profile: string; newProfile: string; yes: boolean; dryRun: boolean },
+  runtime: ProfileCommandRuntime,
+): Promise<number> {
+  const plan = await planProfileRename(args.profile, args.newProfile, runtimeOptions(args));
+  const command = 'profile rename';
+  if (!runtime.isJson()) {
+    const action = plan.recovering ? 'Resume renaming' : 'Rename';
+    runtime.print(`${action} profile '${plan.profile}' to '${plan.newProfile}'`);
+    const labels = {
+      root: 'Move profile data',
+      settings: 'Move client settings',
+      launcher: 'Retarget launcher',
+      state: 'Transfer installation state',
+      workspace: 'Update workspace declaration',
+    };
+    for (const { kind, from, to } of plan.steps) {
+      runtime.print(`  ${labels[kind]}: ${terminalSafe(from)}`);
+      if (from !== to) runtime.print(`    → ${terminalSafe(to)}`);
+    }
+    for (const warning of plan.warnings) runtime.print(warning);
+  }
+  if (args.dryRun) {
+    if (runtime.isJson()) runtime.printJson({ success: true, command, data: { ...plan } });
+    else runtime.print('Dry run; no changes applied.');
+    return 0;
+  }
+  if (!args.yes) {
+    if (!runtime.isInteractive() || runtime.isJson()) {
+      throw new ProfileCommandError(
+        'profile rename requires confirmation; rerun with --yes in non-interactive and JSON modes',
+        2,
+        { ...plan, status: 'failed', plan },
+      );
+    }
+    const confirmed = await runtime.confirm({
+      message: `Rename profile '${plan.profile}' to '${plan.newProfile}' using this plan?`,
+    });
+    if (confirmed !== true) {
+      runtime.print('Profile rename cancelled.');
+      return 0;
+    }
+  }
+  try {
+    await applyProfileRename(plan);
+  } catch (error) {
+    throw new ProfileCommandError(
+      error instanceof Error ? error.message : String(error),
+      1,
+      { ...plan, status: 'failed', plan },
+    );
+  }
+  if (runtime.isJson()) {
+    runtime.printJson({ success: true, command, data: { ...plan, status: 'renamed', plan } });
+  } else {
+    runtime.print(`Renamed profile '${plan.profile}' to '${plan.newProfile}'.`);
+  }
+  return 0;
 }
 
 async function executeStatus(
@@ -443,6 +508,10 @@ export function createProfileCommand(
         short: 'y',
         description: 'Apply without asking for confirmation',
       }),
+      purgeSessionData: flag({
+        long: 'purge-session-data',
+        description: 'Also delete session data in owned profile runtime roots',
+      }),
       dryRun: flag({
         long: 'dry-run',
         description: 'Display the plan without making changes',
@@ -458,14 +527,35 @@ export function createProfileCommand(
       ),
   });
 
+  const renameCmd = command({
+    name: 'rename',
+    description: buildDescription(profileRenameMeta),
+    args: {
+      profile: positional({ type: string, displayName: 'old' }),
+      newProfile: positional({ type: string, displayName: 'new' }),
+      yes: flag({
+        long: 'yes',
+        short: 'y',
+        description: 'Apply without asking for confirmation',
+      }),
+      dryRun: flag({
+        long: 'dry-run',
+        description: 'Display the plan without making changes',
+      }),
+    },
+    handler: (args) =>
+      handleCommand('profile rename', runtime, () => executeRename(args, runtime)),
+  });
+
   return conciseSubcommands({
     name: 'profile',
-    description: 'Manage global Pi and OMP profiles',
+    description: 'Manage global agent profiles',
     cmds: {
       install: installCmd,
       list: listCmd,
       status: statusCmd,
       remove: removeCmd,
+      rename: renameCmd,
     },
   });
 }

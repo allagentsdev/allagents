@@ -39,6 +39,7 @@ import {
   profileInstallMeta,
   profileListMeta,
   profileRemoveMeta,
+  profileRenameMeta,
   profileStatusMeta,
 } from './metadata/profile.js';
 import { updateMeta } from './metadata/self.js';
@@ -119,6 +120,7 @@ const registeredCommands: RegisteredCommand[] = [
   { command: 'profile list', meta: profileListMeta },
   { command: 'profile status', meta: profileStatusMeta },
   { command: 'profile remove', meta: profileRemoveMeta },
+  { command: 'profile rename', meta: profileRenameMeta },
 ];
 
 const groupDescriptions: Readonly<Record<string, string>> = {

@@ -859,6 +859,7 @@ describe('profile root registration', () => {
       'profile list',
       'profile status',
       'profile remove',
+      'profile rename',
     ]);
   });
 
@@ -878,6 +879,23 @@ describe('profile root registration', () => {
     );
     expect(proc.exitCode).not.toBe(0);
     expect(proc.stderr.toString()).toContain('Unknown arguments');
+  });
+
+  test('advertises the explicit purge only on remove help', () => {
+    for (const operation of ['install', 'remove']) {
+      const proc = Bun.spawnSync(
+        ['bun', 'run', cliEntry, '--json', 'profile', operation, '--help'],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      expect(proc.exitCode).toBe(0);
+      const help = JSON.parse(proc.stdout.toString()) as {
+        options: Array<{ flag: string }>;
+      };
+      const hasPurge = help.options.some(
+        ({ flag }) => flag === '--purge-session-data',
+      );
+      expect(hasPurge).toBe(operation === 'remove');
+    }
   });
 
   test('does not register a profile update command', () => {

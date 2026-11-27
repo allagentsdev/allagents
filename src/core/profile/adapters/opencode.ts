@@ -4,7 +4,7 @@ import {
   ProfileNameSchema,
 } from '../../../models/workspace-config.js';
 import type { FileOnlyProfileAdapter } from '../types.js';
-import { removeManagedFile, sha256Fingerprint } from '../files.js';
+import { sha256Fingerprint } from '../files.js';
 import type {
   ProfileClientContext,
   ProfileContextOptions,
@@ -95,6 +95,7 @@ function serializeOpenCodeMcp(
 
 export class OpenCodeProfileAdapter implements FileOnlyProfileAdapter {
   readonly client = 'opencode' as const;
+  readonly rename = {};
   readonly capabilities = CAPABILITIES;
 
   resolveContext(
@@ -181,14 +182,12 @@ export class OpenCodeProfileAdapter implements FileOnlyProfileAdapter {
     return null;
   }
 
-  async prepareRootCleanup(context: ProfileClientContext): Promise<void> {
+  rootCleanupFile(context: ProfileClientContext) {
     assertOpenCodeContext(context);
-    await removeManagedFile({
-      root: context.root,
+    return {
       path: join(context.root, '.gitignore'),
-      ownership: 'managed',
-      expectedFingerprint: sha256Fingerprint(GENERATED_GITIGNORE),
-    });
+      fingerprint: sha256Fingerprint(GENERATED_GITIGNORE),
+    };
   }
 }
 

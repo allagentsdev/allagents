@@ -348,8 +348,8 @@ never written to plans, launchers, profile state, or generated configuration.
 Profile MCP is materialized inside the profile root. Codex writes
 `clients/codex/home/<profile>.config.toml`; Copilot writes
 `clients/copilot/home/mcp-config.json`. Proxied HTTP servers share OAuth only
-inside that profile, under `oauth-proxy/<url-hash>`. Removing the profile removes
-that profile-owned OAuth state.
+inside that profile, under `oauth-proxy/<url-hash>`. Profile removal retains
+that OAuth state by default. Pass `--purge-session-data` to delete it.
 
 OpenCode profile settings accept `model`, `small_model`, `default_agent`,
 `username`, `share`, `autoupdate`, `snapshot`, `subagent_depth`, `logLevel`,

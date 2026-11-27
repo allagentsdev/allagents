@@ -404,9 +404,10 @@ the authored URL remains its identity. Changing a tenant header selects a
 separate grant. A declaration with headers may need one new sign-in when
 upgrading from a version that did not partition its cache by headers.
 
-Removing an installed or declared-only profile removes its OAuth subtree with
-its other profile-owned runtime state. Cleanup rejects symbolic-link or
-non-directory OAuth roots and retains retryable state on failure.
+`allagents profile remove <name>` keeps the profile's OAuth subtree. Add
+`--purge-session-data` to delete it for an installed or declared-only profile.
+Purge rejects symbolic-link or non-directory OAuth roots and retains retryable
+state on failure.
 
 ## Prerequisites
 

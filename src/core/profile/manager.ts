@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ProfileResourceRelationship,
   ProfileState,
@@ -12,6 +13,7 @@ import {
   getPluginClients,
   resolveInstallMode,
 } from '../../models/workspace-config.js';
+import { assertNoPendingProfileRename, withWorkspaceConfigLock } from '../../utils/workspace-config-lock.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
   assertSafeProfilePath,
@@ -26,6 +28,7 @@ import type {
   ProfileApplyStepStatus,
   ProfilePlan,
   ProfilePlanAction,
+  ProfilePlanStep,
   ProfileRuntimeOptions,
   ProfileStatusResult,
 } from './index.js';
@@ -83,14 +86,14 @@ function resultStatus(action: ProfilePlanAction): ProfileApplyStepStatus {
 }
 
 function appliedStep(
-  step: InternalProfilePlanStep,
+  step: ProfilePlanStep,
   status: ProfileApplyStepStatus,
   error?: string,
 ): ProfileApplyStep {
   return {
-    client: step.public.client,
-    kind: step.public.kind,
-    identity: step.public.identity,
+    client: step.client,
+    kind: step.kind,
+    identity: step.identity,
     status,
     ...(error && { error }),
   };
@@ -184,6 +187,10 @@ async function removeEmptyManagedRoot(root: string): Promise<boolean> {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     await removeEmptyManagedRoot(join(root, entry.name));
   }
+  return removeEmptyDirectory(root);
+}
+
+async function removeEmptyDirectory(root: string): Promise<boolean> {
   try {
     await rmdir(root);
     return true;
@@ -192,23 +199,6 @@ async function removeEmptyManagedRoot(root: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
     throw error;
   }
-}
-
-async function removeProfileOAuthProxyRoot(profileRoot: string): Promise<void> {
-  const oauthProxyRoot = join(profileRoot, 'oauth-proxy');
-  await assertSafeProfilePath(profileRoot, oauthProxyRoot);
-  const stats = await lstat(oauthProxyRoot).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  });
-  if (!stats) return;
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new Error(
-      `Profile OAuth proxy root is not a real directory: ${oauthProxyRoot}`,
-    );
-  }
-  await assertSafeProfilePath(profileRoot, oauthProxyRoot);
-  await rm(oauthProxyRoot, { recursive: true, force: true });
 }
 
 async function removeOwnedManagedRoot(
@@ -229,6 +219,7 @@ async function removeOwnedManagedRoot(
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Managed profile root is not a real directory: ${root}`);
   }
+  await assertSafeProfilePath(expectedRoot, root);
   await rm(root, { recursive: true, force: true });
 }
 
@@ -271,7 +262,15 @@ async function applyOneStep(
         return { status: 'removed' };
       }
       await assertSafeProfilePath(expectedRoot, step.path);
-      await adapter.prepareRootCleanup?.(step.context);
+      const generated = adapter.rootCleanupFile?.(step.context);
+      if (generated) {
+        await removeManagedFile({
+          root: step.context.root,
+          path: generated.path,
+          ownership: 'managed',
+          expectedFingerprint: generated.fingerprint,
+        });
+      }
       return {
         status: (await removeEmptyManagedRoot(step.path))
           ? 'removed'
@@ -497,8 +496,8 @@ function dryRunResult(internal: InternalProfilePlan): ProfileApplyResult {
     operation: internal.public.operation,
     status: internal.public.operation === 'remove' ? 'removed' : 'installed',
     success: true,
-    steps: internal.steps.map((step) =>
-      appliedStep(step, resultStatus(step.public.action)),
+    steps: internal.public.steps.map((step) =>
+      appliedStep(step, resultStatus(step.action)),
     ),
     warnings: internal.public.warnings,
   };
@@ -511,6 +510,25 @@ export async function applyProfilePlan(
 ): Promise<ProfileApplyResult> {
   const internal = getInternalProfilePlan(plan);
   if (options.dryRun || internal.runtime.dryRun) return dryRunResult(internal);
+  return withWorkspaceConfigLock(internal.runtime.userConfigPath, async () => {
+    await assertNoPendingProfileRename(internal.runtime.userConfigPath);
+    const workspace = await readOptionalProfileWorkspace(internal.runtime, dependencies);
+    const profileRoot = getProfileRoot(internal.runtime, plan.profile);
+    const state = await loadProfileState(profileRoot);
+    if (!isDeepStrictEqual(workspace.profiles?.[plan.profile], internal.declaration) ||
+        state.status === 'malformed' ||
+        !isDeepStrictEqual(state.status === 'loaded' ? state.state : null, internal.priorState)) {
+      throw new Error('The profile changed after preview. Rerun the command to see the updated plan.');
+    }
+    return applyProfilePlanLocked(internal, dependencies);
+  });
+}
+
+async function applyProfilePlanLocked(
+  internal: InternalProfilePlan,
+  dependencies: ProfileManagerDependencies,
+): Promise<ProfileApplyResult> {
+  const plan = internal.public;
   const profileRoot = getProfileRoot(internal.runtime, plan.profile);
   let state: ProfileState;
   try {
@@ -570,7 +588,7 @@ export async function applyProfilePlan(
         internal.public.operation === 'remove',
       );
       state = await checkpoint(internal, state, completed, dependencies);
-      results.push(appliedStep(step, applied.status));
+      results.push(appliedStep(step.public, applied.status));
     } catch (error) {
       const message = safeError(error);
       const failureTransition =
@@ -587,7 +605,7 @@ export async function applyProfilePlan(
         const checkpointMessage = safeError(checkpointError);
         results.push(
           appliedStep(
-            step,
+            step.public,
             'failed',
             `${message}; state checkpoint failed: ${checkpointMessage}`,
           ),
@@ -602,7 +620,7 @@ export async function applyProfilePlan(
           error: `${message}; state checkpoint failed: ${checkpointMessage}`,
         };
       }
-      results.push(appliedStep(step, 'failed', message));
+      results.push(appliedStep(step.public, 'failed', message));
       return {
         profile: plan.profile,
         operation: plan.operation,
@@ -624,8 +642,31 @@ export async function applyProfilePlan(
   );
   if (plan.operation === 'remove') {
     if (!retainedManaged) {
+      const oauth = internal.oauthCleanup;
+      if (oauth?.action === 'remove') {
+        try {
+          await removeOwnedManagedRoot(
+            oauth.identity,
+            join(profileRoot, 'oauth-proxy'),
+          );
+          results.push(appliedStep(oauth, 'removed'));
+        } catch (error) {
+          const message = safeError(error);
+          results.push(appliedStep(oauth, 'failed', message));
+          return {
+            profile: plan.profile,
+            operation: plan.operation,
+            status: 'partial',
+            success: false,
+            steps: results,
+            warnings: plan.warnings,
+            error: message,
+          };
+        }
+      } else if (oauth) {
+        results.push(appliedStep(oauth, 'retained'));
+      }
       try {
-        await removeProfileOAuthProxyRoot(profileRoot);
         const statePath = getProfileStatePath(profileRoot);
         await assertSafeProfilePath(profileRoot, statePath);
         await rm(statePath, { force: true });
@@ -643,7 +684,8 @@ export async function applyProfilePlan(
       }
       const warnings = [...plan.warnings];
       try {
-        await removeEmptyManagedRoot(profileRoot);
+        // Retained roots and even empty runtime directories may be user data.
+        await removeEmptyDirectory(profileRoot);
       } catch (error) {
         warnings.push(
           `Profile resources were removed, but the empty profile directory could not be pruned: ${safeError(error)}`,

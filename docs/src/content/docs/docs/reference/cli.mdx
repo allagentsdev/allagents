@@ -112,7 +112,7 @@ use [`self update`](#self-update).
 allagents profile install <name> [--yes] [--dry-run] [--offline]
 allagents profile list
 allagents profile status [name]
-allagents profile remove <name> [--yes] [--dry-run] [--offline]
+allagents profile remove <name> [--yes] [--dry-run] [--offline] [--purge-session-data]
 ```
 
 Profile declarations exist only in `~/.allagents/workspace.yaml`. `install`
@@ -132,11 +132,60 @@ installed, missing, drifted, partial, unsupported, and declaration-missing
 resources. Omitting the name opens a selector only on an interactive terminal;
 non-interactive and JSON callers must provide it.
 
-Removal works from ownership state even after the declaration is deleted. It
-deletes only unchanged managed resources, releases referenced resources, and
-retains modified, shared, failed, or uncorroborated resources for inspection
-and retry. There is intentionally no `allagents profile update`; use repeatable
+Removal uninstalls owned launchers, plugins, and generated configuration where
+ownership can be verified. It works from ownership state even after the
+declaration is deleted and leaves `workspace.yaml` unchanged. Client runtime
+directories, session data, and profile OAuth credentials are retained by
+default, including with `--yes`.
+
+Pass `--purge-session-data` to recursively delete eligible owned client roots
+and remove the profile's OAuth state. This can delete untracked files inside
+those owned roots. Roots with referenced or modified managed resources are
+retained. Preview either plan with `--dry-run`, including in JSON mode.
+`--yes` skips confirmation for the selected plan.
+
+For an intentional purge, select the flag when uninstalling or when retrying a
+failed purge. Successful removal releases ownership of retained client roots.
+There is intentionally no `allagents profile update`; use repeatable
 `allagents update --profile <name>`.
+
+#### profile rename
+
+```bash
+allagents profile rename <old> <new> [--yes] [--dry-run]
+```
+
+`rename` changes the declaration key and keeps any configured launcher names.
+The command previews the changes and asks for confirmation. Pass `--yes` in
+scripts and JSON mode. `--dry-run` prints the plan without changing files.
+Rename can move complete file-only installations for Claude Code on Linux or
+Windows, Codex, and OpenCode. It moves isolated client files, session data, and
+file-based credentials. Shared OpenCode data stays in its original location.
+Uninstalled declarations can be renamed regardless of client.
+
+Close clients using the profile before applying. Rename stops on a destination
+collision, native plugin data, a symbolic link in the profile tree, a modified
+launcher, or generated settings that embed a profile selector or the old root.
+Codex session databases contain absolute paths, and Claude Code on macOS uses
+Keychain credentials. These cases require a separate migration, as do installed
+Copilot, Pi, and OMP profiles and installations with partial state. External
+references, including T3 provider config or home paths and custom scripts, need
+to be updated separately.
+
+If rename is interrupted after it starts moving files, rerun the same
+`allagents profile rename <old> <new> --yes` command to resume. Keep the recovery
+record beside `workspace.yaml` and wait until rename completes before editing
+the workspace or either profile directory, or starting the affected clients.
+Run workspace writers from the same host and PID namespace when they share a
+workspace.
+
+If the destination already exists, move it aside before retrying. This includes
+an empty directory left by an interruption before the reservation was recorded.
+If the command has published a replacement and reports a preserved edit, move
+the reported capture file out of its recovery path, resume the rename, and then
+reconcile the saved edit with the published file. If `workspace.yaml` is missing
+and its capture contains a pending workspace edit, move the capture back to
+`workspace.yaml` before retrying.
 
 ### status
 

@@ -131,6 +131,14 @@ function serializeClaudeMcp(
 
 export class ClaudeProfileAdapter implements NativeProfileAdapter {
   readonly client = 'claude' as const;
+  readonly rename = {
+    nativeLocations: ['plugins'],
+    async assertRelocatable(_context: ProfileClientContext, options: ProfileContextOptions): Promise<void> {
+      if (options.platform === 'darwin') {
+        throw new Error('Installed Claude Code profiles on macOS require a separate Keychain migration.');
+      }
+    },
+  };
   readonly capabilities = CAPABILITIES;
   readonly nativeClient = new ClaudeNativeClient({
     minimumVersion: CLAUDE_MINIMUM_VERSION,

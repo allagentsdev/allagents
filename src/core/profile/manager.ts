@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ProfileResourceRelationship,
   ProfileState,
@@ -12,6 +13,7 @@ import {
   getPluginClients,
   resolveInstallMode,
 } from '../../models/workspace-config.js';
+import { assertNoPendingProfileRename, withWorkspaceConfigLock } from '../../utils/workspace-config-lock.js';
 import { getProfileAdapter } from './adapters/registry.js';
 import {
   assertSafeProfilePath,
@@ -508,6 +510,25 @@ export async function applyProfilePlan(
 ): Promise<ProfileApplyResult> {
   const internal = getInternalProfilePlan(plan);
   if (options.dryRun || internal.runtime.dryRun) return dryRunResult(internal);
+  return withWorkspaceConfigLock(internal.runtime.userConfigPath, async () => {
+    await assertNoPendingProfileRename(internal.runtime.userConfigPath);
+    const workspace = await readOptionalProfileWorkspace(internal.runtime, dependencies);
+    const profileRoot = getProfileRoot(internal.runtime, plan.profile);
+    const state = await loadProfileState(profileRoot);
+    if (!isDeepStrictEqual(workspace.profiles?.[plan.profile], internal.declaration) ||
+        state.status === 'malformed' ||
+        !isDeepStrictEqual(state.status === 'loaded' ? state.state : null, internal.priorState)) {
+      throw new Error('The profile changed after preview. Rerun the command to see the updated plan.');
+    }
+    return applyProfilePlanLocked(internal, dependencies);
+  });
+}
+
+async function applyProfilePlanLocked(
+  internal: InternalProfilePlan,
+  dependencies: ProfileManagerDependencies,
+): Promise<ProfileApplyResult> {
+  const plan = internal.public;
   const profileRoot = getProfileRoot(internal.runtime, plan.profile);
   let state: ProfileState;
   try {

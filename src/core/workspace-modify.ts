@@ -27,6 +27,7 @@ import type {
 } from '../models/workspace-config.js';
 import { parseClientEntry, getClientTypes, getEffectivePluginSource, getPluginSource, getPluginClients, normalizeClientEntry, resolveInstallMode } from '../models/workspace-config.js';
 import { parseMarketplaceManifest } from '../utils/marketplace-manifest-parser.js';
+import { withWorkspaceConfigMutation } from '../utils/workspace-config-lock.js';
 import {
   parseWorkspaceConfigForEdit,
   validateProjectWorkspaceConfig,
@@ -285,8 +286,9 @@ export async function ensureWorkspace(
     clients: clients ?? [...DEFAULT_PROJECT_CLIENTS],
   };
 
-  await mkdir(configDir, { recursive: true });
-  await writeWorkspaceConfig(configPath, defaultConfig);
+  await withWorkspaceConfigMutation(configPath, async () => {
+    if (!existsSync(configPath)) await writeWorkspaceConfig(configPath, defaultConfig);
+  });
 }
 
 /**

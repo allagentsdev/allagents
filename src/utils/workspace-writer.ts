@@ -21,6 +21,8 @@ import { workspaceSourceEditor } from './workspace-source-editor.js';
 interface WorkspaceWriteOptions {
   /** Disambiguate removal of declarations whose values are identical. */
   removedPluginIndexes?: readonly number[];
+  /** Preserve the original YAML entry when renaming a profile key. */
+  renamedProfile?: { readonly from: string; readonly to: string };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,17 +61,34 @@ export function serializeWorkspaceConfig(
   let plugins = document.get('plugins', true);
   if (isAlias(plugins)) plugins = plugins.resolve(document);
   const removedPlugins = new Set(options.removedPluginIndexes);
+  const profiles = document.get('profiles', true);
 
   function update(node: unknown, previous: unknown, next: unknown): Node {
     if (isNode(node) && isDeepStrictEqual(previous, next)) return node;
     if (isMap(node) && isRecord(previous) && isRecord(next)) {
+      let previousMap = previous;
+      const rename = options.renamedProfile;
+      if (node === profiles && rename) {
+        const key = node.items.find(
+          (pair) => isScalar(pair.key) && String(pair.key.value) === rename.from,
+        )?.key;
+        if (isScalar(key) && !node.has(rename.to)) {
+          key.value = rename.to;
+          previousMap = Object.fromEntries(
+            Object.entries(previous).map(([name, value]) => [
+              name === rename.from ? rename.to : name,
+              value,
+            ]),
+          );
+        }
+      }
       const keyFor = (key: string) =>
         node.items.find(
           (pair) => isScalar(pair.key) && String(pair.key.value) === key,
         )?.key ?? key;
       // An inherited key cannot be deleted while its merge still supplies it.
       if (
-        Object.keys(previous).some(
+        Object.keys(previousMap).some(
           (key) => next[key] === undefined && !node.has(keyFor(key)),
         )
       ) {
@@ -79,21 +98,21 @@ export function serializeWorkspaceConfig(
             typeof pair.key.value !== 'symbol' ||
             pair.key.value.description !== '<<',
         );
-        for (const [key, value] of Object.entries(previous)) {
+        for (const [key, value] of Object.entries(previousMap)) {
           if (!node.has(keyFor(key)) && next[key] !== undefined)
             node.set(key, document.createNode(value));
         }
       }
-      for (const key of Object.keys(previous)) {
+      for (const key of Object.keys(previousMap)) {
         if (next[key] === undefined) node.delete(keyFor(key));
       }
       for (const [key, value] of Object.entries(next)) {
-        if (value === undefined || isDeepStrictEqual(previous[key], value))
+        if (value === undefined || isDeepStrictEqual(previousMap[key], value))
           continue;
         const yamlKey = keyFor(key);
         node.set(
           yamlKey,
-          update(node.get(yamlKey, true), previous[key], value),
+          update(node.get(yamlKey, true), previousMap[key], value),
         );
       }
       return node;

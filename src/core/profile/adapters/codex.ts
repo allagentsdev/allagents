@@ -1,3 +1,4 @@
+import { readFile, readdir } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   CodexProfileSettingsSchema,
@@ -187,6 +188,22 @@ function serializeCodexMcp(
 
 export class CodexProfileAdapter implements NativeProfileAdapter {
   readonly client = 'codex' as const;
+  readonly rename = {
+    nativeLocations: ['plugins', 'marketplaces', '.tmp/marketplaces'],
+    namedFiles: (profile: string) => [`${profile}.config.toml`],
+    async assertRelocatable(context: ProfileClientContext): Promise<void> {
+      const entries = await readdir(context.root);
+      const config = entries.includes('config.toml')
+        ? await readFile(join(context.root, 'config.toml'), 'utf8')
+        : '';
+      if (process.env.CODEX_SQLITE_HOME || context.operationContext.env?.CODEX_SQLITE_HOME ||
+          /^[\t ]*["']?sqlite_home["']?[\t ]*=/m.test(config) ||
+          entries.some((entry) => /^state(?:_\d+)?\.sqlite(?:-(?:wal|shm|journal))?$/i.test(entry))) {
+        // Codex thread indexes store absolute rollout paths into CODEX_HOME.
+        throw new Error('Codex installations with a session database require a separate migration.');
+      }
+    },
+  };
   readonly capabilities = CAPABILITIES;
   readonly nativeClient = new CodexNativeClient({
     minimumVersion: CODEX_MINIMUM_VERSION,

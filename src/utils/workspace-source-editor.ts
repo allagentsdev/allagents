@@ -328,7 +328,12 @@ export function workspaceSourceEditor(document: Document, original: string) {
           (start.endsWith('\n') ? '' : newline) +
           ' '.repeat(token.indent + indentWidth);
       }
-      const key = !implicitMap && source.key ? CST.stringify(source.key) : '';
+      const keyNode = isMap(node) ? (item as Pair).key : undefined;
+      const key = !implicitMap && source.key
+        ? old && isScalar(keyNode) && !unchanged(keyNode)
+          ? renderScalar(keyNode, source.key, flow)
+          : CST.stringify(source.key)
+        : '';
       let sep = implicitMap ? '' : text(source.sep);
       let body: string;
       let trailing = entry?.trailing ?? '';

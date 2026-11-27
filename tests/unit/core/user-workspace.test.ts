@@ -30,6 +30,7 @@ import {
   getUserWorkspaceConfigPath,
   getInstalledUserPlugins,
   getInstalledProjectPlugins,
+  migrateUserWorkspaceSkillsV1toV2,
   setUserClients,
 } from '../../../src/core/user-workspace.js';
 import * as git from '../../../src/core/git.js';
@@ -180,6 +181,30 @@ describe('user-workspace', () => {
       const result = await setUserClients(['omp']);
       expect(result.success).toBe(false);
       expect(await readFile(configPath, 'utf-8')).toBe(invalid);
+    });
+
+    test('leaves the user workspace alone while a profile rename is pending', async () => {
+      await ensureUserWorkspace();
+      const path = getUserWorkspaceConfigPath();
+      const original = await readFile(path, 'utf-8');
+      await writeFile(`${path}.profile-rename.json`, '{}');
+
+      const result = await setUserClients(['omp']);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('profile rename is incomplete');
+      expect(await readFile(path, 'utf-8')).toBe(original);
+    });
+
+    test('skips an already current skills migration during a pending rename', async () => {
+      await ensureUserWorkspace();
+      const path = getUserWorkspaceConfigPath();
+      const current = 'version: 2\nclients: []\n';
+      await writeFile(path, current);
+      await writeFile(`${path}.profile-rename.json`, '{}');
+
+      await migrateUserWorkspaceSkillsV1toV2();
+      expect(await readFile(path, 'utf-8')).toBe(current);
     });
   });
 

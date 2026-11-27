@@ -206,6 +206,27 @@ describe('removeMarketplace cascade', () => {
     expect(result.retainedUserPlugins).toBeUndefined();
   });
 
+  it('preserves the registration when a pending rename blocks a cascade', async () => {
+    await writeRegistry({
+      'my-marketplace': {
+        name: 'my-marketplace',
+        source: { type: 'local', location: '/tmp/mp' },
+        path: '/tmp/mp',
+      },
+    });
+    await writeUserConfig({ repositories: [], clients: [], plugins: ['plugin@my-marketplace'] });
+    const journal = join(testDir, '.allagents', `${WORKSPACE_CONFIG_FILE}.profile-rename.json`);
+    await writeFile(journal, '{}');
+
+    await expect(removeMarketplace('my-marketplace', { cascade: true })).rejects.toThrow('profile rename is incomplete');
+    expect((await readUserConfig()).plugins).toEqual(['plugin@my-marketplace']);
+
+    await rm(journal);
+    const result = await removeMarketplace('my-marketplace', { cascade: true });
+    expect(result.success).toBe(true);
+    expect(result.removedUserPlugins).toEqual(['plugin@my-marketplace']);
+  });
+
   it('should delete the marketplace directory when it exists', async () => {
     const marketplacePath = join(testDir, '.allagents', 'plugins', 'marketplaces', 'my-marketplace');
     await mkdir(marketplacePath, { recursive: true });

@@ -95,6 +95,7 @@ function serializeOpenCodeMcp(
 
 export class OpenCodeProfileAdapter implements FileOnlyProfileAdapter {
   readonly client = 'opencode' as const;
+  readonly rename = {};
   readonly capabilities = CAPABILITIES;
 
   resolveContext(

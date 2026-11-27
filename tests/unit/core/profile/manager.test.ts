@@ -1186,8 +1186,9 @@ describe('profile lifecycle manager', () => {
     root.path = unrelated;
     await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 
-    const removal = await planProfileOperation('work', 'remove', test.options, deps);
-    const result = await applyProfilePlan(removal, test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    const result = await applyProfilePlan(removal, options, deps);
     expect(result.success).toBe(false);
     expect(result.error).toContain('outside the selected client root');
     expect(await readFile(sentinel, 'utf8')).toBe('owned by user');
@@ -1206,8 +1207,12 @@ describe('profile lifecycle manager', () => {
     const destination = install.steps.find((step) => step.kind === 'file')
       ?.identity as string;
     await writeFile(destination, 'modified', 'utf8');
-    const removal = await planProfileOperation('work', 'remove', test.options, deps);
-    const result = await applyProfilePlan(removal, test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    expect(removal.steps.find((step) => step.kind === 'root')?.action).toBe(
+      'retain',
+    );
+    const result = await applyProfilePlan(removal, options, deps);
     expect(result.status).toBe('removed');
     expect(result.success).toBe(true);
     expect(await readFile(destination, 'utf8')).toBe('modified');
@@ -1237,9 +1242,6 @@ describe('profile lifecycle manager', () => {
     const removed = await applyProfilePlan(removePlan, test.options, deps);
     expect(removed.status).toBe('removed');
     await expect(stat(join(test.home, '.allagents', 'profiles', 'work', 'state.json'))).rejects.toThrow();
-    await expect(
-      stat(join(test.home, '.allagents', 'profiles', 'work')),
-    ).rejects.toThrow();
   });
 
   it('excludes empty and invalid profile directories without losing declared or installed profiles', async () => {
@@ -1293,7 +1295,78 @@ describe('profile lifecycle manager', () => {
     ]);
   });
 
-  it('removes runtime artifacts inside an AllAgents-owned profile root', async () => {
+  it('retains runtime data while uninstalling owned launchers and files by default', async () => {
+    const test = await fixture();
+    const local = await pluginFixture(test.workspaceDirectory);
+    await writeWorkspace(test.userConfigPath, {
+      work: {
+        clients: [{ name: 'omp', launcher: 'omp-work' }],
+        plugins: [local],
+        mcpServers: { demo: { command: 'fixture-mcp' } },
+      },
+    });
+    const deps = dependencies(new MemoryProfileAdapter('omp', test.home));
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
+    const clientRoot = install.clients[0]?.root as string;
+    const sessions = join(clientRoot, 'sessions');
+    const history = join(sessions, 'current.jsonl');
+    const empty = join(sessions, 'empty');
+    const oauthToken = join(
+      test.home,
+      '.allagents',
+      'profiles',
+      'work',
+      'oauth-proxy',
+      'tokens.json',
+    );
+    await mkdir(empty, { recursive: true });
+    await mkdir(dirname(oauthToken), { recursive: true });
+    await writeFile(history, 'session history', 'utf8');
+    await writeFile(oauthToken, '{}', 'utf8');
+    const owned = install.steps.filter((step) => step.kind !== 'root');
+    expect(owned.map((step) => step.kind)).toEqual(['file', 'mcp', 'launcher']);
+
+    const removal = await planProfileOperation(
+      'work',
+      'remove',
+      test.options,
+      deps,
+    );
+    const plannedRoots = removal.steps.filter((step) => step.kind === 'root');
+    expect(plannedRoots.map((step) => step.action)).toEqual([
+      'retain',
+      'retain',
+    ]);
+    const result = await applyProfilePlan(
+      removal,
+      { ...test.options, purgeSessionData: true },
+      deps,
+    );
+    expect(result.status).toBe('removed');
+    const appliedRoots = result.steps.filter((step) => step.kind === 'root');
+    expect(appliedRoots.map((step) => step.status)).toEqual([
+      'retained',
+      'retained',
+    ]);
+    for (const step of owned) {
+      await expect(stat(step.identity)).rejects.toThrow();
+    }
+    expect(await readFile(history, 'utf8')).toBe('session history');
+    expect((await stat(empty)).isDirectory()).toBe(true);
+    expect(await readFile(oauthToken, 'utf8')).toBe('{}');
+    const status = await getProfileStatus('work', test.options, deps);
+    expect(status.installed).toBe(false);
+  });
+
+  it('purges runtime artifacts inside an AllAgents-owned profile root when requested', async () => {
     const test = await fixture();
     await writeWorkspace(test.userConfigPath, {
       work: { clients: [{ name: 'pi' }], plugins: [] },
@@ -1306,11 +1379,42 @@ describe('profile lifecycle manager', () => {
     await mkdir(join(clientRoot, 'logs'), { recursive: true });
     await writeFile(join(clientRoot, 'logs', 'runtime.log'), 'runtime state', 'utf8');
 
-    const removal = await planProfileOperation('work', 'remove', test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
     expect((await applyProfilePlan(removal, test.options, deps)).status).toBe(
       'removed',
     );
     await expect(stat(clientRoot)).rejects.toThrow();
+  });
+
+  it('preserves an existing unowned client root even with an explicit purge', async () => {
+    const test = await fixture();
+    await writeWorkspace(test.userConfigPath, {
+      work: { clients: [{ name: 'pi' }], plugins: [] },
+    });
+    const pi = new MemoryProfileAdapter('pi', test.home);
+    const deps = dependencies(pi);
+    const root = pi.resolveContext('work', test.options).root;
+    const sessions = join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const install = await planProfileOperation(
+      'work',
+      'install',
+      test.options,
+      deps,
+    );
+    expect((await applyProfilePlan(install, test.options, deps)).success).toBe(
+      true,
+    );
+
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    expect(removal.steps.find((step) => step.identity === root)?.action).toBe(
+      'retain',
+    );
+    const result = await applyProfilePlan(removal, options, deps);
+    expect(result.status).toBe('removed');
+    expect((await stat(sessions)).isDirectory()).toBe(true);
   });
 
   it('removes profile-owned OAuth state while preserving unrelated residue', async () => {
@@ -1336,15 +1440,17 @@ describe('profile lifecycle manager', () => {
     await writeFile(join(oauthRoot, 'server', 'tokens.json'), '{}', 'utf8');
     await writeFile(residue, 'keep', 'utf8');
 
-    const removal = await planProfileOperation(
-      'work',
-      'remove',
-      test.options,
-      deps,
-    );
-    const result = await applyProfilePlan(removal, test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    expect(
+      removal.steps.find((step) => step.identity === oauthRoot)?.action,
+    ).toBe('remove');
+    const result = await applyProfilePlan(removal, options, deps);
 
     expect(result.status).toBe('removed');
+    expect(
+      result.steps.find((step) => step.identity === oauthRoot)?.status,
+    ).toBe('removed');
     await expect(stat(oauthRoot)).rejects.toThrow();
     expect(await readFile(residue, 'utf8')).toBe('keep');
     await expect(stat(join(profileRoot, 'state.json'))).rejects.toThrow();
@@ -1361,13 +1467,9 @@ describe('profile lifecycle manager', () => {
     await mkdir(join(oauthRoot, 'server'), { recursive: true });
     await writeFile(join(oauthRoot, 'server', 'tokens.json'), '{}', 'utf8');
 
-    const removal = await planProfileOperation(
-      'work',
-      'remove',
-      test.options,
-      deps,
-    );
-    const result = await applyProfilePlan(removal, test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    const result = await applyProfilePlan(removal, options, deps);
 
     expect(result.status).toBe('removed');
     await expect(stat(oauthRoot)).rejects.toThrow();
@@ -1397,13 +1499,9 @@ describe('profile lifecycle manager', () => {
     await writeFile(externalToken, 'keep', 'utf8');
     await symlink(externalRoot, oauthRoot, 'dir');
 
-    const removal = await planProfileOperation(
-      'work',
-      'remove',
-      test.options,
-      deps,
-    );
-    const result = await applyProfilePlan(removal, test.options, deps);
+    const options = { ...test.options, purgeSessionData: true };
+    const removal = await planProfileOperation('work', 'remove', options, deps);
+    const result = await applyProfilePlan(removal, options, deps);
 
     expect(result.status).toBe('partial');
     expect(result.success).toBe(false);
@@ -1412,15 +1510,9 @@ describe('profile lifecycle manager', () => {
     expect((await stat(join(profileRoot, 'state.json'))).isFile()).toBe(true);
 
     await unlink(oauthRoot);
-    const retry = await planProfileOperation(
-      'work',
-      'remove',
-      test.options,
-      deps,
-    );
-    expect((await applyProfilePlan(retry, test.options, deps)).status).toBe(
-      'removed',
-    );
+    const retry = await planProfileOperation('work', 'remove', options, deps);
+    const retried = await applyProfilePlan(retry, options, deps);
+    expect(retried.status).toBe('removed');
   });
 
   it('inspects replaced managed roots for state-only clients', async () => {

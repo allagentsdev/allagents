@@ -11,6 +11,7 @@ export interface ProfileRuntimeOptions {
   readonly platform?: NodeJS.Platform;
   readonly offline?: boolean;
   readonly dryRun?: boolean;
+  readonly purgeSessionData?: boolean;
 }
 
 export type ProfileStepKind =
@@ -66,7 +67,7 @@ export interface ProfilePlanClient {
 
 
 export interface ProfilePlanStep {
-  readonly client: ClientType;
+  readonly client: ClientType | 'profile';
   readonly kind: ProfileStepKind;
   /** Display-safe native identity or absolute filesystem path. */
   readonly identity: string;
@@ -97,7 +98,7 @@ export type ProfileApplyStepStatus =
   | 'failed';
 
 export interface ProfileApplyStep {
-  readonly client: ClientType;
+  readonly client: ProfilePlanStep['client'];
   readonly kind: ProfileStepKind;
   readonly identity: string;
   readonly status: ProfileApplyStepStatus;

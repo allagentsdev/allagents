@@ -163,8 +163,11 @@ interface ProfileAdapterBase {
     input: ProfileSerializationInput,
   ): ProfilePlannedFile | null;
 
-  /** Remove adapter-known generated files before generic empty-directory cleanup. */
-  prepareRootCleanup?(context: ProfileClientContext): Promise<void>;
+  /** Identify a generated file whose exact contents corroborate cleanup ownership. */
+  rootCleanupFile?(context: ProfileClientContext): {
+    readonly path: string;
+    readonly fingerprint: string;
+  };
 }
 
 export interface NativeProfileAdapter extends ProfileAdapterBase {

@@ -150,9 +150,9 @@ remote MCP declarations share the generated `opencode.json`; portable
 resolved only by the runtime.
 
 Profile cleanup removes unchanged managed files and OpenCode's exact
-runtime-generated `.gitignore`. A modified `.gitignore` or any unrelated file
-retains the root and reports a partial removal instead of recursively deleting
-unknown content.
+runtime-generated `.gitignore` inside an owned profile root. The configuration
+directory, modified files, and other runtime data are retained, including with
+`--purge-session-data`.
 
 ### GitHub Copilot CLI
 
@@ -230,11 +230,12 @@ inventory inspection but are not treated as AllAgents-managed user or project
 plugins.
 
 The isolated root also holds Claude-managed credentials, sessions, trust state,
-plugin caches, and runtime metadata. Removing an AllAgents-created profile
-intentionally removes that isolated runtime state after native cleanup. Ambient
-`~/.claude`, project files, and platform credential stores remain outside the
-filesystem cleanup boundary; inherited authentication environment variables
-can still override the selected profile login.
+plugin caches, and runtime metadata. Profile removal retains that runtime state
+by default. Use `--purge-session-data` to recursively clean up an eligible owned
+root after native cleanup. Ambient `~/.claude`, project files, and platform
+credential stores remain outside the filesystem cleanup boundary. Inherited
+authentication environment variables can still override the selected profile
+login.
 
 ### Codex
 
@@ -263,10 +264,10 @@ Isolated profile file installation does not currently translate hook
 declarations; use native installation when a profile plugin requires them.
 
 `CODEX_HOME` also contains Codex credentials, sessions, logs, and caches.
-Recursive cleanup is limited to a client root AllAgents created for this
-profile; removing that profile intentionally removes its isolated runtime
-state. Ambient `~/.codex`, project files, and operating-system keyrings remain
-outside the cleanup boundary.
+Profile removal retains this runtime state by default. With
+`--purge-session-data`, recursive cleanup is limited to an eligible owned
+client root for the selected profile. Ambient `~/.codex`, project files, and
+operating-system keyrings remain outside the cleanup boundary.
 
 ### Pi
 

@@ -3,6 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OpenCodeProfileAdapter } from '../../../../src/core/profile/adapters/opencode.js';
+import {
+  applyProfilePlan,
+  planProfileOperation,
+} from '../../../../src/core/profile/index.js';
 import { isNativeProfileAdapter } from '../../../../src/core/profile/types.js';
 
 describe('OpenCode profile adapter', () => {
@@ -119,27 +123,90 @@ describe('OpenCode profile adapter', () => {
     expect('discloseNativeCommands' in adapter).toBe(false);
   });
 
-  it('removes only the exact runtime-generated gitignore during root cleanup', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'allagents-opencode-profile-'));
-    try {
-      const adapter = new OpenCodeProfileAdapter();
-      const context = adapter.resolveContext('review', {
-        homeDir: home,
-        workspaceDirectory: home,
-      });
-      await mkdir(context.root, { recursive: true });
-      const generatedPath = join(context.root, '.gitignore');
-      const generated =
-        'node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore';
-      await writeFile(generatedPath, generated, 'utf8');
-      await adapter.prepareRootCleanup?.(context);
-      await expect(stat(generatedPath)).rejects.toThrow();
+  it.each([
+    {
+      mode: 'default removal',
+      purgeSessionData: false,
+      modifyAfterPlan: false,
+    },
+    { mode: 'explicit purge', purgeSessionData: true, modifyAfterPlan: false },
+    {
+      mode: 'file edited after planning',
+      purgeSessionData: true,
+      modifyAfterPlan: true,
+    },
+  ])(
+    'protects runtime directories and checks the generated gitignore in $mode',
+    async ({ purgeSessionData, modifyAfterPlan }) => {
+      const home = await mkdtemp(join(tmpdir(), 'allagents-opencode-profile-'));
+      try {
+        const adapter = new OpenCodeProfileAdapter();
+        const options = {
+          homeDir: home,
+          workspaceDirectory: home,
+          purgeSessionData,
+        };
+        const workspace = join(home, '.allagents');
+        await mkdir(workspace, { recursive: true });
+        await writeFile(
+          join(workspace, 'workspace.yaml'),
+          [
+            'profiles:',
+            '  review:',
+            '    clients:',
+            '      - name: opencode',
+            '        settings:',
+            '          model: demo/model',
+            '',
+          ].join('\n'),
+        );
+        const install = await planProfileOperation(
+          'review',
+          'install',
+          options,
+        );
+        expect((await applyProfilePlan(install, options)).success).toBe(true);
+        const { root } = adapter.resolveContext('review', options);
+        const generatedPath = join(root, '.gitignore');
+        const sessions = join(root, 'unknown-runtime', 'empty');
+        await mkdir(sessions, { recursive: true });
+        const generated =
+          'node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore';
 
-      await writeFile(generatedPath, `${generated}\nuser-entry`, 'utf8');
-      await adapter.prepareRootCleanup?.(context);
-      expect(await readFile(generatedPath, 'utf8')).toContain('user-entry');
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+        const modified = `${generated}\nuser-entry`;
+        await writeFile(generatedPath, modified, 'utf8');
+        const modifiedPlan = await planProfileOperation(
+          'review',
+          'remove',
+          options,
+        );
+        expect(
+          modifiedPlan.steps.find((step) => step.identity === generatedPath)
+            ?.action,
+        ).toBe('retain');
+
+        await writeFile(generatedPath, generated, 'utf8');
+        const removal = await planProfileOperation('review', 'remove', options);
+        expect(
+          removal.steps.find((step) => step.identity === generatedPath)?.action,
+        ).toBe('remove');
+        expect(
+          removal.steps.find((step) => step.identity === root)?.action,
+        ).toBe('retain');
+
+        if (modifyAfterPlan) await writeFile(generatedPath, modified, 'utf8');
+        const result = await applyProfilePlan(removal, options);
+        expect(result.status).toBe('removed');
+        if (modifyAfterPlan) {
+          expect(await readFile(generatedPath, 'utf8')).toBe(modified);
+        } else {
+          await expect(stat(generatedPath)).rejects.toThrow();
+        }
+        await expect(stat(join(root, 'opencode.json'))).rejects.toThrow();
+        expect((await stat(sessions)).isDirectory()).toBe(true);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 });

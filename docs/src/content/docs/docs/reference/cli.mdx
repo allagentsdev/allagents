@@ -112,7 +112,7 @@ use [`self update`](#self-update).
 allagents profile install <name> [--yes] [--dry-run] [--offline]
 allagents profile list
 allagents profile status [name]
-allagents profile remove <name> [--yes] [--dry-run] [--offline]
+allagents profile remove <name> [--yes] [--dry-run] [--offline] [--purge-session-data]
 ```
 
 Profile declarations exist only in `~/.allagents/workspace.yaml`. `install`
@@ -132,10 +132,21 @@ installed, missing, drifted, partial, unsupported, and declaration-missing
 resources. Omitting the name opens a selector only on an interactive terminal;
 non-interactive and JSON callers must provide it.
 
-Removal works from ownership state even after the declaration is deleted. It
-deletes only unchanged managed resources, releases referenced resources, and
-retains modified, shared, failed, or uncorroborated resources for inspection
-and retry. There is intentionally no `allagents profile update`; use repeatable
+Removal uninstalls owned launchers, plugins, and generated configuration where
+ownership can be verified. It works from ownership state even after the
+declaration is deleted and leaves `workspace.yaml` unchanged. Client runtime
+directories, session data, and profile OAuth credentials are retained by
+default, including with `--yes`.
+
+Pass `--purge-session-data` to recursively delete eligible owned client roots
+and remove the profile's OAuth state. This can delete untracked files inside
+those owned roots. Roots with referenced or modified managed resources are
+retained. Preview either plan with `--dry-run`, including in JSON mode.
+`--yes` skips confirmation for the selected plan.
+
+For an intentional purge, select the flag when uninstalling or when retrying a
+failed purge. Successful removal releases ownership of retained client roots.
+There is intentionally no `allagents profile update`; use repeatable
 `allagents update --profile <name>`.
 
 ### status

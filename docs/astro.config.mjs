@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite';
 // https://astro.build/config
 export default defineConfig({
   site: 'https://allagents.dev',
+  scopedStyleStrategy: 'where',
   // Use noop image service to avoid requiring sharp for image optimization
   image: { service: { entrypoint: 'astro/assets/services/noop' } },
   vite: {

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.28.0](https://github.com/allagentsdev/allagents/compare/v1.27.2...v1.28.0) (2026-11-27)
+
+
+### Added
+
+* **cli:** rename declared and installed profiles safely ([#640](https://github.com/allagentsdev/allagents/issues/640)) ([c62fc05](https://github.com/allagentsdev/allagents/commit/c62fc0536306470d9f3b894cef66b6ae3d4c3d50))
+
+
+### Fixed
+
+* **cli:** retain session data when removing profiles ([#639](https://github.com/allagentsdev/allagents/issues/639)) ([1273e51](https://github.com/allagentsdev/allagents/commit/1273e510b7adc9b6f5f51f4d973c9c0d9872bc6f))
+* **deps-dev:** bump the routine-updates group with 2 updates ([#635](https://github.com/allagentsdev/allagents/issues/635)) ([61cf656](https://github.com/allagentsdev/allagents/commit/61cf65611344a9197bffe682ab9e1a4ef0c3a629))
+
 ## [1.27.2](https://github.com/allagentsdev/allagents/compare/v1.27.1...v1.27.2) (2026-11-16)
 
 
